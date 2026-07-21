@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
   issues: write
   pull-requests: write
 
@@ -17,10 +17,24 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
-          cache: npm
+      - name: Generate and commit the repository lock once
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          if [[ ! -f package-lock.json ]]; then
+            corepack enable
+            npm install --package-lock-only --ignore-scripts
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "build: commit repository dependency lock"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
       - name: Install and run quality gate
         id: quality
         shell: bash
