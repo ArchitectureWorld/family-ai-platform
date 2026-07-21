@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_DIR="$ROOT_DIR/.runtime"
 LOG_DIR="$RUNTIME_DIR/logs"
+NODE_IMAGE="node:22.16.0-bookworm-slim"
 
 fail() {
   printf 'FOUNDATION VERIFICATION FAILED: %s\n' "$1" >&2
@@ -26,11 +27,11 @@ if [[ ! -f package-lock.json ]]; then
     --env HOME=/tmp \
     --volume "$ROOT_DIR:/workspace" \
     --workdir /workspace \
-    node:22-bookworm-slim \
+    "$NODE_IMAGE" \
     npm install --package-lock-only --ignore-scripts \
     2>&1 | tee "$LOG_DIR/package-lock.log"
 
-  [[ -f package-lock.json ]] || fail "Node 22 容器未生成 package-lock.json。"
+  [[ -f package-lock.json ]] || fail "Node 22.16.0 容器未生成 package-lock.json。"
   printf '\nA new package-lock.json was generated from this repository.\n'
   printf 'Review and commit it before the Foundation PR becomes Ready.\n'
 else
