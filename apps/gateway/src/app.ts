@@ -16,6 +16,7 @@ import {
   type AuthenticatedDevice,
   type DevelopmentBootstrapInput
 } from "./database.js";
+import { registerDevelopmentConsole } from "./developmentConsole.js";
 import { GatewayDomainError, MessageService } from "./service.js";
 
 export type GatewayMode = "test" | "development" | "production";
@@ -97,6 +98,8 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     }
     return device;
   }
+
+  registerDevelopmentConsole(app, options.mode);
 
   app.get("/health", async () => ({ ok: true, protocolVersion: PROTOCOL_VERSION }));
 
