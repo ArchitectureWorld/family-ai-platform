@@ -75,6 +75,14 @@ uuid() {
   fi
 }
 
+message_payload() {
+  local number="$1"
+  local key="$2"
+  local text="$3"
+  printf '{"protocolVersion":"1.0","messageRef":"message:%s","correlationRef":"correlation:%s","idempotencyKey":"%s","occurredAt":"%s","source":{"kind":"device","ref":"%s"},"target":{"kind":"agent","ref":"%s"},"payload":{"type":"text","text":"%s","language":"zh-CN"}}' \
+    "$(uuid)" "$(uuid)" "$key" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "$DEVICE_REF" "$AGENT_REF" "$text"
+}
+
 wait_for_health() {
   for _ in $(seq 1 60); do
     if curl --silent --fail --max-time 2 "$BASE_URL/health" >/dev/null; then
@@ -103,47 +111,56 @@ record "Device authentication" "member:test → agent:personal-assistant"
 request POST /api/v1/conversations 201 '{"title":"一键验收会话"}'
 CONVERSATION_REF="$(json_get "$RESPONSE_BODY" conversation.conversationRef)"
 [[ "$CONVERSATION_REF" == conversation:* ]] || fail "invalid conversation reference"
+CONVERSATION_PATH="$(printf '%s' "$CONVERSATION_REF" | sed 's/:/%3A/g')"
 record "Create conversation" "$CONVERSATION_REF"
 
-MESSAGE_ID_1="$(uuid)"
-CORRELATION_ID_1="$(uuid)"
-KEY_1="acceptance:$MESSAGE_ID_1"
-PAYLOAD_1="{\"protocolVersion\":\"1.0\",\"messageRef\":\"message:$MESSAGE_ID_1\",\"correlationRef\":\"correlation:$CORRELATION_ID_1\",\"idempotencyKey\":\"$KEY_1\",\"occurredAt\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",\"source\":{\"kind\":\"device\",\"ref\":\"$DEVICE_REF\"},\"target\":{\"kind\":\"agent\",\"ref\":\"$AGENT_REF\"},\"payload\":{\"type\":\"text\",\"text\":\"第一轮自动验收消息。\",\"language\":\"zh-CN\"}}"
-request POST "/api/v1/conversations/$(printf '%s' "$CONVERSATION_REF" | sed 's/:/%3A/g')/messages" 200 "$PAYLOAD_1"
+KEY_1="acceptance:$(uuid)"
+PAYLOAD_1="$(message_payload 1 "$KEY_1" "第一轮自动验收消息。")"
+request POST "/api/v1/conversations/$CONVERSATION_PATH/messages" 200 "$PAYLOAD_1"
 [[ "$(json_get "$RESPONSE_BODY" replayed)" == "false" ]] || fail "first message was unexpectedly replayed"
+[[ "$(json_get "$RESPONSE_BODY" response.payload.text)" == "Fake Provider 第 1 轮回复。" ]] || fail "first Provider turn mismatch"
 record "First message" "Fake Provider turn 1"
 
-MESSAGE_ID_2="$(uuid)"
-CORRELATION_ID_2="$(uuid)"
-KEY_2="acceptance:$MESSAGE_ID_2"
-PAYLOAD_2="{\"protocolVersion\":\"1.0\",\"messageRef\":\"message:$MESSAGE_ID_2\",\"correlationRef\":\"correlation:$CORRELATION_ID_2\",\"idempotencyKey\":\"$KEY_2\",\"occurredAt\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",\"source\":{\"kind\":\"device\",\"ref\":\"$DEVICE_REF\"},\"target\":{\"kind\":\"agent\",\"ref\":\"$AGENT_REF\"},\"payload\":{\"type\":\"text\",\"text\":\"第二轮自动验收消息。\",\"language\":\"zh-CN\"}}"
-request POST "/api/v1/conversations/$(printf '%s' "$CONVERSATION_REF" | sed 's/:/%3A/g')/messages" 200 "$PAYLOAD_2"
+KEY_2="acceptance:$(uuid)"
+PAYLOAD_2="$(message_payload 2 "$KEY_2" "第二轮自动验收消息。")"
+request POST "/api/v1/conversations/$CONVERSATION_PATH/messages" 200 "$PAYLOAD_2"
 [[ "$(json_get "$RESPONSE_BODY" response.payload.text)" == "Fake Provider 第 2 轮回复。" ]] || fail "Provider Session continuity failed"
 record "Second message" "Fake Provider turn 2"
 
-request GET "/api/v1/conversations/$(printf '%s' "$CONVERSATION_REF" | sed 's/:/%3A/g')/messages" 200
+request GET "/api/v1/conversations/$CONVERSATION_PATH/messages" 200
 [[ "$(json_get "$RESPONSE_BODY" messages.length)" == "4" ]] || fail "history should contain four messages"
-record "History" "4 persisted messages"
+record "History before restart" "4 persisted messages"
 
-request POST "/api/v1/conversations/$(printf '%s' "$CONVERSATION_REF" | sed 's/:/%3A/g')/messages" 200 "$PAYLOAD_1"
+request POST "/api/v1/conversations/$CONVERSATION_PATH/messages" 200 "$PAYLOAD_1"
 [[ "$(json_get "$RESPONSE_BODY" replayed)" == "true" ]] || fail "identical request was not replayed"
 record "Idempotent replay" "same request returned cached result"
 
-CONFLICT_PAYLOAD="{\"protocolVersion\":\"1.0\",\"messageRef\":\"message:$(uuid)\",\"correlationRef\":\"correlation:$(uuid)\",\"idempotencyKey\":\"$KEY_1\",\"occurredAt\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",\"source\":{\"kind\":\"device\",\"ref\":\"$DEVICE_REF\"},\"target\":{\"kind\":\"agent\",\"ref\":\"$AGENT_REF\"},\"payload\":{\"type\":\"text\",\"text\":\"不同请求内容。\",\"language\":\"zh-CN\"}}"
-request POST "/api/v1/conversations/$(printf '%s' "$CONVERSATION_REF" | sed 's/:/%3A/g')/messages" 409 "$CONFLICT_PAYLOAD"
+CONFLICT_PAYLOAD="$(message_payload 99 "$KEY_1" "不同请求内容。")"
+request POST "/api/v1/conversations/$CONVERSATION_PATH/messages" 409 "$CONFLICT_PAYLOAD"
 [[ "$(json_get "$RESPONSE_BODY" code)" == "IDEMPOTENCY_CONFLICT" ]] || fail "wrong idempotency conflict code"
 record "Idempotency conflict" "HTTP 409"
 
-WRONG_AGENT_PAYLOAD="{\"protocolVersion\":\"1.0\",\"messageRef\":\"message:$(uuid)\",\"correlationRef\":\"correlation:$(uuid)\",\"idempotencyKey\":\"acceptance:$(uuid)\",\"occurredAt\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",\"source\":{\"kind\":\"device\",\"ref\":\"$DEVICE_REF\"},\"target\":{\"kind\":\"agent\",\"ref\":\"agent:other\"},\"payload\":{\"type\":\"text\",\"text\":\"错误 Agent 目标。\",\"language\":\"zh-CN\"}}"
-request POST "/api/v1/conversations/$(printf '%s' "$CONVERSATION_REF" | sed 's/:/%3A/g')/messages" 403 "$WRONG_AGENT_PAYLOAD"
+WRONG_AGENT_PAYLOAD="$(message_payload 98 "acceptance:$(uuid)" "错误 Agent 目标。")"
+WRONG_AGENT_PAYLOAD="${WRONG_AGENT_PAYLOAD/\"ref\":\"$AGENT_REF\"/\"ref\":\"agent:other\"}"
+request POST "/api/v1/conversations/$CONVERSATION_PATH/messages" 403 "$WRONG_AGENT_PAYLOAD"
 [[ "$(json_get "$RESPONSE_BODY" code)" == "FIXED_ROUTE_REQUIRED" ]] || fail "wrong cross-Agent rejection code"
 record "Cross-Agent rejection" "HTTP 403"
 
 compose restart gateway >/dev/null
 wait_for_health || fail "Gateway did not recover after restart"
-request GET "/api/v1/conversations/$(printf '%s' "$CONVERSATION_REF" | sed 's/:/%3A/g')/messages" 200
+request GET "/api/v1/conversations/$CONVERSATION_PATH/messages" 200
 [[ "$(json_get "$RESPONSE_BODY" messages.length)" == "4" ]] || fail "history was lost after restart"
-record "Restart recovery" "4 messages restored"
+record "Restart history recovery" "4 messages restored"
+
+KEY_3="acceptance:$(uuid)"
+PAYLOAD_3="$(message_payload 3 "$KEY_3" "第三轮自动验收消息。")"
+request POST "/api/v1/conversations/$CONVERSATION_PATH/messages" 200 "$PAYLOAD_3"
+[[ "$(json_get "$RESPONSE_BODY" response.payload.text)" == "Fake Provider 第 3 轮回复。" ]] || fail "Provider Session did not continue after restart"
+record "Post-restart continuation" "Fake Provider turn 3"
+
+request GET "/api/v1/conversations/$CONVERSATION_PATH/messages" 200
+[[ "$(json_get "$RESPONSE_BODY" messages.length)" == "6" ]] || fail "continued history should contain six messages"
+record "Final history" "6 persisted messages"
 
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 {
