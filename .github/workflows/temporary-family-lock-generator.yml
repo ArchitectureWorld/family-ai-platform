@@ -1,0 +1,37 @@
+name: Temporary Family feature lock generator
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  generate-lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/family-onboarding-foundation
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Generate and commit the feature lock once
+        shell: bash
+        run: |
+          if [[ -f package-lock.json ]]; then
+            echo "package-lock.json already exists on the feature branch."
+            exit 0
+          fi
+          corepack enable
+          npm install --package-lock-only --ignore-scripts
+          test -f package-lock.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "build: commit repository dependency lock"
+          git push origin HEAD:feat/family-onboarding-foundation
