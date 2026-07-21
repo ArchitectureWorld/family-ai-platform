@@ -7,6 +7,7 @@ TOKEN_FILE="$RUNTIME_DIR/config/device-token"
 COMPOSE_ENV="$RUNTIME_DIR/config/compose.env"
 REPORT_DIR="$ROOT_DIR/docs/acceptance/runtime"
 BASE_URL="http://127.0.0.1:8790"
+SERVICE_ID="family-ai-gateway-foundation"
 DEVICE_REF="device:test"
 AGENT_REF="agent:personal-assistant"
 
@@ -84,8 +85,10 @@ message_payload() {
 }
 
 wait_for_health() {
+  local response
   for _ in $(seq 1 60); do
-    if curl --silent --fail --max-time 2 "$BASE_URL/health" >/dev/null; then
+    response="$(curl --silent --show-error --max-time 2 "$BASE_URL/health" 2>/dev/null || true)"
+    if [[ "$response" == *'"service":"family-ai-gateway-foundation"'* ]]; then
       return 0
     fi
     sleep 1
@@ -101,7 +104,8 @@ record() { STEPS+=("| $1 | PASS | $2 |"); printf 'PASS: %s\n' "$1"; }
 
 request GET /health 200
 [[ "$(json_get "$RESPONSE_BODY" ok)" == "true" ]] || fail "health response did not report ok=true"
-record "Health" "HTTP 200"
+[[ "$(json_get "$RESPONSE_BODY" service)" == "$SERVICE_ID" ]] || fail "port 8790 is not the Gateway Foundation service"
+record "Health identity" "$SERVICE_ID"
 
 request GET /api/v1/me 200
 [[ "$(json_get "$RESPONSE_BODY" deviceRef)" == "$DEVICE_REF" ]] || fail "authenticated device mismatch"
@@ -147,7 +151,7 @@ request POST "/api/v1/conversations/$CONVERSATION_PATH/messages" 403 "$WRONG_AGE
 record "Cross-Agent rejection" "HTTP 403"
 
 compose restart gateway >/dev/null
-wait_for_health || fail "Gateway did not recover after restart"
+wait_for_health || fail "Gateway Foundation did not recover after restart"
 request GET "/api/v1/conversations/$CONVERSATION_PATH/messages" 200
 [[ "$(json_get "$RESPONSE_BODY" messages.length)" == "4" ]] || fail "history was lost after restart"
 record "Restart history recovery" "4 messages restored"
