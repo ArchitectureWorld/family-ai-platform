@@ -82,6 +82,60 @@ All workspace builds passed:
 @family-ai/gateway
 ```
 
+## Scripted end-to-end acceptance
+
+The exact repository commands were executed against a real local Gateway HTTP process:
+
+```bash
+./scripts/dev-reset.sh --yes
+./scripts/dev-up.sh
+./scripts/acceptance.sh
+./scripts/dev-down.sh
+```
+
+Because Docker is not available in the isolated environment, a test-only Compose-compatible command adapter implemented only `version`, `up`, `down`, `restart`, `ps`, `logs` and `exec` by starting and restarting the built Gateway process directly. No repository code was changed for this adapter.
+
+This verifies the scripts' argument flow, generated runtime files, actual HTTP requests, SQLite persistence, Gateway restart behavior, report generation and error handling. It does not prove the Dockerfile or Compose engine behavior.
+
+All twelve acceptance steps passed:
+
+| Step | Result |
+|---|---|
+| Health | PASS |
+| Device authentication | PASS |
+| Create conversation | PASS |
+| First message | PASS |
+| Second message | PASS |
+| History before restart | PASS |
+| Idempotent replay | PASS |
+| Idempotency conflict | PASS |
+| Cross-Agent rejection | PASS |
+| Restart history recovery | PASS |
+| Post-restart continuation | PASS |
+| Final history | PASS |
+
+Observed results:
+
+- first response: `Fake Provider 第 1 轮回复。`;
+- second response: `Fake Provider 第 2 轮回复。`;
+- history before restart: four messages;
+- restart recovered the four messages;
+- first response after restart: `Fake Provider 第 3 轮回复。`;
+- final history: six messages.
+
+The generated Markdown report was scanned and contained no actual device Token, Bearer credential, `/tmp/` path or `/home/` path.
+
+Runtime permissions were verified:
+
+| Path | Mode |
+|---|---:|
+| `.runtime/` | `700` |
+| `.runtime/config/` | `700` |
+| `.runtime/data/` | `700` |
+| `.runtime/config/device-token` | `600` |
+| `.runtime/config/gateway.env` | `600` |
+| `.runtime/config/compose.env` | `600` |
+
 ## Dependency lock
 
 A new lockfile was generated from the new repository manifests only. It contains the three current workspaces and no legacy Control Center workspace. Because the current connector cannot reliably upload the generated 110 KB lockfile, it remains a required target-host step before the PR can become Ready:
