@@ -24,24 +24,40 @@ jobs:
         with:
           node-version: 22.16.0
       - name: Generate the Family feature lock once
+        id: lock
         if: >-
           github.event_name == 'pull_request' &&
-          github.event.pull_request.number == 4 &&
           github.event.pull_request.head.repo.full_name == github.repository &&
           github.event.pull_request.head.ref == 'feat/family-onboarding-foundation'
         shell: bash
         run: |
-          if [[ ! -f package-lock.json ]]; then
-            corepack enable
-            npm install --package-lock-only --ignore-scripts --no-audit --no-fund --omit-lockfile-registry-resolved=true
-            test -f package-lock.json
-            node -e 'const lock=require("./package-lock.json"); if(lock.lockfileVersion!==3) process.exit(1)'
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add package-lock.json
-            git commit -m "build: commit repository dependency lock"
-            git push origin HEAD:${{ github.head_ref }}
+          if [[ -f package-lock.json ]]; then
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          corepack enable
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund --omit-lockfile-registry-resolved=true
+          test -f package-lock.json
+          node -e 'const lock=require("./package-lock.json"); if(lock.lockfileVersion!==3) process.exit(1)'
+          echo "generated=true" >> "$GITHUB_OUTPUT"
+      - name: Upload generated lock for audit
+        if: steps.lock.outputs.generated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-package-lock
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Commit generated lock to feature branch
+        if: steps.lock.outputs.generated == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "build: commit repository dependency lock"
+          git push origin HEAD:${{ github.head_ref }}
       - name: Install and run quality gate
         id: quality
         shell: bash
@@ -71,8 +87,9 @@ jobs:
               ? fs.readFileSync('ci-output.txt', 'utf8')
               : 'CI did not produce an output file.';
             const output = raw.slice(-50000).replace(/```/g, '~~~');
+            const lockGenerated = '${{ steps.lock.outputs.generated }}';
             const conclusion = '${{ steps.quality.outcome }}';
-            const body = `${marker}\n## CI diagnostics\n\nOutcome: **${conclusion}**\n\n<details><summary>Latest output</summary>\n\n\`\`\`text\n${output}\n\`\`\`\n</details>`;
+            const body = `${marker}\n## CI diagnostics\n\nLock generated: **${lockGenerated || 'false'}**\n\nOutcome: **${conclusion}**\n\n<details><summary>Latest output</summary>\n\n\`\`\`text\n${output}\n\`\`\`\n</details>`;
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
