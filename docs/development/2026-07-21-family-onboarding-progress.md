@@ -3,6 +3,7 @@
 - 分支：`feat/family-onboarding-foundation`
 - PR：`#4`
 - 当前阶段：TDD GREEN 与 CI 验证
+- 门禁策略：临时进入 Ready 以触发仓库 CI，取得证据后恢复 Draft
 
 ## 已进入分支
 
@@ -28,4 +29,4 @@ Foundation acceptance
 Family onboarding acceptance
 ```
 
-PR 在 CI、Docker 自动验收和目标主机浏览器验收全部通过前保持 Draft。
+PR 在 CI、Docker 自动验收和目标主机浏览器验收全部通过前不合并。
