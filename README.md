@@ -57,11 +57,11 @@ Foundation 从 0 开发，不复制旧 Gateway 业务实现、不整体合并旧
 ### 环境要求
 
 - Linux 或 NAS；
-- Node.js 22；
-- npm；
 - Docker Engine；
 - Docker Compose V2，即支持 `docker compose`；
 - `curl`。
+
+宿主机**不需要预装 Node.js 或 npm**。依赖锁、测试、类型检查和构建都在固定版本的 Node 22.16.0 Docker 环境中完成。
 
 在仓库根目录执行：
 
@@ -71,9 +71,9 @@ Foundation 从 0 开发，不复制旧 Gateway 业务实现、不整体合并旧
 
 该命令会依次完成：
 
-1. 首次生成新仓库自己的 `package-lock.json`，已有锁文件时使用 `npm ci`；
-2. 执行全部测试、静态安全检查、TypeScript 检查和构建；
-3. 构建 Gateway Docker 镜像；
+1. 首次使用 `node:22.16.0-bookworm-slim` 生成新仓库自己的 `package-lock.json`；
+2. 在 Docker 构建阶段执行 `npm ci`、全部测试、静态安全检查、TypeScript 检查和构建；
+3. 构建最小非 root Gateway 运行镜像；
 4. 生成 Git 忽略的随机开发 Token 和空数据库；
 5. 仅在 `127.0.0.1:8790` 启动 Gateway；
 6. 自动完成健康、认证、两轮消息、幂等、跨 Agent 拒绝和重启恢复；
@@ -186,26 +186,18 @@ docs/acceptance/runtime/
 - 开发验收页面使用 CSP、`no-store`、`no-referrer` 和防嵌入响应头；
 - 自动测试只使用 Fake Provider。
 
-## 本地开发质量门禁
+## 开发者本机质量门禁
 
-首次安装必须生成全新的锁文件，不得复制旧仓库锁文件：
-
-```bash
-npm install
-npm run check
-```
-
-锁文件生成并提交后，正式验证使用：
+一键验收不要求宿主机 Node.js。专业开发人员在本机已有 Node.js 22 时，也可以直接执行：
 
 ```bash
 npm ci
 npm run check
-docker compose build
-./scripts/dev-up.sh
-./scripts/acceptance.sh
 ```
 
-未取得上述命令和浏览器体验的真实证据前，Foundation PR 必须保持 Draft。
+首次还没有锁文件时，不得复制旧仓库锁文件；应执行 `./scripts/verify-foundation.sh`，由固定 Node 22.16.0 容器生成新锁文件。
+
+未取得 Docker 构建、自动验收和浏览器体验的真实证据前，Foundation PR 必须保持 Draft。
 
 ## 设计、实施与验收文档
 
