@@ -19,8 +19,14 @@ function positiveInteger(raw: string | undefined, fallback: number, name: string
 
 export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const mode = (env.GATEWAY_MODE ?? "development") as GatewayMode;
-  if (!(["test", "development", "production"] as const).includes(mode)) {
+  if (!("test development production".split(" ") as GatewayMode[]).includes(mode)) {
     throw new Error("GATEWAY_MODE must be test, development, or production");
+  }
+  if (mode === "production") {
+    throw new Error(
+      "GATEWAY_MODE=production requires an explicit production runtime composition; " +
+        "the development binary must not bootstrap test identities or a Fake Provider."
+    );
   }
 
   const host = env.GATEWAY_HOST ?? "127.0.0.1";
