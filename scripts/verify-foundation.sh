@@ -10,38 +10,41 @@ fail() {
   exit 1
 }
 
-command -v node >/dev/null 2>&1 || fail "未找到 Node.js 22。"
-command -v npm >/dev/null 2>&1 || fail "未找到 npm。"
 command -v docker >/dev/null 2>&1 || fail "未找到 Docker。"
 docker compose version >/dev/null 2>&1 || fail "当前 Docker 不支持 'docker compose'。"
-
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-[[ "$NODE_MAJOR" == "22" ]] || fail "当前 Node.js 主版本是 $NODE_MAJOR，本阶段要求 Node.js 22。"
+command -v curl >/dev/null 2>&1 || fail "未找到 curl。"
 
 umask 077
 mkdir -p "$LOG_DIR"
 chmod 700 "$RUNTIME_DIR" "$LOG_DIR"
 cd "$ROOT_DIR"
 
-printf '\n[1/5] Installing deterministic dependencies...\n'
-if [[ -f package-lock.json ]]; then
-  npm ci 2>&1 | tee "$LOG_DIR/npm-install.log"
-else
-  npm install 2>&1 | tee "$LOG_DIR/npm-install.log"
+printf '\n[1/4] Preparing the repository dependency lock...\n'
+if [[ ! -f package-lock.json ]]; then
+  docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    --env HOME=/tmp \
+    --volume "$ROOT_DIR:/workspace" \
+    --workdir /workspace \
+    node:22-bookworm-slim \
+    npm install --package-lock-only --ignore-scripts \
+    2>&1 | tee "$LOG_DIR/package-lock.log"
+
+  [[ -f package-lock.json ]] || fail "Node 22 容器未生成 package-lock.json。"
   printf '\nA new package-lock.json was generated from this repository.\n'
   printf 'Review and commit it before the Foundation PR becomes Ready.\n'
+else
+  printf 'Using the existing package-lock.json.\n'
 fi
 
-printf '\n[2/5] Running tests, static checks, type checking, and builds...\n'
-npm run check 2>&1 | tee "$LOG_DIR/npm-check.log"
-
-printf '\n[3/5] Building the Docker image...\n'
+printf '\n[2/4] Building and verifying the Docker image...\n'
+printf 'The Docker build runs npm ci, all tests, static checks, type checking, and builds.\n'
 docker compose build 2>&1 | tee "$LOG_DIR/docker-build.log"
 
-printf '\n[4/5] Starting the local Gateway...\n'
+printf '\n[3/4] Starting the local Gateway...\n'
 ./scripts/dev-up.sh
 
-printf '\n[5/5] Running the full scripted acceptance journey...\n'
+printf '\n[4/4] Running the full scripted acceptance journey...\n'
 ./scripts/acceptance.sh 2>&1 | tee "$LOG_DIR/acceptance.log"
 
 TOKEN_FILE="$RUNTIME_DIR/config/device-token"
