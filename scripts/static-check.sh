@@ -18,6 +18,26 @@ if grep -Fq '0.0.0.0:8790:8790' compose.yaml; then
   exit 1
 fi
 
+grep -Fq 'FROM node:22.16.0-bookworm-slim AS build' Dockerfile || {
+  printf 'Dockerfile must use the verified Node 22.16.0 build image.\n' >&2
+  exit 1
+}
+
+grep -Fq 'RUN npm run check' Dockerfile || {
+  printf 'Docker image build must run the full npm quality gate.\n' >&2
+  exit 1
+}
+
+grep -Fq 'node:22.16.0-bookworm-slim' scripts/verify-foundation.sh || {
+  printf 'Foundation verification must generate the lock with the verified Node image.\n' >&2
+  exit 1
+}
+
+if grep -Eq 'command -v (node|npm)' scripts/verify-foundation.sh; then
+  printf 'One-command verification must not require Node or npm on the host.\n' >&2
+  exit 1
+fi
+
 grep -Fxq '.runtime/' .gitignore || {
   printf '.runtime must be ignored by Git.\n' >&2
   exit 1
