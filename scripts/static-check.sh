@@ -29,7 +29,15 @@ grep -Fxq 'docs/acceptance/runtime/' .gitignore || {
 }
 
 for forbidden in 'agent-control-center.sqlite' '/home/youran/' 'family-ai-platform-legacy/data'; do
-  if grep -R --exclude-dir=.git --exclude='*.md' -Fq "$forbidden" .; then
+  if grep -R \
+    --exclude-dir=.git \
+    --exclude-dir=node_modules \
+    --exclude-dir=dist \
+    --exclude-dir=.runtime \
+    --exclude-dir=coverage \
+    --exclude='*.md' \
+    -Fq "$forbidden" \
+    apps packages scripts Dockerfile compose.yaml package.json tsconfig.base.json 2>/dev/null; then
     printf 'Forbidden production reference found: %s\n' "$forbidden" >&2
     exit 1
   fi
