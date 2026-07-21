@@ -18,9 +18,11 @@ fail() {
 command -v docker >/dev/null 2>&1 || fail "未找到 Docker。请先安装 Docker Engine 或 Docker Desktop。"
 docker compose version >/dev/null 2>&1 || fail "当前 Docker 不支持 'docker compose'。"
 command -v curl >/dev/null 2>&1 || fail "未找到 curl，无法执行健康检查。"
+command -v od >/dev/null 2>&1 || fail "未找到 od，无法生成安全开发 Token。"
 
-mkdir -p "$CONFIG_DIR" "$DATA_DIR"
 umask 077
+mkdir -p "$CONFIG_DIR" "$DATA_DIR"
+chmod 700 "$RUNTIME_DIR" "$CONFIG_DIR" "$DATA_DIR"
 
 if [[ -f "$DATABASE_FILE" && ! -f "$TOKEN_FILE" ]]; then
   fail "数据库存在但开发 Token 丢失。为避免静默重置身份，请执行 ./scripts/dev-reset.sh 后重新启动。"
@@ -43,7 +45,6 @@ chmod 600 "$GATEWAY_ENV"
 cat > "$COMPOSE_ENV" <<EOF
 LOCAL_UID=$(id -u)
 LOCAL_GID=$(id -g)
-GATEWAY_ENV_FILE=$GATEWAY_ENV
 EOF
 chmod 600 "$COMPOSE_ENV"
 
