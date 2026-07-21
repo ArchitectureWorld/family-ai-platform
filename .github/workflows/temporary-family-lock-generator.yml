@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
 
+# One-time workflow. Delete immediately after package-lock.json reaches the feature branch.
 jobs:
   generate-lock:
     runs-on: ubuntu-latest
