@@ -32,7 +32,7 @@ describe("Gateway restart journey", () => {
     if (directory) rmSync(directory, { recursive: true, force: true });
   });
 
-  it("recovers conversation history and the Provider Session binding", async () => {
+  it("recovers history and continues the Provider Session after restart", async () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-restart-"));
     const databasePath = join(directory, "gateway.sqlite");
     const firstApp = await buildGatewayApp({
@@ -55,6 +55,7 @@ describe("Gateway restart journey", () => {
         payload: message(number)
       });
       expect(response.statusCode).toBe(200);
+      expect(response.json().response.payload.text).toBe(`Fake Provider 第 ${number} 轮回复。`);
     }
     await firstApp.close();
 
@@ -70,7 +71,9 @@ describe("Gateway restart journey", () => {
           "agent:personal-assistant",
           "provider-profile:fake-local"
         )
-    ).toMatchObject({ external_session_ref: expect.stringMatching(/^external-session:fake-/) });
+    ).toMatchObject({
+      external_session_ref: expect.stringMatching(/^external-session:fake-.+-turn-2$/)
+    });
     inspection.close();
 
     const secondApp = await buildGatewayApp({
@@ -85,12 +88,25 @@ describe("Gateway restart journey", () => {
     });
     expect(history.statusCode).toBe(200);
     expect(history.json().messages).toHaveLength(4);
-    expect(history.json().messages.map((item: { role: string }) => item.role)).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "assistant"
-    ]);
+
+    const third = await secondApp.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${encodeURIComponent(conversationRef)}/messages`,
+      headers,
+      payload: message(3)
+    });
+    expect(third.statusCode).toBe(200);
+    expect(third.json().response.payload.text).toBe("Fake Provider 第 3 轮回复。");
+
+    const continuedHistory = await secondApp.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${encodeURIComponent(conversationRef)}/messages`,
+      headers
+    });
+    expect(continuedHistory.json().messages).toHaveLength(6);
+    expect(
+      continuedHistory.json().messages.map((item: { role: string }) => item.role)
+    ).toEqual(["user", "assistant", "user", "assistant", "user", "assistant"]);
     await secondApp.close();
   });
 });
