@@ -20,20 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.16.0
-      - name: Generate feature lock when absent
-        shell: bash
-        run: |
-          if [[ ! -f package-lock.json ]]; then
-            corepack enable
-            npm install --package-lock-only --ignore-scripts
-          fi
-      - name: Upload generated lock for review
-        uses: actions/upload-artifact@v4
-        with:
-          name: generated-package-lock
-          path: package-lock.json
-          if-no-files-found: error
-          retention-days: 7
+          cache: npm
       - name: Install and run quality gate
         id: quality
         shell: bash
