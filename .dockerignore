@@ -1,0 +1,10 @@
+.git
+.github
+.runtime
+node_modules
+**/dist
+coverage
+*.sqlite
+*.sqlite-*
+*.log
+docs/acceptance/runtime

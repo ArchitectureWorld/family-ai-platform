@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Family AI Gateway 验收台</title>
+  <link rel="stylesheet" href="/acceptance.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">FAMILY AI PLATFORM · FOUNDATION</p>
+        <h1>Gateway 体验验收台</h1>
+        <p class="subtitle">按真实用户路径验证身份、会话、两轮连续消息、历史恢复和安全错误。</p>
+      </div>
+      <div id="connection" class="status neutral">等待连接</div>
+    </header>
+
+    <section class="panel">
+      <div class="section-title">
+        <span class="step">1</span>
+        <div><h2>确认身份</h2><p>验证当前测试设备只进入自己的个人助理。</p></div>
+      </div>
+      <button id="loadIdentity" class="primary">读取当前身份</button>
+      <div id="identity" class="cards empty">尚未读取</div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title">
+        <span class="step">2</span>
+        <div><h2>创建或恢复会话</h2><p>会话必须同时归属于当前成员和当前 Agent。</p></div>
+      </div>
+      <div class="actions">
+        <button id="createConversation" class="primary">创建体验会话</button>
+        <button id="loadConversations">读取已有会话</button>
+        <button id="loadHistory">刷新当前历史</button>
+      </div>
+      <div id="conversation" class="summary">尚未选择会话</div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title">
+        <span class="step">3</span>
+        <div><h2>连续发送两轮消息</h2><p>第二轮应复用同一 Provider Session；刷新页面后历史仍存在。</p></div>
+      </div>
+      <textarea id="message" rows="3" placeholder="输入一条体验消息">请记录这是第一轮体验消息。</textarea>
+      <div class="actions">
+        <button id="sendMessage" class="primary">发送消息</button>
+        <button id="sendSecond">填入第二轮示例</button>
+      </div>
+      <div id="history" class="timeline empty">尚无消息</div>
+    </section>
+
+    <section class="panel compact">
+      <div class="section-title">
+        <span class="step">4</span>
+        <div><h2>查看验收日志</h2><p>错误只显示稳定错误码，不应出现 SQL、堆栈、路径或密钥。</p></div>
+      </div>
+      <pre id="log">等待操作…</pre>
+    </section>
+
+    <footer>
+      该页面仅在本机 development 模式启用，不是正式 Member Web。
+    </footer>
+  </main>
+  <script type="module" src="/acceptance.js"></script>
+</body>
+</html>

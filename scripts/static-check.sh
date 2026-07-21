@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+for script in scripts/*.sh; do
+  bash -n "$script"
+done
+
+grep -Fq '127.0.0.1:8790:8790' compose.yaml || {
+  printf 'compose.yaml must publish Gateway on loopback only.\n' >&2
+  exit 1
+}
+
+if grep -Fq '0.0.0.0:8790:8790' compose.yaml; then
+  printf 'compose.yaml exposes Gateway outside loopback.\n' >&2
+  exit 1
+fi
+
+grep -Fq 'FROM node:22.16.0-bookworm-slim AS build' Dockerfile || {
+  printf 'Dockerfile must use the verified Node 22.16.0 build image.\n' >&2
+  exit 1
+}
+
+grep -Fq 'RUN npm run check' Dockerfile || {
+  printf 'Docker image build must run the full npm quality gate.\n' >&2
+  exit 1
+}
+
+grep -Fq 'node:22.16.0-bookworm-slim' scripts/verify-foundation.sh || {
+  printf 'Foundation verification must generate the lock with the verified Node image.\n' >&2
+  exit 1
+}
+
+if grep -Eq 'command -v (node|npm)' scripts/verify-foundation.sh; then
+  printf 'One-command verification must not require Node or npm on the host.\n' >&2
+  exit 1
+fi
+
+grep -Fxq '.runtime/' .gitignore || {
+  printf '.runtime must be ignored by Git.\n' >&2
+  exit 1
+}
+
+grep -Fxq 'docs/acceptance/runtime/' .gitignore || {
+  printf 'runtime acceptance reports must be ignored by Git.\n' >&2
+  exit 1
+}
+
+for forbidden in 'agent-control-center.sqlite' '/home/youran/' 'family-ai-platform-legacy/data'; do
+  if grep -R \
+    --exclude-dir=.git \
+    --exclude-dir=node_modules \
+    --exclude-dir=dist \
+    --exclude-dir=.runtime \
+    --exclude-dir=coverage \
+    --exclude='*.md' \
+    --exclude='static-check.sh' \
+    -Fq "$forbidden" \
+    apps packages scripts Dockerfile compose.yaml package.json tsconfig.base.json 2>/dev/null; then
+    printf 'Forbidden production reference found: %s\n' "$forbidden" >&2
+    exit 1
+  fi
+done
+
+printf 'Static deployment checks passed.\n'

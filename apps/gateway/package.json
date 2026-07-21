@@ -1,0 +1,24 @@
+{
+  "name": "@family-ai/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@family-ai/contracts": "0.1.0",
+    "@family-ai/provider-adapter-sdk": "0.1.0",
+    "better-sqlite3": "^12.11.1",
+    "fastify": "^5.10.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
+  }
+}
