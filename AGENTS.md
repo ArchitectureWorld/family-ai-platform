@@ -22,6 +22,15 @@
 - 个人助理 Agent 负责自然语言理解、任务判断和多 Agent 协作；
 - ME-Who、ME-Brain、长期记忆和项目知识不由本仓库权威持有。
 
+## 旧平台边界
+
+- 新平台数据库从空库开始；
+- 不迁移旧平台的用户、角色、Agent 配置、会话、消息、附件、设备、Session、Token 或运行配置；
+- `family-ai-platform-legacy` 只作为只读代码、测试场景和交互参考；
+- 旧代码只能经过独立 Review 后选择性复用；
+- 禁止整体合并旧 Gateway 分支；
+- 禁止建立旧数据库兼容层或历史 Schema 兼容约束。
+
 ## Git 规则
 
 - `main` 是唯一权威开发基线；
@@ -29,8 +38,7 @@
 - 禁止堆叠 PR；
 - 禁止创建 `sync/*`、`backup/*`、`temp/*`、`copy/*`；
 - 禁止 force push、改写 `main` 历史或在未批准时删除远程分支；
-- 合并后删除任务分支；
-- `family-ai-platform-legacy` 只作只读参考，不得继续开发新功能。
+- 合并后删除任务分支。
 
 ## 安全不变量
 
@@ -45,13 +53,13 @@
 7. Provider 子进程只能获得显式 allowlist 环境变量；
 8. 普通成员无法调用 `/api/admin/*`；
 9. 管理员身份不自动获得其他成员私人消息正文读取权；
-10. 数据库迁移必须版本化、可验证、可回滚；
+10. 数据库 Schema 变化必须版本化、可验证、可回滚；
 11. 附件文件与数据库状态必须具有补偿或可恢复机制；
 12. 密钥、Token、Cookie、Provider stderr 和本机私有路径不得进入公共 API、审计或 Git。
 
 ## 工程边界
 
-建议目标结构：
+目标结构：
 
 ```text
 apps/
@@ -61,11 +69,10 @@ apps/
 packages/
   contracts/
   provider-adapter-sdk/
-tools/
-  legacy-migration/
 docs/
 ```
 
+- 当前任务只创建实际需要的目录，不建立空壳应用；
 - 每个文件只承担一个清晰职责；
 - Route 只做协议解析和响应映射；
 - Service 承担业务规则；
@@ -102,7 +109,7 @@ npm run build
 - 公网 TLS 和反向代理；
 - OAuth/SSO；
 - 异地远程管理；
-- 生产旧数据迁移；
+- 旧平台业务数据迁移；
 - iOS/HarmonyOS 正式客户端；
 - 公共语音终端；
 - 多 Agent 语义编排；
