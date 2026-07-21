@@ -13,8 +13,18 @@ if (location.hash) history.replaceState(null, "", `${location.pathname}${locatio
 
 const token = sessionStorage.getItem("family-ai-dev-token") ?? "";
 const deviceRef = sessionStorage.getItem("family-ai-dev-device") ?? "device:test";
+let agentRef = sessionStorage.getItem("family-ai-dev-agent") ?? "agent:personal-assistant";
 let conversationRef = sessionStorage.getItem("family-ai-dev-conversation") ?? "";
 let turn = Number(sessionStorage.getItem("family-ai-dev-turn") ?? "0");
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
 
 function writeLog(label, value) {
   const safe = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -35,7 +45,9 @@ async function api(path, options = {}) {
     ...(options.headers ?? {})
   };
   const response = await fetch(path, { ...options, headers });
-  const body = response.status === 204 ? null : await response.json().catch(() => ({ code: "INVALID_RESPONSE" }));
+  const body = response.status === 204
+    ? null
+    : await response.json().catch(() => ({ code: "INVALID_RESPONSE" }));
   if (!response.ok) {
     const error = new Error(body?.message ?? `HTTP ${response.status}`);
     error.details = { status: response.status, body };
@@ -45,12 +57,16 @@ async function api(path, options = {}) {
 }
 
 function renderIdentity(identity) {
+  agentRef = identity.agentRef;
+  sessionStorage.setItem("family-ai-dev-agent", agentRef);
   identityNode.className = "cards";
   identityNode.innerHTML = [
     ["成员", identity.memberDisplayName, identity.memberRef],
     ["设备", identity.deviceDisplayName, identity.deviceRef],
     ["固定个人助理", identity.agentDisplayName, identity.agentRef]
-  ].map(([label, name, ref]) => `<div class="card"><span>${label}</span><strong>${name}</strong><small>${ref}</small></div>`).join("");
+  ].map(([label, name, ref]) =>
+    `<div class="card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(ref)}</small></div>`
+  ).join("");
 }
 
 function renderConversation(conversation) {
@@ -67,10 +83,10 @@ function renderMessages(messages) {
   }
   historyNode.className = "timeline";
   historyNode.innerHTML = messages.map((item) => {
-    const text = item.payload?.text ?? "";
+    const text = escapeHtml(item.payload?.text ?? "");
     const role = item.role === "assistant" ? "assistant" : "user";
     const label = role === "assistant" ? "个人助理" : "我";
-    return `<article class="message ${role}">${text}<small>${label} · ${item.messageRef}</small></article>`;
+    return `<article class="message ${role}">${text}<small>${label} · ${escapeHtml(item.messageRef)}</small></article>`;
   }).join("");
 }
 
@@ -125,7 +141,7 @@ async function sendMessage() {
     idempotencyKey: `browser:${id}`,
     occurredAt: new Date().toISOString(),
     source: { kind: "device", ref: deviceRef },
-    target: { kind: "agent", ref: "agent:personal-assistant" },
+    target: { kind: "agent", ref: agentRef },
     payload: { type: "text", text, language: "zh-CN" }
   };
   const result = await api(`/api/v1/conversations/${encodeURIComponent(conversationRef)}/messages`, {
