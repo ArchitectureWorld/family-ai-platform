@@ -1,9 +1,11 @@
+name: family-ai-platform-foundation
+
 services:
   gateway:
     build:
       context: .
       dockerfile: Dockerfile
-    image: family-ai-platform/gateway:foundation
+    image: family-ai-platform-foundation/gateway:foundation
     init: true
     restart: unless-stopped
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
@@ -27,7 +29,7 @@ services:
         - CMD
         - node
         - -e
-        - fetch('http://127.0.0.1:8790/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+        - fetch('http://127.0.0.1:8790/health').then(async r=>{const b=await r.json();if(!r.ok||b.service!=='family-ai-gateway-foundation')process.exit(1)}).catch(()=>process.exit(1))
       interval: 3s
       timeout: 2s
       retries: 20
