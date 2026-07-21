@@ -21,22 +21,21 @@ Provider Adapter SDK → Hermes / Codex
 
 新平台数据库从空库开始，不迁移旧平台的用户、角色、Agent 配置、会话、消息、附件、设备、Session、Token、Provider 配置、运行配置和审计数据。
 
-旧仓库 `ArchitectureWorld/family-ai-platform-legacy` 只作为只读代码、测试场景和交互参考。旧代码可以经过独立 Review 后选择性复用；禁止整体合并旧 Gateway 分支、复制旧 Control Center 后端、复制旧数据库 Schema 或建立旧数据兼容层。
+旧仓库 `ArchitectureWorld/family-ai-platform-legacy` 只作为只读代码、测试场景和交互参考。本阶段从 0 开发，不复制旧 Gateway 业务实现，不整体合并旧分支，不复制旧 Control Center 后端、旧数据库 Schema 或旧数据兼容层。
 
 ## 3. 目标结构
 
 ```text
 apps/
   gateway/
-  member-web/
-  admin-web/
 packages/
   contracts/
   provider-adapter-sdk/
+scripts/
 docs/
 ```
 
-第一阶段只创建实际使用的 `apps/gateway`、`packages/contracts` 和 `packages/provider-adapter-sdk`。
+第一阶段只创建实际使用的 `apps/gateway`、`packages/contracts`、`packages/provider-adapter-sdk`、一键部署脚本和验收材料。正式 `member-web` 与 `admin-web` 在后续阶段创建。
 
 ## 4. 第一阶段闭环
 
@@ -89,7 +88,9 @@ Route 只做协议解析和响应映射；Service 执行业务流程和事务；
 9. 公共响应不包含秘密、stderr、本机路径或内部数据库 ID；
 10. Schema 变化使用递增 migration；
 11. 默认只监听 `127.0.0.1`；
-12. 自动测试只使用 Fake Provider。
+12. 自动测试只使用 Fake Provider；
+13. 一键部署生成的 Token、数据库和运行文件只能存在于 Git 忽略的 `.runtime/`；
+14. 验收控制台只用于本机开发环境，不作为正式 Member Web。
 
 ## 8. 第一阶段 API
 
@@ -115,14 +116,79 @@ export interface ProviderAdapter {
 
 第一阶段只实现 Fake Provider。真实 Hermes Adapter 后续独立实现，并补齐环境 allowlist、超时、输出上限、进程组终止、并发限制、取消和错误脱敏。
 
-## 10. 测试要求
+## 10. 一键部署与体验验收
 
-至少覆盖：认证失败、成员与 Agent 会话隔离、跨 Agent 拒绝、两轮 Provider Session 连续性、相同请求幂等重放、相同 Key 不同请求冲突、授权失败不能命中缓存、重启历史恢复、bootstrap 不覆盖状态、migration 重复打开和 Provider 错误脱敏。
+第一阶段最终交付必须达到“拿到仓库即可部署和体验”的状态，而不是只提供源码。
 
-## 11. 非本阶段范围
+### 10.1 部署入口
 
-旧平台业务数据迁移、Admin RBAC、正式浏览器 Session、设备配对、附件、真实 Provider、Member/Admin Web、局域网、公网、TLS、iOS、HarmonyOS、公共语音终端、多 Agent 编排、ME-Who 和 ME-Brain。
+Linux 或 NAS Docker 环境执行：
 
-## 12. 完成条件
+```bash
+./scripts/dev-up.sh
+```
 
-`npm ci`、测试、类型检查和构建全部通过；两轮连续会话、重启恢复、跨 Agent 隔离和幂等冲突测试通过；默认监听 `127.0.0.1`；仓库不包含旧平台数据、数据库、Token 或正式绝对路径。
+脚本必须：
+
+1. 检查 Docker 与 Docker Compose；
+2. 创建 Git 忽略的 `.runtime/`；
+3. 生成随机开发设备 Token；
+4. 生成本机开发环境文件；
+5. 构建并启动 Gateway；
+6. 等待 `/health` 成功；
+7. 输出可点击的验收控制台 URL；
+8. 在支持桌面的环境尝试自动打开浏览器。
+
+停止和清理：
+
+```bash
+./scripts/dev-down.sh
+./scripts/dev-reset.sh
+```
+
+`dev-down.sh` 保留数据库；`dev-reset.sh` 删除一次性开发数据库、Token 和容器数据，并要求明确确认。
+
+### 10.2 验收控制台
+
+Gateway 在开发模式下同源提供轻量验收控制台。控制台只负责：
+
+- 显示当前测试成员、设备和 Agent；
+- 创建会话；
+- 连续发送两轮文本；
+- 显示 Fake Provider 返回；
+- 刷新页面后恢复会话和历史；
+- 展示结构化错误；
+- 不包含设备管理、配对、管理员功能或真实 Provider 配置。
+
+开发脚本输出带一次性本地 Token 的 URL。页面读取 Token 后立即从地址栏移除，不写入服务端日志，不持久化到数据库明文。
+
+### 10.3 自动验收入口
+
+```bash
+./scripts/acceptance.sh
+```
+
+脚本必须完成：健康检查、认证、创建会话、第一轮消息、第二轮消息、历史读取、服务重启、重启后历史恢复、幂等重放、幂等冲突和跨 Agent 拒绝，并在 `docs/acceptance/runtime/` 生成 Markdown 报告。
+
+脚本任何一步失败必须以非零状态退出，并打印失败步骤、HTTP 状态和安全脱敏后的响应。
+
+## 11. 测试要求
+
+至少覆盖：认证失败、成员与 Agent 会话隔离、跨 Agent 拒绝、两轮 Provider Session 连续性、相同请求幂等重放、相同 Key 不同请求冲突、授权失败不能命中缓存、重启历史恢复、bootstrap 不覆盖状态、migration 重复打开、Provider 错误脱敏、Docker 健康检查和验收脚本核心路径。
+
+## 12. 非本阶段范围
+
+旧平台业务数据迁移、Admin RBAC、正式浏览器 Session、设备配对、附件、真实 Provider、正式 Member/Admin Web、局域网、公网、TLS、iOS、HarmonyOS、公共语音终端、多 Agent 编排、ME-Who 和 ME-Brain。
+
+## 13. 完成条件
+
+以下条件必须同时满足：
+
+1. `npm ci`、测试、类型检查和构建全部通过；
+2. `docker compose build` 成功；
+3. `./scripts/dev-up.sh` 可在干净环境一键启动；
+4. 验收控制台可完成两轮会话、刷新恢复和重启恢复；
+5. `./scripts/acceptance.sh` 全部通过并生成报告；
+6. 跨 Agent 隔离、授权先于幂等、相同 Key 不同请求冲突测试通过；
+7. 默认监听 `127.0.0.1`；
+8. 仓库不包含旧平台数据、数据库、Token、正式绝对路径或明文秘密。
