@@ -19,18 +19,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.16.0
+          cache: npm
       - name: Install and run quality gate
         id: quality
         shell: bash
         run: |
           set -o pipefail
           {
-            if [ -f package-lock.json ]; then
-              npm ci
-            else
-              npm install
-            fi
+            test -f package-lock.json
+            npm ci
             npm run check
           } 2>&1 | tee ci-output.txt
       - name: Upload CI output
