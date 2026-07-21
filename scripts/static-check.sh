@@ -13,7 +13,7 @@ grep -Fq '127.0.0.1:8790:8790' compose.yaml || {
   exit 1
 }
 
-if grep -Eq '(^|[[:space:]])["'"']?0\.0\.0\.0:8790:8790' compose.yaml; then
+if grep -Fq '0.0.0.0:8790:8790' compose.yaml; then
   printf 'compose.yaml exposes Gateway outside loopback.\n' >&2
   exit 1
 fi
