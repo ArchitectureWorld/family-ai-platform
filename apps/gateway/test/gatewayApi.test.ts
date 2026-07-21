@@ -22,7 +22,11 @@ function envelope(input: { number: number; text?: string; target?: string; key?:
     occurredAt: "2026-07-21T09:00:00.000Z",
     source: { kind: "device", ref: "device:test" },
     target: { kind: "agent", ref: input.target ?? "agent:personal-assistant" },
-    payload: { type: "text", text: input.text ?? `第 ${input.number} 轮消息。`, language: "zh-CN" }
+    payload: {
+      type: "text",
+      text: input.text ?? `第 ${input.number} 轮消息。`,
+      language: "zh-CN"
+    }
   };
 }
 
@@ -32,16 +36,31 @@ describe("local Family AI Gateway API", () => {
   let adapter: FakeProviderAdapter;
   let app: Awaited<ReturnType<typeof buildGatewayApp>>;
 
-  beforeEach(async () => {
-    directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-api-"));
-    databasePath = join(directory, "gateway.sqlite");
-    adapter = new FakeProviderAdapter();
+  async function openApp(providerAdapter = new FakeProviderAdapter()) {
+    adapter = providerAdapter;
     app = await buildGatewayApp({
       databasePath,
       deviceToken,
       mode: "test",
       providerAdapter: adapter
     });
+  }
+
+  async function createConversation(title: string): Promise<string> {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/conversations",
+      headers,
+      payload: { title }
+    });
+    expect(created.statusCode).toBe(201);
+    return created.json().conversation.conversationRef as string;
+  }
+
+  beforeEach(async () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-api-"));
+    databasePath = join(directory, "gateway.sqlite");
+    await openApp();
   });
 
   afterEach(async () => {
@@ -54,6 +73,7 @@ describe("local Family AI Gateway API", () => {
     expect(health.statusCode).toBe(200);
     expect(health.json()).toEqual({ ok: true, protocolVersion: "1.0" });
     expect(health.body).not.toContain("测试成员");
+    expect(health.body).not.toContain(deviceToken);
 
     expect((await app.inject({ method: "GET", url: "/api/v1/me" })).statusCode).toBe(401);
     const me = await app.inject({ method: "GET", url: "/api/v1/me", headers });
@@ -63,17 +83,11 @@ describe("local Family AI Gateway API", () => {
       memberRef: "member:test",
       agentRef: "agent:personal-assistant"
     });
+    expect(me.body).not.toContain(deviceToken);
   });
 
   it("creates a conversation, preserves two Provider turns, and restores history", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/v1/conversations",
-      headers,
-      payload: { title: "体验会话" }
-    });
-    expect(created.statusCode).toBe(201);
-    const conversationRef = created.json().conversation.conversationRef as string;
+    const conversationRef = await createConversation("体验会话");
 
     const first = await app.inject({
       method: "POST",
@@ -106,13 +120,7 @@ describe("local Family AI Gateway API", () => {
   });
 
   it("authorizes conversation and Agent before idempotency replay", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/v1/conversations",
-      headers,
-      payload: { title: "幂等会话" }
-    });
-    const conversationRef = created.json().conversation.conversationRef as string;
+    const conversationRef = await createConversation("幂等会话");
     const request = envelope({ number: 3, key: "device:test:shared-key" });
 
     const first = await app.inject({
@@ -151,17 +159,103 @@ describe("local Family AI Gateway API", () => {
       `INSERT INTO conversations
        (conversation_ref, member_ref, agent_ref, title, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`
-    ).run("conversation:other-agent", "member:test", "agent:other", "其他 Agent 会话", timestamp, timestamp);
+    ).run(
+      "conversation:other-agent",
+      "member:test",
+      "agent:other",
+      "其他 Agent 会话",
+      timestamp,
+      timestamp
+    );
     db.close();
 
-    const forbidden = await app.inject({
+    const hiddenHistory = await app.inject({
+      method: "GET",
+      url: "/api/v1/conversations/conversation%3Aother-agent/messages",
+      headers
+    });
+    expect(hiddenHistory.statusCode).toBe(404);
+    expect(hiddenHistory.json().code).toBe("CONVERSATION_NOT_FOUND");
+
+    const forbiddenSend = await app.inject({
       method: "POST",
       url: "/api/v1/conversations/conversation%3Aother-agent/messages",
       headers,
       payload: request
     });
-    expect(forbidden.statusCode).toBe(404);
-    expect(forbidden.json().code).toBe("CONVERSATION_NOT_FOUND");
+    expect(forbiddenSend.statusCode).toBe(404);
+    expect(forbiddenSend.json().code).toBe("CONVERSATION_NOT_FOUND");
     expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("does not cache transient Provider failures and safely retries the same request", async () => {
+    await app.close();
+    await openApp(new FakeProviderAdapter({ failNext: true }));
+    const conversationRef = await createConversation("暂时失败重试");
+    const request = envelope({ number: 8, key: "device:test:transient-failure" });
+    const url = `/api/v1/conversations/${encodeURIComponent(conversationRef)}/messages`;
+
+    const failed = await app.inject({ method: "POST", url, headers, payload: request });
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json()).toMatchObject({
+      code: "PROVIDER_UNAVAILABLE",
+      message: "个人助理暂时不可用，请稍后重试。"
+    });
+    expect(failed.body).not.toContain("stderr");
+    expect(failed.body).not.toContain("stack");
+    expect(adapter.calls).toHaveLength(1);
+
+    const retried = await app.inject({ method: "POST", url, headers, payload: request });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().replayed).toBe(false);
+    expect(adapter.calls).toHaveLength(2);
+
+    const replayed = await app.inject({ method: "POST", url, headers, payload: request });
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json().replayed).toBe(true);
+    expect(adapter.calls).toHaveLength(2);
+  });
+
+  it("serializes concurrent identical requests and invokes the Provider once", async () => {
+    const conversationRef = await createConversation("并发幂等");
+    const request = envelope({ number: 9, key: "device:test:concurrent-key" });
+    const url = `/api/v1/conversations/${encodeURIComponent(conversationRef)}/messages`;
+
+    const [left, right] = await Promise.all([
+      app.inject({ method: "POST", url, headers, payload: request }),
+      app.inject({ method: "POST", url, headers, payload: request })
+    ]);
+
+    expect(left.statusCode).toBe(200);
+    expect(right.statusCode).toBe(200);
+    expect([left.json().replayed, right.json().replayed].sort()).toEqual([false, true]);
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("scopes one idempotency key independently to each conversation", async () => {
+    const firstConversation = await createConversation("会话 A");
+    const secondConversation = await createConversation("会话 B");
+    const sharedKey = "device:test:cross-conversation-key";
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${encodeURIComponent(firstConversation)}/messages`,
+      headers,
+      payload: envelope({ number: 10, key: sharedKey, text: "会话 A 的请求" })
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${encodeURIComponent(secondConversation)}/messages`,
+      headers,
+      payload: envelope({ number: 11, key: sharedKey, text: "会话 B 的请求" })
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(first.json().replayed).toBe(false);
+    expect(second.json().replayed).toBe(false);
+    expect(adapter.calls).toHaveLength(2);
+    expect(adapter.calls[0]?.conversationRef).toBe(firstConversation);
+    expect(adapter.calls[1]?.conversationRef).toBe(secondConversation);
   });
 });
