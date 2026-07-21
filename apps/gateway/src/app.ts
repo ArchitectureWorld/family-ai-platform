@@ -29,6 +29,8 @@ export interface BuildGatewayAppOptions {
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
 }
 
+const SERVICE_ID = "family-ai-gateway-foundation";
+
 const defaultBootstrap: Omit<DevelopmentBootstrapInput, "deviceToken"> = {
   memberRef: "member:test",
   memberDisplayName: "测试成员",
@@ -101,7 +103,11 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
 
   registerDevelopmentConsole(app, options.mode);
 
-  app.get("/health", async () => ({ ok: true, protocolVersion: PROTOCOL_VERSION }));
+  app.get("/health", async () => ({
+    ok: true,
+    protocolVersion: PROTOCOL_VERSION,
+    service: SERVICE_ID
+  }));
 
   app.get("/api/v1/me", async (request, reply) => {
     const device = requireDevice(request, reply);
