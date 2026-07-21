@@ -1,0 +1,34 @@
+name: Generate feature dependency lock
+
+on:
+  push:
+    branches:
+      - feat/family-onboarding-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  generate-lock:
+    if: ${{ hashFiles('package-lock.json') == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/family-onboarding-foundation
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Generate lock with repository npm version
+        run: |
+          corepack enable
+          npm install --package-lock-only --ignore-scripts
+      - name: Commit generated lock
+        run: |
+          test -f package-lock.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "build: commit repository dependency lock"
+          git push origin HEAD:feat/family-onboarding-foundation
