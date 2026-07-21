@@ -46,4 +46,13 @@ describe("Gateway configuration", () => {
       "GATEWAY_DEVICE_TOKEN"
     );
   });
+
+  it("rejects production until an explicit production runtime composition exists", () => {
+    expect(() =>
+      loadGatewayConfig({
+        GATEWAY_MODE: "production",
+        GATEWAY_HOST: "127.0.0.1"
+      })
+    ).toThrow("production runtime composition");
+  });
 });
