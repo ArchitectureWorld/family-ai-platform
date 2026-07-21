@@ -11,14 +11,14 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/provider-adapter-sdk/package.json packages/provider-adapter-sdk/package.json
 COPY apps/gateway/package.json apps/gateway/package.json
 
-RUN npm install
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
+COPY .gitignore Dockerfile compose.yaml ./
+COPY scripts scripts
 COPY packages packages
-COPY apps/gateway/src apps/gateway/src
-COPY apps/gateway/public apps/gateway/public
-COPY apps/gateway/tsconfig.json apps/gateway/tsconfig.json
+COPY apps apps
 
-RUN npm run build \
+RUN npm run check \
   && npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
