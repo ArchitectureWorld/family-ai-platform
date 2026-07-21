@@ -6,12 +6,12 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY package*.json tsconfig.base.json ./
+COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/provider-adapter-sdk/package.json packages/provider-adapter-sdk/package.json
 COPY apps/gateway/package.json apps/gateway/package.json
 
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+RUN npm ci
 
 COPY .gitignore Dockerfile compose.yaml ./
 COPY scripts scripts
