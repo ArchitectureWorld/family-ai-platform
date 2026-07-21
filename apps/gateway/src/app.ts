@@ -69,7 +69,7 @@ function deviceRef(request: FastifyRequest): string | null {
 }
 
 export async function buildGatewayApp(options: BuildGatewayAppOptions) {
-  const app = Fastify({ logger: false, disableRequestLogging: true });
+  const app = Fastify({ logger: false });
   const db = openGatewayDatabase(options.databasePath);
   const bootstrap: DevelopmentBootstrapInput = {
     ...defaultBootstrap,
