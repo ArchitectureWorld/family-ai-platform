@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
   issues: write
   pull-requests: write
 
@@ -17,20 +17,39 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.16.0
+      - name: Generate the Family feature lock once
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.number == 4 &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.head.ref == 'feat/family-onboarding-foundation'
+        shell: bash
+        run: |
+          if [[ ! -f package-lock.json ]]; then
+            corepack enable
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund --omit-lockfile-registry-resolved=true
+            test -f package-lock.json
+            node -e 'const lock=require("./package-lock.json"); if(lock.lockfileVersion!==3) process.exit(1)'
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "build: commit repository dependency lock"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
       - name: Install and run quality gate
         id: quality
         shell: bash
         run: |
           set -o pipefail
           {
-            if [ -f package-lock.json ]; then
-              npm ci
-            else
-              npm install
-            fi
+            test -f package-lock.json
+            npm ci
             npm run check
           } 2>&1 | tee ci-output.txt
       - name: Upload CI output
