@@ -5,6 +5,7 @@ coverage/
 .env.*
 !.env.example
 .runtime/
+docs/acceptance/runtime/
 *.sqlite
 *.sqlite-*
 *.log
