@@ -9,10 +9,18 @@ TOKEN_FILE="$CONFIG_DIR/device-token"
 GATEWAY_ENV="$CONFIG_DIR/gateway.env"
 COMPOSE_ENV="$CONFIG_DIR/compose.env"
 DATABASE_FILE="$DATA_DIR/gateway.sqlite"
+BASE_URL="http://127.0.0.1:8790"
+SERVICE_ID="family-ai-gateway-foundation"
 
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
   exit 1
+}
+
+health_matches() {
+  local response
+  response="$(curl --silent --show-error --max-time 2 "$BASE_URL/health" 2>/dev/null || true)"
+  [[ "$response" == *'"service":"family-ai-gateway-foundation"'* ]]
 }
 
 command -v docker >/dev/null 2>&1 || fail "未找到 Docker。请先安装 Docker Engine 或 Docker Desktop。"
@@ -49,13 +57,13 @@ EOF
 chmod 600 "$COMPOSE_ENV"
 
 cd "$ROOT_DIR"
-printf 'Building and starting Family AI Gateway...\n'
+printf 'Building and starting Family AI Gateway Foundation...\n'
 docker compose --env-file "$COMPOSE_ENV" up -d --build
 
-printf 'Waiting for Gateway health check'
+printf 'Waiting for the Foundation Gateway health identity'
 healthy=false
 for _ in $(seq 1 60); do
-  if curl --silent --fail --max-time 2 http://127.0.0.1:8790/health >/dev/null; then
+  if health_matches; then
     healthy=true
     break
   fi
@@ -65,16 +73,21 @@ done
 printf '\n'
 
 if [[ "$healthy" != true ]]; then
+  printf 'Port 8790 did not return service=%s.\n' "$SERVICE_ID" >&2
+  printf 'Current response:\n' >&2
+  curl --silent --show-error --max-time 2 "$BASE_URL/health" >&2 || true
+  printf '\nContainers publishing port 8790:\n' >&2
+  docker ps --filter publish=8790 --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}' >&2 || true
   docker compose --env-file "$COMPOSE_ENV" ps >&2 || true
   docker compose --env-file "$COMPOSE_ENV" logs --tail=120 gateway >&2 || true
-  fail "Gateway 未在 60 秒内通过健康检查。"
+  fail "8790 端口不是当前 Gateway Foundation，或服务未在 60 秒内启动。"
 fi
 
-ACCEPTANCE_URL="http://127.0.0.1:8790/#token=$DEVICE_TOKEN&device=device%3Atest"
+ACCEPTANCE_URL="$BASE_URL/#token=$DEVICE_TOKEN&device=device%3Atest"
 
 cat <<EOF
 
-Family AI Gateway 已启动。
+Family AI Gateway Foundation 已启动。
 
 体验验收页面：
 $ACCEPTANCE_URL
