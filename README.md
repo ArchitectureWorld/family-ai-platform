@@ -1,6 +1,6 @@
 # Family AI Platform
 
-面向家庭成员、个人助理 Agent 和受控设备的统一 AI 接入平台。
+面向家庭成员、家庭管家、个人助理 Agent 和受控设备的统一 AI 接入平台。
 
 ## 产品定位
 
@@ -11,8 +11,8 @@ Web / iOS / HarmonyOS / DIY / Admin
                     │
                     ▼
             Family AI Gateway
-    身份 / 设备 / Chat / Work / 消息
-    Agent 路由 / Provider / 同步 / 权限
+    Family / Person / Entry / Device
+    Chat / Work / 消息 / Agent 路由 / 权限
                     │
               gateway.sqlite
                     │
@@ -25,7 +25,7 @@ Web / iOS / HarmonyOS / DIY / Admin
 - `packages/provider-adapter-sdk`：Hermes、Codex 等 Provider 的受控调用边界；
 - 正式 Member Web、Admin Web、iOS、HarmonyOS 和 DIY 入口在后续阶段建设。
 
-Control Center 不再作为独立业务后台演进，而是收敛为 Admin Entry。管理员入口与普通入口共用 Gateway 核心，但具有不同权限和前端体验。
+Control Center 不再作为独立业务后台演进，而是收敛为 Admin Entry。管理员入口与个人入口共用 Gateway 和 Person，但拥有不同的 Session audience、权限、默认 Agent 和页面体验。
 
 ## 权威架构入口
 
@@ -81,34 +81,48 @@ Foundation 从 0 开发，不复制旧 Gateway 业务实现、不整体合并旧
 ArchitectureWorld/family-ai-platform-legacy
 ```
 
-## 当前 Gateway Foundation 闭环
+## 当前开发阶段
+
+Gateway Foundation 已保留以下可靠技术内核：
 
 ```text
-测试成员 / 设备
-→ Gateway 身份认证
-→ 固定成员—Agent 绑定
-→ 独立 Conversation
-→ Fake Provider 多轮响应
+设备认证
+→ 固定路由
+→ Conversation / Message
+→ Fake Provider 多轮连续性
 → 幂等重放与冲突
-→ SQLite 历史持久化
+→ SQLite 持久化
 → 容器重启恢复
 ```
 
-Foundation 已提供可靠的消息、认证、Provider、事务和部署技术内核，但其 `member / device / conversation` 仍是第一阶段验证模型。
-
-正式 Web、iOS、HarmonyOS 或 DIY 开发前，必须先建立：
+本阶段正在建立正式 Family / Person 领域底座：
 
 ```text
-Family / Person
-→ Identity / EntryBinding
-→ Device / DeviceBinding
-→ AssistantAssignment
-→ HomeChatStream / DailyEpisode
-→ WorkConversation
-→ Event / Sync / Lane
+创建一个 Family
+→ 创建首位 owner Person
+→ 绑定当前 Device
+→ 创建 FamilyManagerAssignment
+→ 创建 AssistantAssignment
+→ 在同一设备建立两套独立 Entry Session
 ```
 
-## 一条命令完成 Foundation 自动部署与验收
+双入口关系：
+
+```text
+同一个 Person / Device
+├── 家庭管理
+│   ├── audience: family_admin
+│   └── 默认 Agent: 家庭管家
+└── 个人空间
+    ├── audience: personal
+    └── 默认 Agent: 个人助理
+```
+
+管理员可以创建其他家庭成员并为其分配个人助理，但不会自动获得这些成员的私人入口。
+
+本阶段不包含 Chat、Work、手机号、密码、多家庭切换和真实 Provider。
+
+## 一条命令完成自动测试与小白验收
 
 ### 环境要求
 
@@ -117,7 +131,7 @@ Family / Person
 - Docker Compose V2；
 - `curl`。
 
-宿主机不需要预装 Node.js 或 npm。
+宿主机不需要预装 Node.js 或 npm。仓库必须已经提交自己的 `package-lock.json`，Docker 和 CI 只使用 `npm ci`。
 
 ```bash
 ./scripts/verify-foundation.sh
@@ -125,34 +139,49 @@ Family / Person
 
 该命令会：
 
-1. 准备新仓库自己的依赖锁；
-2. 在固定 Node 22 Docker 环境中运行测试、静态检查、类型检查和构建；
-3. 构建非 root Gateway 镜像；
-4. 生成 Git 忽略的开发 Token 和空数据库；
-5. 仅在 `127.0.0.1:8790` 启动 Gateway；
-6. 验证认证、消息、幂等、隔离和重启恢复；
-7. 输出浏览器验收台地址。
+1. 检查已提交的依赖锁；
+2. 在固定 Node 22.16.0 Docker 环境运行全部测试、静态检查、类型检查和构建；
+3. 验证原有消息、幂等、隔离和重启恢复；
+4. 自动验证一次性建家、双入口、Agent 路由、成员管理和权限隔离；
+5. 清空自动验收数据；
+6. 再启动一套空白 Gateway；
+7. 输出浏览器“小白测试”地址和逐步操作说明。
+
+浏览器页面标题：
+
+```text
+家庭 AI 初始化与入口验收台
+```
+
+详细操作见：
+
+- [`docs/acceptance/2026-07-21-family-onboarding-foundation.md`](docs/acceptance/2026-07-21-family-onboarding-foundation.md)
 
 ### 分步骤运行
 
 ```bash
 ./scripts/dev-up.sh
 ./scripts/acceptance.sh
+bash ./scripts/acceptance-onboarding.sh
 ./scripts/dev-down.sh
 ./scripts/dev-reset.sh
 ```
 
-运行数据、Token、日志和 SQLite 只保存在 Git 忽略的 `.runtime/`。
+运行数据库和本机开发凭证只保存在 Git 忽略的 `.runtime/`。自动验收报告保存在 Git 忽略的 `docs/acceptance/runtime/`。
 
 ## 网络和安全边界
 
 - Compose 只发布 `127.0.0.1:8790:8790`；
-- 数据库只保存 Token Hash；
+- 数据库只保存设备凭证和 Entry Session Token 的 Hash；
+- 原始 Entry Session Token 只在创建时返回一次；
+- 客户端不能声明可被信任的 Person 或 Agent；
+- Admin 与 Personal Session 的 audience 强制隔离；
+- 新成员不会继承当前管理员设备的私人入口；
 - Conversation 同时校验成员和 Agent；
 - 授权先于幂等缓存查询；
-- 同一幂等 Key 的不同请求返回冲突；
 - Provider Session 不跨 Agent 或 Provider Profile 复用；
 - 验收台只在 development 模式提供；
+- production 不运行测试 bootstrap，也不默认创建 Fake Provider；
 - 自动测试只使用 Fake Provider。
 
 ## 开发规则
@@ -163,12 +192,14 @@ Family / Person
 - 行为变更必须先增加失败测试；
 - 不提交数据库、密钥、Token、日志和正式附件；
 - 新开发先确认与 `docs/architecture/` 一致；
-- 未取得测试、类型检查、构建和目标环境证据前，不宣称完成。
+- 未取得测试、类型检查、构建、Docker 和目标环境证据前，不宣称完成。
 
-## Foundation 设计与验收资料
+## 设计与验收资料
 
 - `docs/superpowers/specs/2026-07-21-family-ai-platform-foundation-design.md`
-- `docs/superpowers/plans/2026-07-21-gateway-one-click-acceptance.md`
+- `docs/superpowers/specs/2026-07-21-family-onboarding-foundation-design.md`
+- `docs/superpowers/plans/2026-07-21-family-onboarding-foundation.md`
 - `docs/acceptance/2026-07-21-gateway-foundation.md`
+- `docs/acceptance/2026-07-21-family-onboarding-foundation.md`
 - `docs/development/2026-07-21-gateway-foundation-verification.md`
 - `docs/development/2026-07-21-gateway-foundation-target-host-acceptance.md`
