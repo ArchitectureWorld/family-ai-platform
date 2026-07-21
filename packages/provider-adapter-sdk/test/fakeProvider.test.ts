@@ -15,23 +15,35 @@ const baseRequest = {
 };
 
 describe("FakeProviderAdapter", () => {
-  it("preserves one external session across two turns", async () => {
-    const adapter = new FakeProviderAdapter();
-    const first = await adapter.invoke(baseRequest);
+  it("continues the same logical session across turns and adapter restart", async () => {
+    const firstAdapter = new FakeProviderAdapter();
+    const first = await firstAdapter.invoke(baseRequest);
     expect(first.status).toBe("succeeded");
-    expect(first.externalSessionRef).toMatch(/^external-session:fake-/);
+    expect(first.externalSessionRef).toMatch(/^external-session:fake-.+-turn-1$/);
     expect(first.output?.[0]).toEqual({ type: "text", text: "Fake Provider 第 1 轮回复。" });
+    if (!first.externalSessionRef) throw new Error("first session reference missing");
 
-    const second = await adapter.invoke({
+    const second = await firstAdapter.invoke({
       ...baseRequest,
       invocationRef: "invocation:018f47a2-1f10-7a3d-8c2d-61f369284f24",
       idempotencyKey: "device:test:message:0002",
       content: [{ type: "text", text: "第二轮。" }],
       externalSessionRef: first.externalSessionRef
     });
-
-    expect(second.externalSessionRef).toBe(first.externalSessionRef);
+    expect(second.externalSessionRef).toMatch(/^external-session:fake-.+-turn-2$/);
     expect(second.output?.[0]).toEqual({ type: "text", text: "Fake Provider 第 2 轮回复。" });
+    if (!second.externalSessionRef) throw new Error("second session reference missing");
+
+    const restartedAdapter = new FakeProviderAdapter();
+    const third = await restartedAdapter.invoke({
+      ...baseRequest,
+      invocationRef: "invocation:018f47a2-1f10-7a3d-8c2d-61f369284f25",
+      idempotencyKey: "device:test:message:0003",
+      content: [{ type: "text", text: "第三轮。" }],
+      externalSessionRef: second.externalSessionRef
+    });
+    expect(third.externalSessionRef).toMatch(/^external-session:fake-.+-turn-3$/);
+    expect(third.output?.[0]).toEqual({ type: "text", text: "Fake Provider 第 3 轮回复。" });
   });
 
   it("returns a safe structured failure without internal details", async () => {
