@@ -30,6 +30,18 @@ function envelope(input: { number: number; text?: string; target?: string; key?:
   };
 }
 
+function expectPublicError(
+  response: { json(): unknown },
+  expected: { code: string; category: string; retryable: boolean }
+) {
+  expect(response.json()).toMatchObject({
+    code: expected.code,
+    category: expected.category,
+    message: expect.any(String),
+    retryable: expected.retryable
+  });
+}
+
 describe("local Family AI Gateway API", () => {
   let directory = "";
   let databasePath = "";
@@ -79,7 +91,14 @@ describe("local Family AI Gateway API", () => {
     expect(health.body).not.toContain("测试成员");
     expect(health.body).not.toContain(deviceToken);
 
-    expect((await app.inject({ method: "GET", url: "/api/v1/me" })).statusCode).toBe(401);
+    const unauthorized = await app.inject({ method: "GET", url: "/api/v1/me" });
+    expect(unauthorized.statusCode).toBe(401);
+    expectPublicError(unauthorized, {
+      code: "DEVICE_AUTH_INVALID",
+      category: "permission",
+      retryable: false
+    });
+
     const me = await app.inject({ method: "GET", url: "/api/v1/me", headers });
     expect(me.statusCode).toBe(200);
     expect(me.json()).toMatchObject({
@@ -152,7 +171,24 @@ describe("local Family AI Gateway API", () => {
       payload: envelope({ number: 4, key: "device:test:shared-key", text: "不同请求内容" })
     });
     expect(conflict.statusCode).toBe(409);
-    expect(conflict.json().code).toBe("IDEMPOTENCY_CONFLICT");
+    expectPublicError(conflict, {
+      code: "IDEMPOTENCY_CONFLICT",
+      category: "conflict",
+      retryable: false
+    });
+
+    const wrongTarget = await app.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${encodeURIComponent(conversationRef)}/messages`,
+      headers,
+      payload: envelope({ number: 5, target: "agent:other" })
+    });
+    expect(wrongTarget.statusCode).toBe(403);
+    expectPublicError(wrongTarget, {
+      code: "FIXED_ROUTE_REQUIRED",
+      category: "permission",
+      retryable: false
+    });
 
     const db = openGatewayDatabase(databasePath);
     const timestamp = new Date().toISOString();
@@ -179,7 +215,11 @@ describe("local Family AI Gateway API", () => {
       headers
     });
     expect(hiddenHistory.statusCode).toBe(404);
-    expect(hiddenHistory.json().code).toBe("CONVERSATION_NOT_FOUND");
+    expectPublicError(hiddenHistory, {
+      code: "CONVERSATION_NOT_FOUND",
+      category: "permission",
+      retryable: false
+    });
 
     const forbiddenSend = await app.inject({
       method: "POST",
@@ -188,7 +228,11 @@ describe("local Family AI Gateway API", () => {
       payload: request
     });
     expect(forbiddenSend.statusCode).toBe(404);
-    expect(forbiddenSend.json().code).toBe("CONVERSATION_NOT_FOUND");
+    expectPublicError(forbiddenSend, {
+      code: "CONVERSATION_NOT_FOUND",
+      category: "permission",
+      retryable: false
+    });
     expect(adapter.calls).toHaveLength(1);
   });
 
@@ -201,8 +245,12 @@ describe("local Family AI Gateway API", () => {
 
     const failed = await app.inject({ method: "POST", url, headers, payload: request });
     expect(failed.statusCode).toBe(502);
-    expect(failed.json()).toMatchObject({
+    expectPublicError(failed, {
       code: "PROVIDER_UNAVAILABLE",
+      category: "availability",
+      retryable: true
+    });
+    expect(failed.json()).toMatchObject({
       message: "个人助理暂时不可用，请稍后重试。"
     });
     expect(failed.body).not.toContain("stderr");
