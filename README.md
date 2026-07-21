@@ -47,22 +47,45 @@ Foundation 从 0 开发，不复制旧 Gateway 业务实现、不整体合并旧
 → 安全幂等重放与冲突
 → SQLite 历史持久化
 → 服务重启后恢复历史
+→ 重启后继续第三轮
 ```
 
 暂不包含真实 Hermes/Codex、正式 Member/Admin Web、浏览器正式 Session、设备配对、附件、局域网、公网、TLS、移动端和公共语音终端。
 
-## 一键部署与体验
+## 一条命令完成自动部署与验收
 
 ### 环境要求
 
 - Linux 或 NAS；
+- Node.js 22；
+- npm；
 - Docker Engine；
 - Docker Compose V2，即支持 `docker compose`；
 - `curl`。
 
-### 1. 启动
-
 在仓库根目录执行：
+
+```bash
+./scripts/verify-foundation.sh
+```
+
+该命令会依次完成：
+
+1. 首次生成新仓库自己的 `package-lock.json`，已有锁文件时使用 `npm ci`；
+2. 执行全部测试、静态安全检查、TypeScript 检查和构建；
+3. 构建 Gateway Docker 镜像；
+4. 生成 Git 忽略的随机开发 Token 和空数据库；
+5. 仅在 `127.0.0.1:8790` 启动 Gateway；
+6. 自动完成健康、认证、两轮消息、幂等、跨 Agent 拒绝和重启恢复；
+7. 验证重启后继续收到 `Fake Provider 第 3 轮回复。`；
+8. 生成脱敏 Markdown 验收报告；
+9. 保持 Gateway 运行，并输出浏览器体验地址。
+
+自动流程成功后只需打开脚本输出的本机 URL，完成页面体验验收。
+
+## 分步骤运行
+
+### 1. 只启动 Gateway
 
 ```bash
 ./scripts/dev-up.sh
@@ -71,8 +94,8 @@ Foundation 从 0 开发，不复制旧 Gateway 业务实现、不整体合并旧
 脚本会自动：
 
 1. 检查 Docker 与 Compose；
-2. 创建 Git 忽略的 `.runtime/`；
-3. 生成随机开发设备 Token；
+2. 创建权限为 `700` 的 `.runtime/`；
+3. 生成权限为 `600` 的随机开发设备 Token；
 4. 构建并启动 Gateway；
 5. 等待健康检查；
 6. 输出并尽量自动打开验收页面。
@@ -85,20 +108,23 @@ http://127.0.0.1:8790
 
 ### 2. 浏览器体验验收
 
-打开 `dev-up.sh` 输出的 URL，依次完成：
+打开启动脚本输出的 URL，依次完成：
 
 1. 点击“读取当前身份”，确认显示测试成员、测试设备和固定个人助理；
 2. 点击“创建体验会话”；
-3. 发送第一轮消息，应显示 `Fake Provider 第 1 轮回复`；
-4. 点击“填入第二轮示例”并发送，应显示 `Fake Provider 第 2 轮回复`；
+3. 发送第一轮消息，应显示 `Fake Provider 第 1 轮回复。`；
+4. 点击“填入第二轮示例”并发送，应显示 `Fake Provider 第 2 轮回复。`；
 5. 刷新页面，历史仍应显示四条消息；
 6. 执行 `docker compose --env-file .runtime/config/compose.env restart gateway`；
 7. 等待数秒后点击“刷新当前历史”，历史仍应恢复；
-8. 日志中不应出现 SQL、堆栈、Token、本机路径或 Provider 内部错误。
+8. 再发送一条消息，应显示 `Fake Provider 第 3 轮回复。`；
+9. 日志中不应出现 SQL、堆栈、Token、本机路径或 Provider 内部错误。
 
 该页面只是 development 模式验收台，不是正式 Member Web，也不包含管理员功能。
 
-### 3. 自动体验验收
+### 3. 只运行自动体验验收
+
+Gateway 已启动时执行：
 
 ```bash
 ./scripts/acceptance.sh
@@ -115,7 +141,9 @@ http://127.0.0.1:8790
 - 相同 Key 不同请求冲突；
 - 错误 Agent 目标拒绝；
 - 容器重启；
-- 重启后历史恢复。
+- 重启后历史恢复；
+- 重启后继续第三轮；
+- 六条消息最终历史。
 
 成功后会在以下目录生成脱敏 Markdown 报告：
 
@@ -148,25 +176,26 @@ docs/acceptance/runtime/
 ## 网络和安全边界
 
 - Compose 只发布 `127.0.0.1:8790:8790`；
-- Token、环境文件和 SQLite 只存在于 `.runtime/`；
+- Token、环境文件、日志和 SQLite 只存在于 `.runtime/`；
 - 数据库只保存 Token 的 SHA-256 Hash；
 - conversation 同时绑定 member 和 Agent；
 - 会话访问、历史、发送和幂等重放全部校验 member 与 Agent；
 - 授权先于幂等缓存查询；
 - 相同幂等 Key 的不同请求返回 `409 IDEMPOTENCY_CONFLICT`；
 - Provider Session 不跨 Agent 或 Provider Profile 复用；
+- 开发验收页面使用 CSP、`no-store`、`no-referrer` 和防嵌入响应头；
 - 自动测试只使用 Fake Provider。
 
 ## 本地开发质量门禁
 
-首次安装会生成全新的 `package-lock.json`，不得复制旧仓库锁文件：
+首次安装必须生成全新的锁文件，不得复制旧仓库锁文件：
 
 ```bash
 npm install
 npm run check
 ```
 
-锁文件生成后，正式验证使用：
+锁文件生成并提交后，正式验证使用：
 
 ```bash
 npm ci
@@ -178,20 +207,13 @@ docker compose build
 
 未取得上述命令和浏览器体验的真实证据前，Foundation PR 必须保持 Draft。
 
-## 开发规则
-
-- `main` 是唯一权威基线；
-- 每个任务从最新 `main` 创建一个独立分支；
-- 每个 PR 直接指向 `main`，禁止堆叠 PR；
-- 行为变更必须先增加失败测试；
-- 不提交数据库、密钥、令牌、日志和正式附件；
-- 未获得测试、类型检查、构建、部署和体验证据前，不得宣称完成。
-
-详细设计与计划：
+## 设计、实施与验收文档
 
 - `docs/superpowers/specs/2026-07-21-family-ai-platform-foundation-design.md`
 - `docs/superpowers/plans/2026-07-21-family-ai-platform-foundation.md`
 - `docs/superpowers/plans/2026-07-21-gateway-one-click-acceptance.md`
+- `docs/acceptance/2026-07-21-gateway-foundation.md`
+- `docs/development/2026-07-21-gateway-foundation-verification.md`
 - `docs/development/roadmap.md`
 
 ## 旧仓库
