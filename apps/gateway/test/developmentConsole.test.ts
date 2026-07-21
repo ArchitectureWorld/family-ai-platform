@@ -24,11 +24,15 @@ async function appFor(mode: "development" | "production") {
 }
 
 describe("development acceptance console", () => {
-  it("is served only in development mode with no-store headers", async () => {
+  it("is served only in development mode with strict browser protections", async () => {
     const development = await appFor("development");
     const response = await development.inject({ method: "GET", url: "/" });
     expect(response.statusCode).toBe(200);
     expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
+    expect(response.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+    expect(response.headers["referrer-policy"]).toBe("no-referrer");
+    expect(response.headers["x-frame-options"]).toBe("DENY");
     expect(response.body).toContain("Gateway 体验验收台");
     expect(response.body).not.toContain(token);
     await development.close();
