@@ -36,6 +36,7 @@ for forbidden in 'agent-control-center.sqlite' '/home/youran/' 'family-ai-platfo
     --exclude-dir=.runtime \
     --exclude-dir=coverage \
     --exclude='*.md' \
+    --exclude='static-check.sh' \
     -Fq "$forbidden" \
     apps packages scripts Dockerfile compose.yaml package.json tsconfig.base.json 2>/dev/null; then
     printf 'Forbidden production reference found: %s\n' "$forbidden" >&2
