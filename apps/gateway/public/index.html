@@ -4,66 +4,165 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
-  <title>Family AI Gateway 验收台</title>
+  <title>家庭 AI 初始化与入口验收台</title>
   <link rel="stylesheet" href="/acceptance.css" />
 </head>
 <body>
   <main class="shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">FAMILY AI PLATFORM · FOUNDATION</p>
-        <h1>Gateway 体验验收台</h1>
-        <p class="subtitle">按真实用户路径验证身份、会话、两轮连续消息、历史恢复和安全错误。</p>
+        <p class="eyebrow">FAMILY AI PLATFORM · FAMILY FOUNDATION</p>
+        <h1>家庭 AI 初始化与入口验收台</h1>
+        <p class="subtitle">不用命令行配置账号。先创建一个家庭，再分别验证“家庭管理”和“个人空间”是否进入正确的 Agent。</p>
       </div>
-      <div id="connection" class="status neutral">等待连接</div>
+      <div id="connection" class="status neutral">正在连接 Gateway</div>
     </header>
 
-    <section class="panel">
+    <section id="loadingView" class="panel center-state">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2>正在读取初始化状态</h2>
+      <p>请稍候，不需要刷新页面。</p>
+    </section>
+
+    <section id="setupView" class="panel hidden">
       <div class="section-title">
         <span class="step">1</span>
-        <div><h2>确认身份</h2><p>验证当前测试设备只进入自己的个人助理。</p></div>
+        <div>
+          <h2>创建你的家庭</h2>
+          <p>第一版只需要三个名称。系统会自动生成内部身份，并在同一台设备上创建两套独立入口。</p>
+        </div>
       </div>
-      <button id="loadIdentity" class="primary">读取当前身份</button>
-      <div id="identity" class="cards empty">尚未读取</div>
+      <form id="setupForm" class="form-grid">
+        <label>
+          <span>家庭名称</span>
+          <input id="familyName" name="familyName" maxlength="80" required value="我的家庭" autocomplete="off" />
+        </label>
+        <label>
+          <span>管理员姓名</span>
+          <input id="ownerName" name="ownerName" maxlength="80" required placeholder="例如：张三" autocomplete="off" />
+        </label>
+        <label>
+          <span>当前设备名称</span>
+          <input id="deviceName" name="deviceName" maxlength="80" required value="家庭电脑" autocomplete="off" />
+        </label>
+        <div class="callout">
+          <strong>创建后会得到两个入口</strong>
+          <span>家庭管理连接家庭管家；个人空间连接你自己的个人助理。两者是同一个人、同一台设备，但权限和 Session 完全分开。</span>
+        </div>
+        <button type="submit" class="primary wide">创建家庭并进入门户</button>
+      </form>
     </section>
 
-    <section class="panel">
-      <div class="section-title">
-        <span class="step">2</span>
-        <div><h2>创建或恢复会话</h2><p>会话必须同时归属于当前成员和当前 Agent。</p></div>
+    <section id="portalView" class="hidden">
+      <section class="panel portal-header">
+        <div>
+          <p class="eyebrow">初始化完成</p>
+          <h2 id="portalTitle">家庭入口</h2>
+          <p id="portalSummary" class="muted">请选择要进入的空间。</p>
+        </div>
+        <span class="status ok">两套入口已分离</span>
+      </section>
+
+      <div class="entry-grid">
+        <button id="enterAdmin" class="entry-card admin-card" type="button">
+          <span class="entry-icon">家</span>
+          <span class="entry-copy">
+            <small>FAMILY ADMIN</small>
+            <strong>家庭管理</strong>
+            <span>管理家庭成员、设备和家庭级事务</span>
+            <b>默认连接：家庭管家</b>
+          </span>
+          <span class="entry-arrow">进入 →</span>
+        </button>
+
+        <button id="enterPersonal" class="entry-card personal-card" type="button">
+          <span class="entry-icon">我</span>
+          <span class="entry-copy">
+            <small>PERSONAL</small>
+            <strong>个人空间</strong>
+            <span>承载个人 Chat、Work、记忆和私人事务</span>
+            <b>默认连接：个人助理</b>
+          </span>
+          <span class="entry-arrow">进入 →</span>
+        </button>
       </div>
-      <div class="actions">
-        <button id="createConversation" class="primary">创建体验会话</button>
-        <button id="loadConversations">读取已有会话</button>
-        <button id="loadHistory">刷新当前历史</button>
-      </div>
-      <div id="conversation" class="summary">尚未选择会话</div>
     </section>
 
-    <section class="panel">
+    <section id="entryView" class="hidden">
+      <div class="actions top-actions">
+        <button id="backPortal" type="button">← 返回双入口门户</button>
+        <span id="audienceBadge" class="status neutral">未进入</span>
+      </div>
+
+      <section class="panel">
+        <div class="section-title">
+          <span id="entryStep" class="step">2</span>
+          <div>
+            <h2 id="entryTitle">入口详情</h2>
+            <p id="entryDescription">Gateway 根据当前 Entry Session 在服务端解析身份、权限和默认 Agent。</p>
+          </div>
+        </div>
+        <div id="contextCards" class="cards empty">正在读取入口上下文…</div>
+        <div class="session-note">
+          <strong>验证重点</strong>
+          <span>两个入口应显示同一个 Person 和 Device，但 Session Ref 与默认 Agent 不同。页面不会显示任何 Session Token。</span>
+        </div>
+      </section>
+
+      <section id="adminTools" class="panel hidden">
+        <div class="section-title">
+          <span class="step">3</span>
+          <div>
+            <h2>家庭成员</h2>
+            <p>这里只能在“家庭管理”入口使用。新增成员会获得个人助理分配，但不会让当前管理员进入其私人空间。</p>
+          </div>
+        </div>
+        <div id="memberList" class="member-list empty">正在读取成员…</div>
+        <form id="memberForm" class="inline-form">
+          <label>
+            <span>成员姓名</span>
+            <input id="memberName" maxlength="80" required placeholder="例如：孩子" autocomplete="off" />
+          </label>
+          <label>
+            <span>家庭角色</span>
+            <select id="memberRole">
+              <option value="adult">成人</option>
+              <option value="child">孩子</option>
+              <option value="elder">长辈</option>
+            </select>
+          </label>
+          <button type="submit" class="primary">新增成员</button>
+        </form>
+      </section>
+    </section>
+
+    <section id="recoveryView" class="panel hidden">
       <div class="section-title">
-        <span class="step">3</span>
-        <div><h2>连续发送两轮消息</h2><p>第二轮应复用同一 Provider Session；刷新页面后历史仍存在。</p></div>
+        <span class="step warning">!</span>
+        <div>
+          <h2>家庭已初始化，但当前浏览器没有入口 Session</h2>
+          <p>这一阶段尚未开发正式账号恢复。为了避免绕过身份验证，Gateway 不会再次返回已创建的 Session Token。</p>
+        </div>
       </div>
-      <textarea id="message" rows="3" placeholder="输入一条体验消息">请记录这是第一轮体验消息。</textarea>
-      <div class="actions">
-        <button id="sendMessage" class="primary">发送消息</button>
-        <button id="sendSecond">填入第二轮示例</button>
+      <div class="callout warning-box">
+        <strong>重新进行本机体验</strong>
+        <code>./scripts/dev-reset.sh</code>
+        <span>重置后重新运行 <code>./scripts/verify-foundation.sh</code>。</span>
       </div>
-      <div id="history" class="timeline empty">尚无消息</div>
     </section>
 
     <section class="panel compact">
       <div class="section-title">
-        <span class="step">4</span>
-        <div><h2>查看验收日志</h2><p>错误只显示稳定错误码，不应出现 SQL、堆栈、路径或密钥。</p></div>
+        <span class="step">✓</span>
+        <div>
+          <h2>验收日志</h2>
+          <p>这里只显示稳定结果和错误码，不显示 Token、SQL、堆栈或本机路径。</p>
+        </div>
       </div>
-      <pre id="log">等待操作…</pre>
+      <pre id="log">等待 Gateway…</pre>
     </section>
 
-    <footer>
-      该页面仅在本机 development 模式启用，不是正式 Member Web。
-    </footer>
+    <footer>该页面只在本机 development 模式启用，用于确认正式 Family / Person / Entry 领域闭环。</footer>
   </main>
   <script type="module" src="/acceptance.js"></script>
 </body>
