@@ -71,7 +71,11 @@ describe("local Family AI Gateway API", () => {
   it("keeps health public and protects member identity", async () => {
     const health = await app.inject({ method: "GET", url: "/health" });
     expect(health.statusCode).toBe(200);
-    expect(health.json()).toEqual({ ok: true, protocolVersion: "1.0" });
+    expect(health.json()).toEqual({
+      ok: true,
+      protocolVersion: "1.0",
+      service: "family-ai-gateway-foundation"
+    });
     expect(health.body).not.toContain("测试成员");
     expect(health.body).not.toContain(deviceToken);
 
