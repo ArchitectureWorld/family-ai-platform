@@ -94,7 +94,7 @@ Gateway 必须同时处理多个连接、输入、会话、任务、Provider 调
 局部串行键应对应需要连续上下文的对象，例如：
 
 ```text
-chat:<person_id>
+chat:<home_stream_id>
 work:<conversation_id>
 execution:<execution_id>
 ```
