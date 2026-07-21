@@ -35,7 +35,7 @@ printf '\n[4/6] Running the legacy message-kernel acceptance...\n'
 ./scripts/acceptance.sh 2>&1 | tee "$LOG_DIR/foundation-acceptance.log"
 
 printf '\n[5/6] Running the Family onboarding and dual-entry acceptance...\n'
-./scripts/acceptance-onboarding.sh 2>&1 | tee "$LOG_DIR/onboarding-acceptance.log"
+bash ./scripts/acceptance-onboarding.sh 2>&1 | tee "$LOG_DIR/onboarding-acceptance.log"
 
 printf '\n[6/6] Preparing a clean Gateway for beginner browser acceptance...\n'
 ./scripts/dev-reset.sh --yes >/dev/null
