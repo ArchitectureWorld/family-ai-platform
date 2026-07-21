@@ -92,6 +92,120 @@ CREATE TABLE idempotency_records (
 );
 `;
 
+const MIGRATION_V2 = `
+CREATE TABLE families (
+  family_ref TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'archived')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE persons (
+  person_ref TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'suspended')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE family_memberships (
+  family_ref TEXT NOT NULL REFERENCES families(family_ref) ON DELETE CASCADE,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  family_role TEXT NOT NULL CHECK (family_role IN ('owner', 'adult', 'child', 'elder')),
+  status TEXT NOT NULL CHECK (status IN ('active', 'inactive')),
+  joined_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (family_ref, person_ref)
+);
+CREATE UNIQUE INDEX family_active_owner_idx
+  ON family_memberships(family_ref)
+  WHERE family_role = 'owner' AND status = 'active';
+CREATE INDEX family_memberships_family_status_idx
+  ON family_memberships(family_ref, status, joined_at);
+CREATE TABLE managed_devices (
+  device_ref TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  terminal_type TEXT NOT NULL CHECK (terminal_type IN ('computer', 'mobile', 'harmony', 'diy', 'web')),
+  platform TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
+  credential_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE TABLE device_bindings (
+  device_binding_ref TEXT PRIMARY KEY,
+  device_ref TEXT NOT NULL REFERENCES managed_devices(device_ref) ON DELETE CASCADE,
+  owner_scope TEXT NOT NULL CHECK (owner_scope IN ('family', 'person')),
+  family_ref TEXT NOT NULL REFERENCES families(family_ref) ON DELETE CASCADE,
+  person_ref TEXT REFERENCES persons(person_ref) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
+  bound_at TEXT NOT NULL,
+  revoked_at TEXT,
+  CHECK (
+    (owner_scope = 'person' AND person_ref IS NOT NULL) OR
+    (owner_scope = 'family' AND person_ref IS NULL)
+  )
+);
+CREATE UNIQUE INDEX managed_device_active_binding_idx
+  ON device_bindings(device_ref)
+  WHERE status = 'active';
+CREATE TABLE family_manager_assignments (
+  assignment_ref TEXT PRIMARY KEY,
+  family_ref TEXT NOT NULL REFERENCES families(family_ref) ON DELETE CASCADE,
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+  status TEXT NOT NULL CHECK (status IN ('active', 'ended')),
+  effective_from TEXT NOT NULL,
+  effective_to TEXT
+);
+CREATE UNIQUE INDEX family_active_manager_assignment_idx
+  ON family_manager_assignments(family_ref)
+  WHERE status = 'active';
+CREATE TABLE assistant_assignments (
+  assignment_ref TEXT PRIMARY KEY,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+  status TEXT NOT NULL CHECK (status IN ('active', 'ended')),
+  effective_from TEXT NOT NULL,
+  effective_to TEXT
+);
+CREATE UNIQUE INDEX person_active_assistant_assignment_idx
+  ON assistant_assignments(person_ref)
+  WHERE status = 'active';
+CREATE TABLE entry_bindings (
+  entry_binding_ref TEXT PRIMARY KEY,
+  device_ref TEXT NOT NULL REFERENCES managed_devices(device_ref) ON DELETE CASCADE,
+  family_ref TEXT NOT NULL REFERENCES families(family_ref) ON DELETE CASCADE,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  audience TEXT NOT NULL CHECK (audience IN ('family_admin', 'personal')),
+  status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
+  bound_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE UNIQUE INDEX active_entry_binding_idx
+  ON entry_bindings(device_ref, person_ref, audience)
+  WHERE status = 'active';
+CREATE TABLE entry_sessions (
+  entry_session_ref TEXT PRIMARY KEY,
+  entry_binding_ref TEXT NOT NULL REFERENCES entry_bindings(entry_binding_ref) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK (status IN ('active', 'revoked', 'expired')),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE INDEX entry_sessions_binding_status_idx
+  ON entry_sessions(entry_binding_ref, status, expires_at);
+`;
+
+function latestMigrationVersion(db: GatewayDatabase): number {
+  const row = db
+    .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
+    .get() as { version: number } | undefined;
+  return row?.version ?? 0;
+}
+
 function applyMigrations(db: GatewayDatabase): void {
   const ledgerExists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
@@ -103,13 +217,23 @@ function applyMigrations(db: GatewayDatabase): void {
         new Date().toISOString()
       );
     })();
-    return;
   }
-  const versions = db
-    .prepare("SELECT version FROM schema_migrations ORDER BY version")
-    .all() as Array<{ version: number }>;
-  if ((versions.at(-1)?.version ?? 0) !== 1) {
-    throw new Error(`Unsupported Gateway schema version: ${versions.at(-1)?.version ?? 0}`);
+
+  let latest = latestMigrationVersion(db);
+  if (latest > 2 || latest < 1) {
+    throw new Error(`Unsupported Gateway schema version: ${latest}`);
+  }
+  if (latest === 1) {
+    db.transaction(() => {
+      db.exec(MIGRATION_V2);
+      db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?)").run(
+        new Date().toISOString()
+      );
+    })();
+    latest = 2;
+  }
+  if (latest !== 2) {
+    throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
 
