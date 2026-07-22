@@ -81,6 +81,11 @@ jobs:
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
             -only-testing:FamilyAITests \
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 120 \
             -resultBundlePath /tmp/FamilyAI-unit-tests.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             test
@@ -98,6 +103,11 @@ jobs:
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
             -only-testing:FamilyAIUITests \
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 \
+            -maximum-test-execution-time-allowance 180 \
             -resultBundlePath /tmp/FamilyAI-ui-tests.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             test
