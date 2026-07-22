@@ -1,3 +1,5 @@
+import { qrSvg } from "/qr.js";
+
 const $ = (id) => document.getElementById(id);
 
 const views = ["loadingView", "setupView", "portalView", "entryView", "recoveryView"];
@@ -6,6 +8,7 @@ const connectionNode = $("connection");
 const contextCardsNode = $("contextCards");
 const adminToolsNode = $("adminTools");
 const memberListNode = $("memberList");
+const pairingDialog = $("pairingDialog");
 
 const keys = {
   bootstrapToken: "family-ai-dev-token",
@@ -15,6 +18,10 @@ const keys = {
   personalRef: "family-ai-personal-session-ref",
   personalToken: "family-ai-personal-session-token"
 };
+
+let activePairing = null;
+let pairingTimer = null;
+let pairingTickBusy = false;
 
 const fragment = new URLSearchParams(location.hash.slice(1));
 if (fragment.get("token")) sessionStorage.setItem(keys.bootstrapToken, fragment.get("token"));
@@ -30,12 +37,24 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+const secretFieldNames = new Set([
+  "authorization",
+  "code",
+  "credential_hash",
+  "deviceCredential",
+  "entrySessionToken",
+  "qr",
+  "qrPayload",
+  "token",
+  "token_hash"
+]);
+
 function redact(value) {
   if (Array.isArray(value)) return value.map(redact);
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [
       key,
-      /token|authorization|credential|hash/i.test(key) ? "[REDACTED]" : redact(item)
+      secretFieldNames.has(key) ? "[REDACTED]" : redact(item)
     ]));
   }
   return value;
@@ -114,8 +133,15 @@ async function api(path, options = {}) {
         retryable: true
       }));
   if (!response.ok) {
-    const error = new Error(body?.message ?? `HTTP ${response.status}`);
-    error.details = { status: response.status, body };
+    const publicError = body?.error ?? body;
+    const error = new Error(publicError?.message ?? `HTTP ${response.status}`);
+    error.details = {
+      status: response.status,
+      errorCode: publicError?.code ?? "UNKNOWN_ERROR",
+      category: publicError?.category ?? "internal",
+      message: publicError?.message ?? `HTTP ${response.status}`,
+      retryable: Boolean(publicError?.retryable)
+    };
     throw error;
   }
   return body;
@@ -167,25 +193,150 @@ function renderMembers(members) {
     return;
   }
   memberListNode.className = "member-list";
-  memberListNode.innerHTML = members.map((member) => `
-    <article class="member-row">
-      <div class="member-avatar">${escapeHtml(member.displayName.slice(0, 1))}</div>
-      <div class="member-copy">
-        <strong>${escapeHtml(member.displayName)}</strong>
-        <span>${escapeHtml(roleLabels[member.familyRole] ?? member.familyRole)} · ${escapeHtml(member.personRef)}</span>
-      </div>
-      <div class="member-agent">
-        <b>${escapeHtml(member.personalAssistant.displayName)}</b>
-        <span>${member.entryStatus === "claimed" ? "个人入口已建立" : "等待本人认领入口"}</span>
-      </div>
-    </article>
-  `).join("");
+  memberListNode.innerHTML = members.map((member) => {
+    const deviceCount = Number(member.activePersonalDeviceCount ?? 0);
+    return `
+      <article class="member-row">
+        <div class="member-avatar">${escapeHtml(member.displayName.slice(0, 1))}</div>
+        <div class="member-copy">
+          <strong>${escapeHtml(member.displayName)}</strong>
+          <span>${escapeHtml(roleLabels[member.familyRole] ?? member.familyRole)} · ${escapeHtml(member.personRef)}</span>
+        </div>
+        <div class="member-agent">
+          <b>${escapeHtml(member.personalAssistant.displayName)}</b>
+          <span>${member.entryStatus === "claimed" ? "个人入口已建立" : "等待本人认领入口"} · 有效移动设备 ${deviceCount} 台</span>
+        </div>
+        <button
+          class="member-pair"
+          type="button"
+          data-pair-person="${escapeHtml(member.personRef)}"
+          data-pair-name="${escapeHtml(member.displayName)}"
+          data-device-count="${deviceCount}"
+        >生成 iPhone 配对码</button>
+      </article>
+    `;
+  }).join("");
 }
 
-async function loadMembers() {
+async function loadMembers(options = {}) {
   const result = await api("/api/v1/admin/members", { auth: "admin" });
   renderMembers(result.members);
-  writeLog("家庭成员读取成功", { count: result.members.length, members: result.members });
+  if (options.log !== false) {
+    writeLog("家庭成员读取成功", { count: result.members.length });
+  }
+  return result.members;
+}
+
+function clearPairingMaterial() {
+  $("pairingQr").replaceChildren();
+  $("pairingCode").textContent = "—";
+  $("pairingCountdown").textContent = "00:00";
+  $("pairingFamily").textContent = "—";
+  $("pairingPerson").textContent = "—";
+  $("pairingContent").classList.add("hidden");
+  $("revokePairing").classList.add("hidden");
+}
+
+function clearPairingState() {
+  if (pairingTimer !== null) window.clearInterval(pairingTimer);
+  pairingTimer = null;
+  pairingTickBusy = false;
+  activePairing = null;
+  clearPairingMaterial();
+}
+
+function formatCountdown(milliseconds) {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const minutesPart = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const secondsPart = String(seconds % 60).padStart(2, "0");
+  return `${minutesPart}:${secondsPart}`;
+}
+
+async function finishPairing(statusText) {
+  clearPairingState();
+  $("pairingStatus").textContent = statusText;
+  await loadMembers({ log: false }).catch(() => undefined);
+}
+
+async function tickPairing() {
+  if (!activePairing || pairingTickBusy) return;
+  const remaining = Date.parse(activePairing.expiresAt) - Date.now();
+  $("pairingCountdown").textContent = formatCountdown(remaining);
+  if (remaining <= 0) {
+    await finishPairing("配对码已过期，材料已从页面内存中清除。");
+    return;
+  }
+
+  if (Date.now() - activePairing.lastCheckedAt < 2000) return;
+  pairingTickBusy = true;
+  try {
+    activePairing.lastCheckedAt = Date.now();
+    const members = await loadMembers({ log: false });
+    const member = members.find((item) => item.personRef === activePairing.personRef);
+    if (member && Number(member.activePersonalDeviceCount ?? 0) > activePairing.baselineDeviceCount) {
+      await finishPairing("配对已消费，iPhone 个人入口已建立。配对材料已清除。");
+    }
+  } finally {
+    pairingTickBusy = false;
+  }
+}
+
+async function openPairing(personRef, displayName, baselineDeviceCount) {
+  clearPairingState();
+  $("pairingTitle").textContent = `为 ${displayName} 配对 iPhone`;
+  $("pairingStatus").textContent = "正在生成一次性配对材料…";
+  pairingDialog.showModal();
+
+  const result = await api(
+    `/api/v1/admin/members/${encodeURIComponent(personRef)}/pairing-codes`,
+    { method: "POST", auth: "admin" }
+  );
+  activePairing = {
+    pairingRef: result.pairing.pairingRef,
+    expiresAt: result.pairing.expiresAt,
+    personRef,
+    baselineDeviceCount: Number(baselineDeviceCount),
+    lastCheckedAt: 0
+  };
+  $("pairingFamily").textContent = result.family.displayName;
+  $("pairingPerson").textContent = result.person.displayName;
+  $("pairingCode").textContent = result.pairing.code;
+  $("pairingQr").innerHTML = qrSvg(result.qr.url, {
+    title: `${result.person.displayName} 的 iPhone 配对二维码`
+  });
+  $("pairingCountdown").textContent = formatCountdown(
+    Date.parse(result.pairing.expiresAt) - Date.now()
+  );
+  $("pairingContent").classList.remove("hidden");
+  $("revokePairing").classList.remove("hidden");
+  $("pairingStatus").textContent = "请在 5 分钟内使用 iPhone 扫码或输入短码。";
+  pairingTimer = window.setInterval(() => void tickPairing(), 1000);
+  writeLog("iPhone 配对材料已生成", {
+    personRef,
+    expiresAt: result.pairing.expiresAt,
+    materialStoredInBrowser: false
+  });
+}
+
+async function revokeActivePairing(statusText = "配对已撤销，材料已从页面内存中清除。") {
+  if (!activePairing) return;
+  const pairingRef = activePairing.pairingRef;
+  await api(`/api/v1/admin/pairing-codes/${encodeURIComponent(pairingRef)}`, {
+    method: "DELETE",
+    auth: "admin"
+  });
+  await finishPairing(statusText);
+}
+
+async function closePairingDialog() {
+  if (activePairing) {
+    await revokeActivePairing("弹窗关闭前已撤销未消费的配对码。").catch(() => {
+      clearPairingState();
+    });
+  } else {
+    clearPairingState();
+  }
+  pairingDialog.close();
 }
 
 async function openEntry(kind) {
@@ -277,9 +428,31 @@ $("memberForm").addEventListener("submit", (event) => {
       })
     });
     $("memberName").value = "";
-    writeLog("家庭成员创建成功", result);
+    writeLog("家庭成员创建成功", {
+      personRef: result.member.personRef,
+      displayName: result.member.displayName,
+      familyRole: result.member.familyRole
+    });
     await loadMembers();
   });
+});
+
+memberListNode.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-pair-person]");
+  if (!button) return;
+  run(() => openPairing(
+    button.dataset.pairPerson,
+    button.dataset.pairName,
+    Number(button.dataset.deviceCount ?? 0)
+  ));
+});
+
+$("revokePairing").addEventListener("click", () => run(() => revokeActivePairing()));
+$("closePairing").addEventListener("click", () => run(closePairingDialog));
+$("donePairing").addEventListener("click", () => run(closePairingDialog));
+pairingDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  run(closePairingDialog);
 });
 
 run(initializePage);

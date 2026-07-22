@@ -44,6 +44,16 @@ export function registerDevelopmentConsole(
       .type("text/javascript; charset=utf-8")
       .send(asset("acceptance.js"))
   );
+  app.get("/qr.js", async (_request, reply) =>
+    protectedAsset(reply)
+      .type("text/javascript; charset=utf-8")
+      .send(asset("qr.js"))
+  );
+  app.get("/qr-v10.mjs", async (_request, reply) =>
+    protectedAsset(reply)
+      .type("text/javascript; charset=utf-8")
+      .send(asset("qr-v10.mjs"))
+  );
   app.get("/acceptance.css", async (_request, reply) =>
     protectedAsset(reply)
       .type("text/css; charset=utf-8")

@@ -114,7 +114,7 @@
           <span class="step">3</span>
           <div>
             <h2>家庭成员</h2>
-            <p>这里只能在“家庭管理”入口使用。新增成员会获得个人助理分配，但不会让当前管理员进入其私人空间。</p>
+            <p>管理员可以为指定成员生成 5 分钟有效的 iPhone 配对码。配对只建立该成员的个人入口，不授予家庭管理权限。</p>
           </div>
         </div>
         <div id="memberList" class="member-list empty">正在读取成员…</div>
@@ -136,6 +136,42 @@
       </section>
     </section>
 
+    <dialog id="pairingDialog" class="pairing-dialog" aria-labelledby="pairingTitle">
+      <div class="pairing-dialog-card">
+        <div class="pairing-heading">
+          <div>
+            <p class="eyebrow">IPHONE MOBILE ENTRY</p>
+            <h2 id="pairingTitle">生成 iPhone 配对码</h2>
+            <p id="pairingStatus" class="muted">正在生成一次性配对材料…</p>
+          </div>
+          <button id="closePairing" class="icon-button" type="button" aria-label="关闭配对弹窗">×</button>
+        </div>
+        <div id="pairingContent" class="pairing-content hidden">
+          <div class="pairing-identity">
+            <span><small>家庭</small><strong id="pairingFamily">—</strong></span>
+            <span><small>成员</small><strong id="pairingPerson">—</strong></span>
+          </div>
+          <div class="pairing-grid">
+            <div id="pairingQr" class="pairing-qr" aria-live="polite"></div>
+            <div class="pairing-instructions">
+              <span class="status personal">仅创建个人入口</span>
+              <small>手动短码</small>
+              <code id="pairingCode" class="pairing-code">—</code>
+              <div class="countdown-line">
+                <span>剩余有效时间</span>
+                <strong id="pairingCountdown">05:00</strong>
+              </div>
+              <p>在 iPhone 中扫描二维码，或手动输入 Gateway 地址与短码。不要通过聊天或截图长期保存配对码。</p>
+            </div>
+          </div>
+        </div>
+        <div class="pairing-actions">
+          <button id="revokePairing" class="danger hidden" type="button">立即撤销</button>
+          <button id="donePairing" type="button">关闭</button>
+        </div>
+      </div>
+    </dialog>
+
     <section id="recoveryView" class="panel hidden">
       <div class="section-title">
         <span class="step warning">!</span>
@@ -156,7 +192,7 @@
         <span class="step">✓</span>
         <div>
           <h2>验收日志</h2>
-          <p>这里只显示稳定结果和错误码，不显示 Token、SQL、堆栈或本机路径。</p>
+          <p>这里只显示稳定结果和错误码，不显示 Token、配对码、二维码、SQL、堆栈或本机路径。</p>
         </div>
       </div>
       <pre id="log">等待 Gateway…</pre>
