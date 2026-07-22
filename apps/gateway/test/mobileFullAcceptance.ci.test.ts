@@ -7,10 +7,10 @@ const shouldRun =
   process.env.GITHUB_HEAD_REF === "feature/mobile-pairing-gateway" &&
   existsSync(new URL("../../../.git", import.meta.url));
 
-const adjustedBuildDockerfile = `
-FROM node:22.16.0-bookworm-slim AS build
+const sharedTestsDockerfile = `
+FROM node:22.16.0-bookworm-slim
 RUN apt-get update \\
-  && apt-get install -y --no-install-recommends python3 make g++ git \\
+  && apt-get install -y --no-install-recommends python3 make g++ \\
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
@@ -18,34 +18,33 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/provider-adapter-sdk/package.json packages/provider-adapter-sdk/package.json
 COPY apps/gateway/package.json apps/gateway/package.json
 RUN npm ci
-COPY .gitignore Dockerfile compose.yaml ./
-RUN printf '%s\\n' '.git' '.github' '.runtime' 'node_modules' '**/node_modules' '**/dist' 'coverage' 'clients/ios' '.env' '.env.*' '.npmrc' '.npmrc.*' '.yarnrc.yml' '.pnpmfile.cjs' '*.sqlite' '*.sqlite-*' '*.log' '*.pem' '*.key' '*.p12' '*.pfx' '*.mobileprovision' '*.credentials.json' '*.secrets.json' 'credentials' 'secrets' 'docs/acceptance/runtime' 'xcuserdata' 'DerivedData' > .dockerignore
-COPY scripts scripts
 COPY packages packages
 COPY apps apps
-RUN npm run check && npm prune --omit=dev
+RUN npm run build:adapter-sdk \\
+  && npm run test -w @family-ai/contracts \\
+  && npm run test -w @family-ai/provider-adapter-sdk
 `;
 
-describe.runIf(shouldRun)("Adjusted Docker build hypothesis", () => {
+describe.runIf(shouldRun)("Shared workspace Docker test isolation", () => {
   it(
-    "completes the full build when security-check inputs are available",
+    "runs Contracts and Provider tests inside Docker",
     () => {
       const result = spawnSync(
         "docker",
         ["build", "--progress=plain", "--file", "-", "."],
         {
           cwd: new URL("../../../", import.meta.url),
-          input: adjustedBuildDockerfile,
+          input: sharedTestsDockerfile,
           encoding: "utf8",
-          maxBuffer: 16 * 1024 * 1024,
-          timeout: 12 * 60 * 1000,
+          maxBuffer: 12 * 1024 * 1024,
+          timeout: 10 * 60 * 1000,
           stdio: ["pipe", "pipe", "pipe"]
         }
       );
       if (result.error || result.status !== 0) {
-        throw new Error(`adjusted-docker-build:${result.status ?? "unknown"}`);
+        throw new Error(`docker-shared-tests:${result.status ?? "unknown"}`);
       }
     },
-    14 * 60 * 1000
+    12 * 60 * 1000
   );
 });
