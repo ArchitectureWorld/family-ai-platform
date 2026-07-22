@@ -1,235 +1,163 @@
 // !$*UTF8*$!
 {
-	archiveVersion = 1;
-	classes = {
-	};
-	objectVersion = 56;
-	objects = {
-
-/* Begin PBXBuildFile section */
-		A00000000000000000000020 /* FamilyAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000010 /* FamilyAIApp.swift */; };
-		A00000000000000000000021 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000011 /* ContentView.swift */; };
-/* End PBXBuildFile section */
-
-/* Begin PBXFileReference section */
-		A00000000000000000000010 /* FamilyAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FamilyAIApp.swift; sourceTree = "<group>"; };
-		A00000000000000000000011 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		A00000000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A00000000000000000000013 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
-		A00000000000000000000014 /* Local.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.example.xcconfig; sourceTree = "<group>"; };
-		A00000000000000000000070 /* FamilyAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FamilyAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
-/* End PBXFileReference section */
-
-/* Begin PBXFrameworksBuildPhase section */
-		A00000000000000000000031 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXFrameworksBuildPhase section */
-
-/* Begin PBXGroup section */
-		A00000000000000000000002 = {
-			isa = PBXGroup;
-			children = (
-				A00000000000000000000005 /* FamilyAI */,
-				A00000000000000000000004 /* Config */,
-				A00000000000000000000003 /* Products */,
-			);
-			sourceTree = "<group>";
-		};
-		A00000000000000000000003 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				A00000000000000000000070 /* FamilyAI.app */,
-			);
-			name = Products;
-			sourceTree = "<group>";
-		};
-		A00000000000000000000004 /* Config */ = {
-			isa = PBXGroup;
-			children = (
-				A00000000000000000000013 /* Base.xcconfig */,
-				A00000000000000000000014 /* Local.example.xcconfig */,
-			);
-			path = Config;
-			sourceTree = "<group>";
-		};
-		A00000000000000000000005 /* FamilyAI */ = {
-			isa = PBXGroup;
-			children = (
-				A00000000000000000000010 /* FamilyAIApp.swift */,
-				A00000000000000000000011 /* ContentView.swift */,
-				A00000000000000000000012 /* Info.plist */,
-			);
-			path = FamilyAI;
-			sourceTree = "<group>";
-		};
-/* End PBXGroup section */
-
-/* Begin PBXNativeTarget section */
-		A00000000000000000000040 /* FamilyAI */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = A00000000000000000000051 /* Build configuration list for PBXNativeTarget "FamilyAI" */;
-			buildPhases = (
-				A00000000000000000000030 /* Sources */,
-				A00000000000000000000031 /* Frameworks */,
-				A00000000000000000000032 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = FamilyAI;
-			productName = FamilyAI;
-			productReference = A00000000000000000000070 /* FamilyAI.app */;
-			productType = "com.apple.product-type.application";
-		};
-/* End PBXNativeTarget section */
-
-/* Begin PBXProject section */
-		A00000000000000000000001 /* Project object */ = {
-			isa = PBXProject;
-			attributes = {
-				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1600;
-				LastUpgradeCheck = 1600;
-				TargetAttributes = {
-					A00000000000000000000040 = {
-						CreatedOnToolsVersion = 16.0;
-					};
-				};
-			};
-			buildConfigurationList = A00000000000000000000050 /* Build configuration list for PBXProject "FamilyAI" */;
-			compatibilityVersion = "Xcode 14.0";
-			developmentRegion = en;
-			hasScannedForEncodings = 0;
-			knownRegions = (
-				en,
-				Base,
-			);
-			mainGroup = A00000000000000000000002;
-			productRefGroup = A00000000000000000000003 /* Products */;
-			projectDirPath = "";
-			projectRoot = "";
-			targets = (
-				A00000000000000000000040 /* FamilyAI */,
-			);
-		};
-/* End PBXProject section */
-
-/* Begin PBXResourcesBuildPhase section */
-		A00000000000000000000032 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXResourcesBuildPhase section */
-
-/* Begin PBXSourcesBuildPhase section */
-		A00000000000000000000030 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				A00000000000000000000020 /* FamilyAIApp.swift in Sources */,
-				A00000000000000000000021 /* ContentView.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXSourcesBuildPhase section */
-
-/* Begin XCBuildConfiguration section */
-		A00000000000000000000060 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = A00000000000000000000013 /* Base.xcconfig */;
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
-				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = dwarf;
-				ENABLE_TESTABILITY = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu17;
-				GCC_OPTIMIZATION_LEVEL = 0;
-				ONLY_ACTIVE_ARCH = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
-		};
-			name = Debug;
-		};
-		A00000000000000000000061 /* Release */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = A00000000000000000000013 /* Base.xcconfig */;
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
-				COPY_PHASE_STRIP = YES;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				GCC_C_LANGUAGE_STANDARD = gnu17;
-				SWIFT_COMPILATION_MODE = wholemodule;
-		};
-			name = Release;
-		};
-		A00000000000000000000062 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = A00000000000000000000013 /* Base.xcconfig */;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				CODE_SIGNING_ALLOWED = NO;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = FamilyAI/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Debug;
-		};
-		A00000000000000000000063 /* Release */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = A00000000000000000000013 /* Base.xcconfig */;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				CODE_SIGNING_ALLOWED = NO;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = FamilyAI/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Release;
-		};
-/* End XCBuildConfiguration section */
-
-/* Begin XCConfigurationList section */
-		A00000000000000000000050 /* Build configuration list for PBXProject "FamilyAI" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A00000000000000000000060 /* Debug */,
-				A00000000000000000000061 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		A00000000000000000000051 /* Build configuration list for PBXNativeTarget "FamilyAI" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A00000000000000000000062 /* Debug */,
-				A00000000000000000000063 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-/* End XCConfigurationList section */
-	};
-	rootObject = A00000000000000000000001 /* Project object */;
+archiveVersion = 1;
+classes = {
+};
+objectVersion = 56;
+objects = {
+F1000000000000000000004F = {isa = PBXBuildFile; fileRef = F10000000000000000000028; };
+F10000000000000000000050 = {isa = PBXBuildFile; fileRef = F10000000000000000000029; };
+F10000000000000000000051 = {isa = PBXBuildFile; fileRef = F1000000000000000000002A; };
+F10000000000000000000052 = {isa = PBXBuildFile; fileRef = F1000000000000000000002B; };
+F10000000000000000000053 = {isa = PBXBuildFile; fileRef = F1000000000000000000002C; };
+F10000000000000000000054 = {isa = PBXBuildFile; fileRef = F1000000000000000000002D; };
+F10000000000000000000055 = {isa = PBXBuildFile; fileRef = F1000000000000000000002E; };
+F10000000000000000000056 = {isa = PBXBuildFile; fileRef = F1000000000000000000002F; };
+F10000000000000000000081 = {isa = PBXBuildFile; fileRef = F1000000000000000000007E; };
+F10000000000000000000082 = {isa = PBXBuildFile; fileRef = F1000000000000000000007F; };
+F10000000000000000000083 = {isa = PBXBuildFile; fileRef = F10000000000000000000080; };
+F10000000000000000000057 = {isa = PBXBuildFile; fileRef = F10000000000000000000030; };
+F10000000000000000000058 = {isa = PBXBuildFile; fileRef = F10000000000000000000031; };
+F10000000000000000000059 = {isa = PBXBuildFile; fileRef = F10000000000000000000032; };
+F1000000000000000000005A = {isa = PBXBuildFile; fileRef = F10000000000000000000033; };
+F1000000000000000000005B = {isa = PBXBuildFile; fileRef = F10000000000000000000034; };
+F1000000000000000000005C = {isa = PBXBuildFile; fileRef = F10000000000000000000035; };
+F1000000000000000000005D = {isa = PBXBuildFile; fileRef = F10000000000000000000036; };
+F1000000000000000000005E = {isa = PBXBuildFile; fileRef = F10000000000000000000037; };
+F1000000000000000000005F = {isa = PBXBuildFile; fileRef = F10000000000000000000038; };
+F10000000000000000000060 = {isa = PBXBuildFile; fileRef = F10000000000000000000039; };
+F10000000000000000000061 = {isa = PBXBuildFile; fileRef = F1000000000000000000003A; };
+F10000000000000000000062 = {isa = PBXBuildFile; fileRef = F1000000000000000000003B; };
+F10000000000000000000063 = {isa = PBXBuildFile; fileRef = F1000000000000000000003C; };
+F10000000000000000000064 = {isa = PBXBuildFile; fileRef = F1000000000000000000003D; };
+F10000000000000000000065 = {isa = PBXBuildFile; fileRef = F1000000000000000000003E; };
+F10000000000000000000066 = {isa = PBXBuildFile; fileRef = F1000000000000000000003F; };
+F10000000000000000000067 = {isa = PBXBuildFile; fileRef = F10000000000000000000040; };
+F10000000000000000000068 = {isa = PBXBuildFile; fileRef = F10000000000000000000041; };
+F10000000000000000000069 = {isa = PBXBuildFile; fileRef = F10000000000000000000042; };
+F1000000000000000000006A = {isa = PBXBuildFile; fileRef = F10000000000000000000043; };
+F1000000000000000000006B = {isa = PBXBuildFile; fileRef = F10000000000000000000044; };
+F1000000000000000000006C = {isa = PBXBuildFile; fileRef = F10000000000000000000045; };
+F1000000000000000000006D = {isa = PBXBuildFile; fileRef = F10000000000000000000046; };
+F1000000000000000000006E = {isa = PBXBuildFile; fileRef = F10000000000000000000047; };
+F1000000000000000000006F = {isa = PBXBuildFile; fileRef = F10000000000000000000048; };
+F10000000000000000000070 = {isa = PBXBuildFile; fileRef = F10000000000000000000049; };
+F10000000000000000000071 = {isa = PBXBuildFile; fileRef = F1000000000000000000004A; };
+F10000000000000000000024 = {isa = PBXContainerItemProxy; containerPortal = F10000000000000000000001; proxyType = 1; remoteGlobalIDString = F1000000000000000000000C; remoteInfo = FamilyAI; };
+F10000000000000000000025 = {isa = PBXContainerItemProxy; containerPortal = F10000000000000000000001; proxyType = 1; remoteGlobalIDString = F1000000000000000000000C; remoteInfo = FamilyAI; };
+F10000000000000000000028 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppCoordinator.swift"; sourceTree = "<group>"; };
+F10000000000000000000029 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppEnvironment.swift"; sourceTree = "<group>"; };
+F1000000000000000000002A = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState.swift"; sourceTree = "<group>"; };
+F1000000000000000000002B = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FamilyAIApp.swift"; sourceTree = "<group>"; };
+F1000000000000000000002C = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
+F1000000000000000000002D = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CredentialStore.swift"; sourceTree = "<group>"; };
+F1000000000000000000002E = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionManager.swift"; sourceTree = "<group>"; };
+F1000000000000000000002F = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MobileEntryModels.swift"; sourceTree = "<group>"; };
+F1000000000000000000007E = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MobileEntryCoding.swift"; sourceTree = "<group>"; };
+F1000000000000000000007F = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PersonalPortalContext.swift"; sourceTree = "<group>"; };
+F10000000000000000000080 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MobileGatewayErrorEnvelope.swift"; sourceTree = "<group>"; };
+F10000000000000000000030 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GatewayClient.swift"; sourceTree = "<group>"; };
+F10000000000000000000031 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GatewayError.swift"; sourceTree = "<group>"; };
+F10000000000000000000032 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CachedPersonalContextStore.swift"; sourceTree = "<group>"; };
+F10000000000000000000033 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeychainClient.swift"; sourceTree = "<group>"; };
+F10000000000000000000034 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppLockPolicy.swift"; sourceTree = "<group>"; };
+F10000000000000000000035 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DeviceIdentity.swift"; sourceTree = "<group>"; };
+F10000000000000000000036 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LocalAuthenticationClientProtocol.swift"; sourceTree = "<group>"; };
+F10000000000000000000037 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LocalAuthenticationClient.swift"; sourceTree = "<group>"; };
+F10000000000000000000038 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PairingInput.swift"; sourceTree = "<group>"; };
+F10000000000000000000039 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PairingManager.swift"; sourceTree = "<group>"; };
+F1000000000000000000003A = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PairingState.swift"; sourceTree = "<group>"; };
+F1000000000000000000003B = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PairingViews.swift"; sourceTree = "<group>"; };
+F1000000000000000000003C = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "QRCodeScannerView.swift"; sourceTree = "<group>"; };
+F1000000000000000000003D = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PersonalHomeView.swift"; sourceTree = "<group>"; };
+F1000000000000000000003E = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView.swift"; sourceTree = "<group>"; };
+F1000000000000000000003F = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppCoordinatorTests.swift"; sourceTree = "<group>"; };
+F10000000000000000000040 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CachedPersonalContextStoreTests.swift"; sourceTree = "<group>"; };
+F10000000000000000000041 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CredentialStoreLayeringTests.swift"; sourceTree = "<group>"; };
+F10000000000000000000042 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CredentialStoreTests.swift"; sourceTree = "<group>"; };
+F10000000000000000000043 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GatewayClientTests.swift"; sourceTree = "<group>"; };
+F10000000000000000000044 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MobileEntryFixtureTests.swift"; sourceTree = "<group>"; };
+F10000000000000000000045 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MobileEntryStrictValidationTests.swift"; sourceTree = "<group>"; };
+F10000000000000000000046 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PairingInputTests.swift"; sourceTree = "<group>"; };
+F10000000000000000000047 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PairingManagerTests.swift"; sourceTree = "<group>"; };
+F10000000000000000000048 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionManagerTests.swift"; sourceTree = "<group>"; };
+F10000000000000000000049 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StateAndLockTests.swift"; sourceTree = "<group>"; };
+F1000000000000000000004A = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FamilyAIUITests.swift"; sourceTree = "<group>"; };
+F1000000000000000000004B = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
+F1000000000000000000004C = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Base.xcconfig"; sourceTree = "<group>"; };
+F1000000000000000000004D = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Local.example.xcconfig"; sourceTree = "<group>"; };
+F1000000000000000000004E = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "physical-device-acceptance.md"; sourceTree = "<group>"; };
+F10000000000000000000009 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FamilyAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
+F1000000000000000000000A = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FamilyAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+F1000000000000000000000B = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FamilyAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+F10000000000000000000010 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+F10000000000000000000013 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+F10000000000000000000016 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+F10000000000000000000002 = {isa = PBXGroup; children = (F10000000000000000000004, F10000000000000000000005, F10000000000000000000006, F10000000000000000000007, F10000000000000000000008, F10000000000000000000003, ); sourceTree = "<group>"; };
+F10000000000000000000003 = {isa = PBXGroup; children = (F10000000000000000000009, F1000000000000000000000A, F1000000000000000000000B, ); name = Products; sourceTree = "<group>"; };
+F10000000000000000000004 = {isa = PBXGroup; children = (F10000000000000000000072, F10000000000000000000073, F10000000000000000000079, F1000000000000000000002C, F1000000000000000000004B, ); path = FamilyAI; sourceTree = "<group>"; };
+F10000000000000000000072 = {isa = PBXGroup; children = (F10000000000000000000028, F10000000000000000000029, F1000000000000000000002A, F1000000000000000000002B, ); path = App; sourceTree = "<group>"; };
+F10000000000000000000073 = {isa = PBXGroup; children = (F10000000000000000000074, F10000000000000000000075, F10000000000000000000076, F10000000000000000000077, F10000000000000000000078, ); path = Core; sourceTree = "<group>"; };
+F10000000000000000000079 = {isa = PBXGroup; children = (F1000000000000000000007A, F1000000000000000000007B, F1000000000000000000007C, F1000000000000000000007D, ); path = Features; sourceTree = "<group>"; };
+F10000000000000000000074 = {isa = PBXGroup; children = (F1000000000000000000002D, F1000000000000000000002E, ); path = Authentication; sourceTree = "<group>"; };
+F10000000000000000000075 = {isa = PBXGroup; children = (F1000000000000000000007E, F1000000000000000000002F, F1000000000000000000007F, F10000000000000000000080, ); path = Models; sourceTree = "<group>"; };
+F10000000000000000000076 = {isa = PBXGroup; children = (F10000000000000000000030, F10000000000000000000031, ); path = Networking; sourceTree = "<group>"; };
+F10000000000000000000077 = {isa = PBXGroup; children = (F10000000000000000000032, F10000000000000000000033, ); path = Persistence; sourceTree = "<group>"; };
+F10000000000000000000078 = {isa = PBXGroup; children = (F10000000000000000000034, F10000000000000000000035, F10000000000000000000036, ); path = Security; sourceTree = "<group>"; };
+F1000000000000000000007A = {isa = PBXGroup; children = (F10000000000000000000037, ); path = AppLock; sourceTree = "<group>"; };
+F1000000000000000000007B = {isa = PBXGroup; children = (F10000000000000000000038, F10000000000000000000039, F1000000000000000000003A, F1000000000000000000003B, F1000000000000000000003C, ); path = Pairing; sourceTree = "<group>"; };
+F1000000000000000000007C = {isa = PBXGroup; children = (F1000000000000000000003D, ); path = PersonalHome; sourceTree = "<group>"; };
+F1000000000000000000007D = {isa = PBXGroup; children = (F1000000000000000000003E, ); path = Settings; sourceTree = "<group>"; };
+F10000000000000000000005 = {isa = PBXGroup; children = (F1000000000000000000003F, F10000000000000000000040, F10000000000000000000041, F10000000000000000000042, F10000000000000000000043, F10000000000000000000044, F10000000000000000000045, F10000000000000000000046, F10000000000000000000047, F10000000000000000000048, F10000000000000000000049, ); path = FamilyAITests; sourceTree = "<group>"; };
+F10000000000000000000006 = {isa = PBXGroup; children = (F1000000000000000000004A, ); path = FamilyAIUITests; sourceTree = "<group>"; };
+F10000000000000000000007 = {isa = PBXGroup; children = (F1000000000000000000004C, F1000000000000000000004D, ); path = Config; sourceTree = "<group>"; };
+F10000000000000000000008 = {isa = PBXGroup; children = (F1000000000000000000004E, ); path = Docs; sourceTree = "<group>"; };
+F1000000000000000000000C = {isa = PBXNativeTarget; buildConfigurationList = F10000000000000000000019; buildPhases = (F1000000000000000000000F, F10000000000000000000010, F10000000000000000000011, ); buildRules = (); dependencies = (); name = FamilyAI; productName = FamilyAI; productReference = F10000000000000000000009; productType = "com.apple.product-type.application"; };
+F1000000000000000000000D = {isa = PBXNativeTarget; buildConfigurationList = F1000000000000000000001A; buildPhases = (F10000000000000000000012, F10000000000000000000013, F10000000000000000000014, ); buildRules = (); dependencies = (F10000000000000000000026, ); name = FamilyAITests; productName = FamilyAITests; productReference = F1000000000000000000000A; productType = "com.apple.product-type.bundle.unit-test"; };
+F1000000000000000000000E = {isa = PBXNativeTarget; buildConfigurationList = F1000000000000000000001B; buildPhases = (F10000000000000000000015, F10000000000000000000016, F10000000000000000000017, ); buildRules = (); dependencies = (F10000000000000000000027, ); name = FamilyAIUITests; productName = FamilyAIUITests; productReference = F1000000000000000000000B; productType = "com.apple.product-type.bundle.ui-testing"; };
+F10000000000000000000001 = {
+isa = PBXProject;
+attributes = {
+BuildIndependentTargetsInParallel = 1;
+LastSwiftUpdateCheck = 1600;
+LastUpgradeCheck = 1600;
+TargetAttributes = {
+F1000000000000000000000C = { CreatedOnToolsVersion = 16.0; };
+F1000000000000000000000D = { CreatedOnToolsVersion = 16.0; TestTargetID = F1000000000000000000000C; };
+F1000000000000000000000E = { CreatedOnToolsVersion = 16.0; TestTargetID = F1000000000000000000000C; };
+};
+};
+buildConfigurationList = F10000000000000000000018;
+compatibilityVersion = "Xcode 14.0";
+developmentRegion = en;
+hasScannedForEncodings = 0;
+knownRegions = (en, Base, );
+mainGroup = F10000000000000000000002;
+productRefGroup = F10000000000000000000003;
+projectDirPath = "";
+projectRoot = "";
+targets = (F1000000000000000000000C, F1000000000000000000000D, F1000000000000000000000E, );
+};
+F10000000000000000000011 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+F10000000000000000000014 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+F10000000000000000000017 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+F1000000000000000000000F = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F1000000000000000000004F, F10000000000000000000050, F10000000000000000000051, F10000000000000000000052, F10000000000000000000053, F10000000000000000000054, F10000000000000000000055, F10000000000000000000081, F10000000000000000000056, F10000000000000000000082, F10000000000000000000083, F10000000000000000000057, F10000000000000000000058, F10000000000000000000059, F1000000000000000000005A, F1000000000000000000005B, F1000000000000000000005C, F1000000000000000000005D, F1000000000000000000005E, F1000000000000000000005F, F10000000000000000000060, F10000000000000000000061, F10000000000000000000062, F10000000000000000000063, F10000000000000000000064, F10000000000000000000065, ); runOnlyForDeploymentPostprocessing = 0; };
+F10000000000000000000012 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F10000000000000000000066, F10000000000000000000067, F10000000000000000000068, F10000000000000000000069, F1000000000000000000006A, F1000000000000000000006B, F1000000000000000000006C, F1000000000000000000006D, F1000000000000000000006E, F1000000000000000000006F, F10000000000000000000070, ); runOnlyForDeploymentPostprocessing = 0; };
+F10000000000000000000015 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F10000000000000000000071, ); runOnlyForDeploymentPostprocessing = 0; };
+F10000000000000000000026 = {isa = PBXTargetDependency; target = F1000000000000000000000C; targetProxy = F10000000000000000000024; };
+F10000000000000000000027 = {isa = PBXTargetDependency; target = F1000000000000000000000C; targetProxy = F10000000000000000000025; };
+F1000000000000000000001C = {isa = XCBuildConfiguration; baseConfigurationReference = F1000000000000000000004C; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ANALYZER_NONNULL = YES; CLANG_ENABLE_OBJC_ARC = YES; CLANG_WARN_DOCUMENTATION_COMMENTS = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; GCC_OPTIMIZATION_LEVEL = 0; ONLY_ACTIVE_ARCH = YES; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";}; name = Debug; };
+F1000000000000000000001D = {isa = XCBuildConfiguration; baseConfigurationReference = F1000000000000000000004C; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ANALYZER_NONNULL = YES; CLANG_ENABLE_OBJC_ARC = YES; CLANG_WARN_DOCUMENTATION_COMMENTS = YES; COPY_PHASE_STRIP = YES; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; GCC_C_LANGUAGE_STANDARD = gnu17; SWIFT_COMPILATION_MODE = wholemodule;}; name = Release; };
+F1000000000000000000001E = {isa = XCBuildConfiguration; baseConfigurationReference = F1000000000000000000004C; buildSettings = {ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = FamilyAI/Info.plist; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; PRODUCT_MODULE_NAME = FamilyAICore; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; TARGETED_DEVICE_FAMILY = 1;}; name = Debug; };
+F1000000000000000000001F = {isa = XCBuildConfiguration; baseConfigurationReference = F1000000000000000000004C; buildSettings = {ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = FamilyAI/Info.plist; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; PRODUCT_MODULE_NAME = FamilyAICore; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; TARGETED_DEVICE_FAMILY = 1;}; name = Release; };
+F10000000000000000000020 = {isa = XCBuildConfiguration; baseConfigurationReference = F1000000000000000000004C; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "$(FAMILYAI_BUNDLE_IDENTIFIER).tests"; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphonesimulator; TARGETED_DEVICE_FAMILY = 1; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FamilyAI.app/FamilyAI";}; name = Debug; };
+F10000000000000000000021 = {isa = XCBuildConfiguration; baseConfigurationReference = F1000000000000000000004C; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "$(FAMILYAI_BUNDLE_IDENTIFIER).tests"; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphonesimulator; TARGETED_DEVICE_FAMILY = 1; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FamilyAI.app/FamilyAI";}; name = Release; };
+F10000000000000000000022 = {isa = XCBuildConfiguration; baseConfigurationReference = F1000000000000000000004C; buildSettings = {GENERATE_INFOPLIST_FILE = YES; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "$(FAMILYAI_BUNDLE_IDENTIFIER).uitests"; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphonesimulator; TARGETED_DEVICE_FAMILY = 1; TEST_TARGET_NAME = FamilyAI;}; name = Debug; };
+F10000000000000000000023 = {isa = XCBuildConfiguration; baseConfigurationReference = F1000000000000000000004C; buildSettings = {GENERATE_INFOPLIST_FILE = YES; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = "$(FAMILYAI_BUNDLE_IDENTIFIER).uitests"; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = iphonesimulator; TARGETED_DEVICE_FAMILY = 1; TEST_TARGET_NAME = FamilyAI;}; name = Release; };
+F10000000000000000000018 = {isa = XCConfigurationList; buildConfigurations = (F1000000000000000000001C, F1000000000000000000001D, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+F10000000000000000000019 = {isa = XCConfigurationList; buildConfigurations = (F1000000000000000000001E, F1000000000000000000001F, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+F1000000000000000000001A = {isa = XCConfigurationList; buildConfigurations = (F10000000000000000000020, F10000000000000000000021, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+F1000000000000000000001B = {isa = XCConfigurationList; buildConfigurations = (F10000000000000000000022, F10000000000000000000023, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+};
+rootObject = F10000000000000000000001;
 }

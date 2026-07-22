@@ -18,17 +18,19 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  verify:
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
       - name: Show toolchain
         run: |
           set -euo pipefail
           xcodebuild -version
           swift --version
+
       - name: Validate project and build app
         run: |
           set -euo pipefail
@@ -40,3 +42,40 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
             clean build
+
+      - name: Select available iPhone simulator
+        id: simulator
+        run: |
+          set -euo pipefail
+          SIMULATOR_UDID="$(python3 - <<'PY'
+          import json
+          import subprocess
+
+          payload = json.loads(
+              subprocess.check_output(
+                  ["xcrun", "simctl", "list", "devices", "available", "-j"],
+                  text=True,
+              )
+          )
+          for runtime in sorted(payload["devices"], reverse=True):
+              for device in payload["devices"][runtime]:
+                  if device["name"].startswith("iPhone"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone simulator")
+          PY
+          )"
+          test -n "$SIMULATOR_UDID"
+          echo "udid=$SIMULATOR_UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Run unit and UI tests
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project clients/ios/FamilyAI.xcodeproj \
+            -scheme FamilyAI \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            test

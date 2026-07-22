@@ -1,5 +1,5 @@
-// Copy this file to Local.xcconfig for local device signing.
-// Local.xcconfig is ignored and must not be committed.
+// Copy this file to Local.xcconfig for local physical-device signing.
+// Local.xcconfig is ignored and must never be committed.
 
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
-PRODUCT_BUNDLE_IDENTIFIER = com.example.familyai.mobile
+FAMILYAI_BUNDLE_IDENTIFIER = com.example.familyai.mobile.local
