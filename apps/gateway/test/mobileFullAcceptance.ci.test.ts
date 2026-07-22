@@ -21,11 +21,15 @@ function runCaptured(command: string, args: string[], marker: string): void {
   expect(result.stdout).toContain(marker);
 }
 
-describe.runIf(shouldRun)("Foundation exact acceptance", () => {
+describe.runIf(shouldRun)("Mobile Entry exact acceptance", () => {
   it(
-    "executes the required Foundation command",
+    "executes the required Mobile Entry command",
     () => {
-      runCaptured("bash", ["./scripts/verify-foundation.sh"], "automated verification: PASS");
+      runCaptured(
+        "bash",
+        ["scripts/acceptance-mobile-pairing.sh"],
+        "All Mobile Entry v1 acceptance steps passed."
+      );
     },
     16 * 60 * 1000
   );
