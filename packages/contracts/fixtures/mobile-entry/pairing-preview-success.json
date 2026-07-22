@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "family": {
+    "displayName": "测试家庭"
+  },
+  "person": {
+    "displayName": "测试成员"
+  },
+  "gatewayHost": "family-ai-gateway.example.ts.net",
+  "expiresAt": "2026-07-22T12:05:00.000Z"
+}
