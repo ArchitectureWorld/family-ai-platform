@@ -201,7 +201,13 @@ async function loadMember(admin, personRef) {
   return result.members.find((member) => member.personRef === personRef);
 }
 
-async function simulateMobileClaim(admin, personRef, displayName, includePairingRef) {
+async function simulateMobileClaim(
+  admin,
+  personRef,
+  personDisplayName,
+  deviceDisplayName,
+  includePairingRef
+) {
   let pairingMaterial = null;
   let deviceMaterial = null;
   try {
@@ -219,7 +225,7 @@ async function simulateMobileClaim(admin, personRef, displayName, includePairing
       method: "POST",
       body: { protocolVersion: 1, code: pairingMaterial.code }
     });
-    assert(preview.person.personRef === personRef, "手工短码预览返回了错误的家庭成员。");
+    assert(preview.person.displayName === personDisplayName, "手工短码预览返回了错误的家庭成员。");
 
     deviceMaterial = {
       credential: randomCredential(),
@@ -235,7 +241,7 @@ async function simulateMobileClaim(admin, personRef, displayName, includePairing
       installationId: deviceMaterial.installationId,
       deviceCredential: deviceMaterial.credential,
       device: {
-        displayName,
+        displayName: deviceDisplayName,
         terminalType: "mobile",
         platform: "ios",
         systemVersion: "26.0",
@@ -316,10 +322,11 @@ async function runMobileAcceptance() {
 
     activeStep = "member";
     updateStep("member", "running", "正在新增一位用于 iPhone 配对的家庭成员");
+    const memberDisplayName = "移动入口体验成员";
     const createdMember = await request("/api/v1/admin/members", {
       method: "POST",
       entry: admin,
-      body: { displayName: "移动入口体验成员", familyRole: "adult" }
+      body: { displayName: memberDisplayName, familyRole: "adult" }
     });
     const personRef = createdMember.member.personRef;
     assert(Number(createdMember.member.activePersonalDeviceCount) === 0, "新成员不应已有移动设备。");
@@ -327,7 +334,13 @@ async function runMobileAcceptance() {
 
     activeStep = "pairing";
     updateStep("pairing", "running", "正在生成五分钟配对材料并使用手工短码预览");
-    firstDevice = await simulateMobileClaim(admin, personRef, "一键验收 iPhone 甲", true);
+    firstDevice = await simulateMobileClaim(
+      admin,
+      personRef,
+      memberDisplayName,
+      "一键验收 iPhone 甲",
+      true
+    );
     recordStep(report, "pairing", "配对材料", "五分钟一次性配对材料生成成功，手工短码能够准确预览目标成员");
 
     activeStep = "claim";
@@ -364,7 +377,13 @@ async function runMobileAcceptance() {
 
     activeStep = "remote";
     updateStep("remote", "running", "正在创建第二台 iPhone，并由管理员远程撤销");
-    secondDevice = await simulateMobileClaim(admin, personRef, "一键验收 iPhone 乙", false);
+    secondDevice = await simulateMobileClaim(
+      admin,
+      personRef,
+      memberDisplayName,
+      "一键验收 iPhone 乙",
+      false
+    );
     const remoteClaimedMember = await loadMember(admin, personRef);
     assert(Number(remoteClaimedMember.activePersonalDeviceCount) === 1, "第二台 iPhone 未出现在管理员设备计数中。");
     await request(`/api/v1/admin/devices/${encodeURIComponent(secondDevice.deviceRef)}`, {
