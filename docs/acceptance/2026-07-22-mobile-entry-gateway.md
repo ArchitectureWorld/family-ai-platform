@@ -13,6 +13,27 @@ This acceptance covers the Gateway vertical slice for iPhone pairing and Persona
 - Web member pairing controls and active mobile-device count;
 - hash-only persistence of pairing codes, installation identifiers, Device Credentials, and EntrySession Tokens.
 
+## Beginner one-click browser acceptance
+
+The local development page now provides a beginner-facing **“一键体验验收”** button. After the clean development Gateway opens in the browser, the reviewer clicks once and the page performs the complete visible flow without terminal commands, API tools, database inspection, or credential handling.
+
+The browser runner visibly reports ten steps:
+
+1. confirm the Gateway and clean experience environment;
+2. create an experience Family, administrator, and management computer;
+3. compare Family Admin and Personal Entry isolation;
+4. create a mobile-entry family member;
+5. generate five-minute pairing material and preview the manual short code;
+6. simulate an iPhone claim and verify Personal-only Portal context;
+7. verify renewal, logout, and renewal after logout;
+8. verify local iPhone unbind;
+9. create a second simulated iPhone and verify administrator remote revoke;
+10. generate a downloadable Chinese acceptance report.
+
+The progress list shows `等待 / 进行中 / 通过 / 失败` for every step. The final report contains only user-readable evidence and excludes pairing codes, QR contents, installation identifiers, Device Credentials, EntrySession Tokens, Authorization headers, SQL data, and local paths. Pairing and simulated-device material remain in JavaScript module memory and are cleared when the flow finishes.
+
+For local development only, the loopback acceptance page may generate a contract-safe `https://127.0.0.1:8790` QR Gateway value while the console itself is served on loopback HTTP. This exception is restricted to `development` mode and does not relax HTTPS generation in `test` or `production` mode.
+
 ## Automated verification
 
 Run from the repository root:
@@ -46,7 +67,7 @@ The script verifies:
 14. administrator remote revoke uses the same effective lifecycle;
 15. revoked devices cannot renew.
 
-The Vitest suites additionally cover mismatch attempt accounting, expiry, consumed and revoked codes, five failed attempts, inactive targets, code collision regeneration, claim transaction rollback, credential conflicts, authorization interchange, and Foundation regressions.
+The Vitest suites additionally cover mismatch attempt accounting, expiry, consumed and revoked codes, five failed attempts, inactive targets, code collision regeneration, claim transaction rollback, credential conflicts, authorization interchange, development-only loopback QR generation, browser-module syntax, and Foundation regressions.
 
 ## Secret-handling rules
 
@@ -60,8 +81,8 @@ The runtime script keeps synthetic credentials in process variables only. Genera
 - request bodies containing credentials;
 - SQL rows and host filesystem paths.
 
-The Web pairing dialog keeps pairing material in module memory only. It does not write that material to `localStorage`, `sessionStorage`, or browser console output. Closing, expiring, consuming, or revoking a pairing clears the DOM and in-memory state; closing an active dialog also revokes the server-side pairing record.
+The Web pairing dialog and one-click runner keep pairing material in module memory only. They do not write that material to `localStorage`, `sessionStorage`, or browser console output. Closing, expiring, consuming, or revoking a manual pairing clears the DOM and in-memory state; closing an active dialog also revokes the server-side pairing record. The one-click runner clears both simulated mobile devices from its module state before returning control to the reviewer.
 
 ## Physical iPhone boundary
 
-This PR can establish API integration readiness, but physical-device acceptance remains a separate Mobile Entry E2E activity. It must verify Tailscale Serve HTTPS reachability, camera scanning, Keychain persistence, local authentication, offline behavior, and administrator revocation on an actual iPhone.
+The browser runner simulates the iPhone protocol path and does not replace physical-device acceptance. Physical Mobile Entry E2E must still verify Tailscale Serve HTTPS reachability, camera scanning, Keychain persistence, local authentication, offline behavior, and administrator revocation on an actual iPhone.
