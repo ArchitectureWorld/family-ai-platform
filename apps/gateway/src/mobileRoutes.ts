@@ -53,15 +53,24 @@ function requireProtocolVersion(body: unknown): void {
   }
 }
 
-function requestGatewayBaseUrl(request: FastifyRequest): string {
+function developmentLoopbackHost(host: string, mode: "test" | "development" | "production"): boolean {
+  if (mode !== "development") return false;
+  return /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/iu.test(host);
+}
+
+function requestGatewayBaseUrl(
+  request: FastifyRequest,
+  mode: "test" | "development" | "production"
+): string {
   const forwarded = request.headers["x-forwarded-proto"];
   const forwardedProtocol = typeof forwarded === "string"
     ? forwarded.split(",", 1)[0]?.trim().toLowerCase()
     : undefined;
-  const protocol = forwardedProtocol === "https" || request.protocol === "https"
+  const host = request.headers.host;
+  const loopbackAcceptance = typeof host === "string" && developmentLoopbackHost(host, mode);
+  const protocol = forwardedProtocol === "https" || request.protocol === "https" || loopbackAcceptance
     ? "https"
     : "http";
-  const host = request.headers.host;
   const candidate = typeof host === "string" ? `${protocol}://${host}` : "";
   const parsed = secureGatewayBaseUrlSchema.safeParse(candidate);
   if (!parsed.success) {
@@ -100,6 +109,7 @@ export function registerMobileRoutes(
   input: {
     mobileRepository: MobilePairingRepository;
     entryAuthenticator: EntrySessionAuthenticator;
+    mode: "test" | "development" | "production";
   }
 ): void {
   app.post("/api/v1/admin/members/:personRef/pairing-codes", async (request, reply) => {
@@ -107,7 +117,7 @@ export function registerMobileRoutes(
     const { personRef } = request.params as { personRef: string };
     if (!personRefSchema.safeParse(personRef).success) throw pairingRequestError();
 
-    const gateway = requestGatewayBaseUrl(request);
+    const gateway = requestGatewayBaseUrl(request, input.mode);
     const material = input.mobileRepository.createPairingCode({
       familyRef: context.family.familyRef,
       personRef,
