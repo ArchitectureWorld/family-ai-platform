@@ -17,7 +17,7 @@
     "build:gateway": "npm run build:adapter-sdk && npm run build -w @family-ai/gateway",
     "build": "npm run build:gateway",
     "test:workspaces": "npm run build:adapter-sdk && npm run test --workspaces --if-present",
-    "test:scripts": "bash scripts/static-check.sh",
+    "test:scripts": "bash scripts/test-static-check-secret-pattern.sh && bash scripts/static-check.sh",
     "test": "npm run test:workspaces && npm run test:scripts",
     "typecheck": "npm run build:adapter-sdk && npm run typecheck --workspaces --if-present",
     "check": "npm run test && npm run typecheck && npm run build",
