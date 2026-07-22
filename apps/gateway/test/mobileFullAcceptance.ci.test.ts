@@ -9,6 +9,7 @@ const shouldRun =
 
 const metadataDockerfile = `
 FROM node:22.16.0-bookworm-slim
+SHELL ["/bin/bash", "-c"]
 WORKDIR /app
 COPY .gitignore Dockerfile compose.yaml ./
 RUN printf '%s\\n' '.git' '.github' '.runtime' 'node_modules' '**/node_modules' '**/dist' 'coverage' 'clients/ios' '.env' '.env.*' '.npmrc' '.npmrc.*' '.yarnrc.yml' '.pnpmfile.cjs' '*.sqlite' '*.sqlite-*' '*.log' '*.pem' '*.key' '*.p12' '*.pfx' '*.mobileprovision' '*.credentials.json' '*.secrets.json' 'credentials' 'secrets' 'docs/acceptance/runtime' 'xcuserdata' 'DerivedData' > .dockerignore
