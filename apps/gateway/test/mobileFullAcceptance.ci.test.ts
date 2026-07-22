@@ -18,7 +18,7 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/provider-adapter-sdk/package.json packages/provider-adapter-sdk/package.json
 COPY apps/gateway/package.json apps/gateway/package.json
 RUN npm ci
-COPY .gitignore Dockerfile compose.yaml ./
+COPY .gitignore .dockerignore Dockerfile compose.yaml ./
 COPY scripts scripts
 COPY packages packages
 COPY apps apps
@@ -27,7 +27,7 @@ RUN npm run test:scripts
 
 describe.runIf(shouldRun)("Docker static-check isolation", () => {
   it(
-    "runs repository script checks inside the Docker build environment",
+    "runs repository script checks when Docker security inputs are present",
     () => {
       const result = spawnSync(
         "docker",
