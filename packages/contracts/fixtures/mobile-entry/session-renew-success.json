@@ -1,0 +1,9 @@
+{
+  "protocolVersion": 1,
+  "entry": {
+    "entryBindingRef": "entry-binding:test-mobile-1",
+    "entrySessionRef": "entry-session:test-mobile-2",
+    "token": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+    "expiresAt": "2026-08-05T12:00:00.000Z"
+  }
+}

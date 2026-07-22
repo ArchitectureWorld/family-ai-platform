@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "device": {
+    "deviceRef": "device:test-mobile-1",
+    "displayName": "测试 iPhone",
+    "status": "active"
+  },
+  "entry": {
+    "entryBindingRef": "entry-binding:test-mobile-1",
+    "entrySessionRef": "entry-session:test-mobile-1",
+    "token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "expiresAt": "2026-07-29T12:00:00.000Z"
+  }
+}

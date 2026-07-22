@@ -1,0 +1,30 @@
+{
+  "protocolVersion": 1,
+  "audience": "personal",
+  "entrySessionRef": "entry-session:test-mobile-1",
+  "entryBindingRef": "entry-binding:test-mobile-1",
+  "family": {
+    "familyRef": "family:test-family-1",
+    "displayName": "测试家庭"
+  },
+  "person": {
+    "personRef": "person:test-person-1",
+    "displayName": "测试成员"
+  },
+  "membership": {
+    "familyRole": "adult"
+  },
+  "device": {
+    "deviceRef": "device:test-mobile-1",
+    "displayName": "测试 iPhone",
+    "terminalType": "mobile",
+    "platform": "ios"
+  },
+  "agent": {
+    "assignmentRef": "assignment:test-personal-1",
+    "assignmentType": "personal_assistant",
+    "agentRef": "agent:personal-assistant",
+    "displayName": "个人助理",
+    "providerProfileRef": "provider-profile:fake-local"
+  }
+}

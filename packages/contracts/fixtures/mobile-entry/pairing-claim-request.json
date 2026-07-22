@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "code": "ABCD-EFGH",
+  "installationId": "018f47a2-1f10-7a3d-8c2d-61f369284f20",
+  "deviceCredential": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "device": {
+    "displayName": "测试 iPhone",
+    "terminalType": "mobile",
+    "platform": "ios",
+    "systemVersion": "17.6",
+    "appVersion": "1.0.0",
+    "model": "iPhone"
+  }
+}

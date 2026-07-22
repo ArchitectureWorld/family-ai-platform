@@ -1,0 +1,9 @@
+{
+  "protocolVersion": 1,
+  "error": {
+    "code": "DEVICE_REVOKED",
+    "category": "permission",
+    "message": "当前设备授权已撤销。",
+    "retryable": false
+  }
+}
