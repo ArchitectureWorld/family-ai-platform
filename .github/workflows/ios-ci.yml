@@ -43,7 +43,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             clean build
 
-      - name: Select available iPhone simulator
+      - name: Select and boot available iPhone simulator
         id: simulator
         run: |
           set -euo pipefail
@@ -67,6 +67,9 @@ jobs:
           )"
           test -n "$SIMULATOR_UDID"
           echo "udid=$SIMULATOR_UDID" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          xcrun simctl list devices | grep "$SIMULATOR_UDID"
 
       - name: Run unit tests
         id: unit_tests
@@ -80,6 +83,7 @@ jobs:
             -configuration Debug \
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -destination-timeout 60 \
             -only-testing:FamilyAITests \
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
@@ -101,6 +105,7 @@ jobs:
             -configuration Debug \
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -destination-timeout 60 \
             -only-testing:FamilyAIUITests \
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
