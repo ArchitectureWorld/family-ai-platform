@@ -7,19 +7,37 @@ const shouldRun =
   process.env.GITHUB_HEAD_REF === "feature/mobile-pairing-gateway" &&
   existsSync(new URL("../../../.git", import.meta.url));
 
-describe.runIf(shouldRun)("Foundation Docker build isolation", () => {
+const dependencyDockerfile = `
+FROM node:22.16.0-bookworm-slim
+RUN apt-get update \\
+  && apt-get install -y --no-install-recommends python3 make g++ \\
+  && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY packages/contracts/package.json packages/contracts/package.json
+COPY packages/provider-adapter-sdk/package.json packages/provider-adapter-sdk/package.json
+COPY apps/gateway/package.json apps/gateway/package.json
+RUN npm ci
+`;
+
+describe.runIf(shouldRun)("Foundation Docker dependency isolation", () => {
   it(
-    "completes the Docker build stage used by verify-foundation",
+    "builds the verified Node base and installs the committed lockfile",
     () => {
-      const result = spawnSync("docker", ["compose", "build"], {
-        cwd: new URL("../../../", import.meta.url),
-        encoding: "utf8",
-        maxBuffer: 16 * 1024 * 1024,
-        timeout: 12 * 60 * 1000,
-        stdio: ["ignore", "pipe", "pipe"]
-      });
+      const result = spawnSync(
+        "docker",
+        ["build", "--progress=plain", "--file", "-", "."],
+        {
+          cwd: new URL("../../../", import.meta.url),
+          input: dependencyDockerfile,
+          encoding: "utf8",
+          maxBuffer: 16 * 1024 * 1024,
+          timeout: 12 * 60 * 1000,
+          stdio: ["pipe", "pipe", "pipe"]
+        }
+      );
       if (result.error || result.status !== 0) {
-        throw new Error(`docker-compose-build:${result.status ?? "unknown"}`);
+        throw new Error(`docker-dependency-stage:${result.status ?? "unknown"}`);
       }
     },
     14 * 60 * 1000
