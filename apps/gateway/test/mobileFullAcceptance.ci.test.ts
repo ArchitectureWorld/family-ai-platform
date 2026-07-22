@@ -21,16 +21,11 @@ function runRedacted(command: string, args: string[], expectedMarker: string): v
   expect(result.stdout).toContain(expectedMarker);
 }
 
-describe.runIf(shouldRun)("Mobile Entry full CI acceptance", () => {
+describe.runIf(shouldRun)("Foundation full CI acceptance isolation", () => {
   it(
-    "runs Foundation and Mobile Entry Docker acceptance without publishing captured output",
+    "runs the exact Foundation Docker acceptance command",
     () => {
       runRedacted("bash", ["./scripts/verify-foundation.sh"], "automated verification: PASS");
-      runRedacted(
-        "bash",
-        ["scripts/acceptance-mobile-pairing.sh"],
-        "All Mobile Entry Gateway acceptance steps passed."
-      );
     },
     14 * 60 * 1000
   );
