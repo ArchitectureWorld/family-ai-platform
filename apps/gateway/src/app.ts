@@ -177,7 +177,11 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     entryAuthenticator,
     mobileDeviceSummaryRepository
   });
-  registerMobileRoutes(app, { mobileRepository, entryAuthenticator });
+  registerMobileRoutes(app, {
+    mobileRepository,
+    entryAuthenticator,
+    mode: options.mode
+  });
 
   app.get("/health", async () => ({
     ok: true,
