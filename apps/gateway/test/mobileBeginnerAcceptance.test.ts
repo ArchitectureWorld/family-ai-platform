@@ -1,10 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const publicDirectory = join(repositoryRoot, "apps/gateway/public");
+const mobileAcceptanceModule = join(publicDirectory, "mobileAcceptance.js");
 
 function read(path: string) {
   return readFileSync(path, "utf8");
@@ -13,7 +15,7 @@ function read(path: string) {
 describe("one-click beginner Mobile Entry acceptance", () => {
   it("ships a visible guided acceptance runner and Chinese report", () => {
     const html = read(join(publicDirectory, "index.html"));
-    const javascript = read(join(publicDirectory, "mobileAcceptance.js"));
+    const javascript = read(mobileAcceptanceModule);
     const stylesheet = read(join(publicDirectory, "mobile-acceptance.css"));
     const developmentConsole = read(join(repositoryRoot, "apps/gateway/src/developmentConsole.ts"));
 
@@ -38,7 +40,7 @@ describe("one-click beginner Mobile Entry acceptance", () => {
   });
 
   it("keeps pairing and device material in memory and redacts the report", () => {
-    const javascript = read(join(publicDirectory, "mobileAcceptance.js"));
+    const javascript = read(mobileAcceptanceModule);
 
     expect(javascript).not.toContain("localStorage");
     expect(javascript).not.toMatch(/sessionStorage\.setItem\([^\n]*(deviceCredential|installationId|pairing)/i);
@@ -47,5 +49,13 @@ describe("one-click beginner Mobile Entry acceptance", () => {
     expect(javascript).toContain("pairingMaterial = null");
     expect(javascript).toContain("firstDevice = null");
     expect(javascript).toContain("secondDevice = null");
+  });
+
+  it("is valid JavaScript before the browser loads it", () => {
+    const result = spawnSync(process.execPath, ["--check", mobileAcceptanceModule], {
+      encoding: "utf8"
+    });
+
+    expect(result.status, result.stderr).toBe(0);
   });
 });
