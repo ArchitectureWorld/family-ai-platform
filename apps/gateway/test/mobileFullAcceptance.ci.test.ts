@@ -1,9 +1,11 @@
+import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { describe, it } from "vitest";
 
 const shouldRun =
   process.env.GITHUB_ACTIONS === "true" &&
-  process.env.GITHUB_HEAD_REF === "feature/mobile-pairing-gateway";
+  process.env.GITHUB_HEAD_REF === "feature/mobile-pairing-gateway" &&
+  existsSync(new URL("../../../.git", import.meta.url));
 
 describe.runIf(shouldRun)("Foundation Docker build isolation", () => {
   it(
