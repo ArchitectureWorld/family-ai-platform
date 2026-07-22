@@ -68,14 +68,58 @@ jobs:
           test -n "$SIMULATOR_UDID"
           echo "udid=$SIMULATOR_UDID" >> "$GITHUB_OUTPUT"
 
-      - name: Run unit and UI tests
+      - name: Run unit tests
+        id: unit_tests
+        continue-on-error: true
         run: |
           set -euo pipefail
-          xcodebuild \
+          rm -rf /tmp/FamilyAI-unit-tests.xcresult
+          xcodebuild -quiet \
             -project clients/ios/FamilyAI.xcodeproj \
             -scheme FamilyAI \
             -configuration Debug \
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -only-testing:FamilyAITests \
+            -resultBundlePath /tmp/FamilyAI-unit-tests.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             test
+
+      - name: Run UI tests
+        id: ui_tests
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/FamilyAI-ui-tests.xcresult
+          xcodebuild -quiet \
+            -project clients/ios/FamilyAI.xcodeproj \
+            -scheme FamilyAI \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -only-testing:FamilyAIUITests \
+            -resultBundlePath /tmp/FamilyAI-ui-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+      - name: Summarize test results
+        if: always()
+        run: |
+          set -uo pipefail
+          for RESULT in \
+            /tmp/FamilyAI-unit-tests.xcresult \
+            /tmp/FamilyAI-ui-tests.xcresult
+          do
+            if [[ -d "$RESULT" ]]; then
+              echo "===== $RESULT ====="
+              xcrun xcresulttool get test-results summary --path "$RESULT" || true
+            fi
+          done
+
+          echo "Unit tests: ${{ steps.unit_tests.outcome }}"
+          echo "UI tests: ${{ steps.ui_tests.outcome }}"
+
+          if [[ "${{ steps.unit_tests.outcome }}" != "success" ]] || \
+             [[ "${{ steps.ui_tests.outcome }}" != "success" ]]; then
+            exit 1
+          fi
