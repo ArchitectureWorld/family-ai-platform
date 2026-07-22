@@ -11,15 +11,18 @@ function read(path: string) {
 }
 
 describe("one-click beginner Mobile Entry acceptance", () => {
-  it("ships a visible guided acceptance runner and redacted report", () => {
+  it("ships a visible guided acceptance runner and Chinese report", () => {
     const html = read(join(publicDirectory, "index.html"));
-    const javascript = read(join(publicDirectory, "acceptance.js"));
-    const stylesheet = read(join(publicDirectory, "acceptance.css"));
+    const javascript = read(join(publicDirectory, "mobileAcceptance.js"));
+    const stylesheet = read(join(publicDirectory, "mobile-acceptance.css"));
+    const developmentConsole = read(join(repositoryRoot, "apps/gateway/src/developmentConsole.ts"));
 
     expect(html).toContain('id="runMobileAcceptance"');
     expect(html).toContain('id="mobileAcceptanceSteps"');
     expect(html).toContain('id="mobileAcceptanceReport"');
     expect(html).toContain("一键体验验收");
+    expect(html).toContain('src="/mobileAcceptance.js"');
+    expect(html).toContain('href="/mobile-acceptance.css"');
 
     expect(javascript).toContain("runMobileAcceptance");
     expect(javascript).toContain("simulateMobileClaim");
@@ -28,19 +31,21 @@ describe("one-click beginner Mobile Entry acceptance", () => {
     expect(javascript).toContain("/api/v1/mobile/pairing/claim");
     expect(javascript).toContain("/api/v1/mobile/session/renew");
     expect(javascript).toContain("/api/v1/mobile/device");
-    expect(javascript).not.toMatch(/sessionStorage\.setItem\([^\n]*(deviceCredential|installationId|pairing)/i);
     expect(stylesheet).toContain(".acceptance-runner");
     expect(stylesheet).toContain(".acceptance-step");
+    expect(developmentConsole).toContain('"/mobileAcceptance.js"');
+    expect(developmentConsole).toContain('"/mobile-acceptance.css"');
   });
 
-  it("turns the existing acceptance script into a self-preparing browser launcher", () => {
-    const script = read(join(repositoryRoot, "scripts/acceptance-mobile-pairing.sh"));
+  it("keeps pairing and device material in memory and redacts the report", () => {
+    const javascript = read(join(publicDirectory, "mobileAcceptance.js"));
 
-    expect(script).toContain("prepare_beginner_environment");
-    expect(script).toContain("prepare_browser_experience");
-    expect(script).toContain("open_acceptance_url");
-    expect(script).toContain("mode=mobile-acceptance");
-    expect(script).toContain("./scripts/verify-foundation.sh");
-    expect(script).not.toContain("run ./scripts/verify-foundation.sh first");
+    expect(javascript).not.toContain("localStorage");
+    expect(javascript).not.toMatch(/sessionStorage\.setItem\([^\n]*(deviceCredential|installationId|pairing)/i);
+    expect(javascript).not.toMatch(/console\.(log|info|warn|error)/);
+    expect(javascript).toContain("报告不会包含配对码、二维码内容、设备凭证、Session Token 或数据库内容");
+    expect(javascript).toContain("pairingMaterial = null");
+    expect(javascript).toContain("firstDevice = null");
+    expect(javascript).toContain("secondDevice = null");
   });
 });
