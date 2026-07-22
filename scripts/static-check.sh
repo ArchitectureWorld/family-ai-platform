@@ -35,15 +35,46 @@ if grep -Eq 'command -v (node|npm)' scripts/verify-foundation.sh; then
   exit 1
 fi
 
-grep -Fxq '.runtime/' .gitignore || {
-  printf '.runtime must be ignored by Git.\n' >&2
-  exit 1
-}
+for required in \
+  '.runtime/' \
+  'docs/acceptance/runtime/' \
+  '.env' \
+  '.npmrc' \
+  '*.key' \
+  '*.mobileprovision' \
+  'clients/ios/Config/Local.xcconfig'; do
+  grep -Fxq "$required" .gitignore || {
+    printf '.gitignore is missing required entry: %s\n' "$required" >&2
+    exit 1
+  }
+done
 
-grep -Fxq 'docs/acceptance/runtime/' .gitignore || {
-  printf 'runtime acceptance reports must be ignored by Git.\n' >&2
-  exit 1
-}
+for required in \
+  '.runtime' \
+  '.env' \
+  '.npmrc' \
+  '*.key' \
+  '*.mobileprovision' \
+  'clients/ios'; do
+  grep -Fxq "$required" .dockerignore || {
+    printf '.dockerignore is missing required entry: %s\n' "$required" >&2
+    exit 1
+  }
+done
+
+while IFS= read -r tracked; do
+  case "$tracked" in
+    .env|.env.*|.npmrc|.npmrc.*|*.pem|*.key|*.p12|*.pfx|*.mobileprovision|*.sqlite|*.sqlite-*|*.credentials.json|*.secrets.json|*/Local.xcconfig|*/xcuserdata/*|*/DerivedData/*|.runtime/*|docs/acceptance/runtime/*)
+      case "$tracked" in
+        .env.example|.npmrc.example) ;;
+        *)
+          printf 'Sensitive or runtime file must not be tracked: %s\n' "$tracked" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+  esac
+done < <(git ls-files)
 
 for forbidden in 'agent-control-center.sqlite' '/home/youran/' 'family-ai-platform-legacy/data'; do
   if grep -R \
@@ -61,4 +92,23 @@ for forbidden in 'agent-control-center.sqlite' '/home/youran/' 'family-ai-platfo
   fi
 done
 
-printf 'Static deployment checks passed.\n'
+secret_pattern='-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}'
+if git grep -n -E -e "$secret_pattern" -- '*.md' '*.mdx' '*.txt' ':!scripts/static-check.sh'; then
+  printf 'High-confidence secret-like content found in documentation.\n' >&2
+  exit 1
+fi
+
+while IFS= read -r use_token; do
+  action_ref="${use_token##*@}"
+  if [[ ! "$action_ref" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'GitHub Action must be pinned to a full commit SHA: %s\n' "$use_token" >&2
+    exit 1
+  fi
+done < <(
+  grep -RhoE 'uses:[[:space:]]+[^[:space:]#]+' .github/workflows 2>/dev/null \
+    | awk '{print $2}' \
+    | grep -v '^\./' \
+    || true
+)
+
+printf 'Static deployment and public repository checks passed.\n'
