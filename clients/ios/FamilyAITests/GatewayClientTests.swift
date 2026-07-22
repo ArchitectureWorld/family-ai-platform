@@ -59,7 +59,7 @@ final class GatewayClientTests: XCTestCase {
       case "/api/v1/mobile/pairing/preview":
         XCTAssertEqual(request.httpMethod, "POST")
         let object = try! XCTUnwrap(
-          JSONSerialization.jsonObject(with: request.httpBody ?? Data())
+          JSONSerialization.jsonObject(with: try! Self.bodyData(from: request))
             as? [String: Any]
         )
         XCTAssertEqual(object["protocolVersion"] as? Int, 1)
@@ -72,7 +72,7 @@ final class GatewayClientTests: XCTestCase {
       case "/api/v1/mobile/pairing/claim":
         XCTAssertEqual(request.httpMethod, "POST")
         let object = try! XCTUnwrap(
-          JSONSerialization.jsonObject(with: request.httpBody ?? Data())
+          JSONSerialization.jsonObject(with: try! Self.bodyData(from: request))
             as? [String: Any]
         )
         XCTAssertEqual(object["protocolVersion"] as? Int, 1)
@@ -87,7 +87,7 @@ final class GatewayClientTests: XCTestCase {
         )
       case "/api/v1/mobile/session/logout":
         XCTAssertEqual(request.httpMethod, "POST")
-        XCTAssertNil(request.httpBody)
+        XCTAssertTrue((try! Self.bodyData(from: request)).isEmpty)
         return Self.response(
           request,
           data: Data(
@@ -96,7 +96,7 @@ final class GatewayClientTests: XCTestCase {
         )
       case "/api/v1/mobile/device":
         XCTAssertEqual(request.httpMethod, "DELETE")
-        XCTAssertNil(request.httpBody)
+        XCTAssertTrue((try! Self.bodyData(from: request)).isEmpty)
         return Self.response(
           request,
           data: Data(
@@ -225,6 +225,38 @@ final class GatewayClientTests: XCTestCase {
     config.protocolClasses = [URLProtocolStub.self]
     return URLSessionGatewayClient(session: URLSession(configuration: config))
   }
+
+  private static func bodyData(from request: URLRequest) throws -> Data {
+    if let body = request.httpBody {
+      return body
+    }
+    guard let stream = request.httpBodyStream else {
+      return Data()
+    }
+
+    stream.open()
+    defer { stream.close() }
+
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4_096)
+    while true {
+      let readCount = buffer.withUnsafeMutableBufferPointer { pointer in
+        guard let baseAddress = pointer.baseAddress else {
+          return 0
+        }
+        return stream.read(baseAddress, maxLength: pointer.count)
+      }
+      if readCount > 0 {
+        data.append(buffer, count: readCount)
+      } else if readCount == 0 {
+        break
+      } else {
+        throw stream.streamError ?? URLError(.cannotDecodeContentData)
+      }
+    }
+    return data
+  }
+
   private static func response(
     _ request: URLRequest,
     status: Int = 200,
