@@ -1,0 +1,9 @@
+{
+  "protocolVersion": 1,
+  "error": {
+    "code": "ENTRY_SESSION_EXPIRED",
+    "category": "permission",
+    "message": "个人入口会话已过期。",
+    "retryable": true
+  }
+}
