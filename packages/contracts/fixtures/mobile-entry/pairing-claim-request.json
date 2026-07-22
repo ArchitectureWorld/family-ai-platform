@@ -1,6 +1,5 @@
 {
   "protocolVersion": 1,
-  "pairingRef": "pairing:test-mobile-1",
   "code": "ABCD-EFGH",
   "installationId": "018f47a2-1f10-7a3d-8c2d-61f369284f20",
   "deviceCredential": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
