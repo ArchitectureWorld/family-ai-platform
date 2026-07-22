@@ -19,6 +19,8 @@ const bootstrap = {
   providerProfileRef: "provider-profile:fake-local"
 };
 
+const migrationVersions = [{ version: 1 }, { version: 2 }, { version: 3 }];
+
 describe("gateway database", () => {
   let directory = "";
   let db: GatewayDatabase | null = null;
@@ -35,15 +37,61 @@ describe("gateway database", () => {
     db = openGatewayDatabase(databasePath);
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
-    ).toEqual([{ version: 1 }, { version: 2 }]);
+    ).toEqual(migrationVersions);
     expect(db.prepare("SELECT COUNT(*) AS count FROM families").get()).toEqual({ count: 0 });
     expect(db.pragma("foreign_key_check")).toEqual([]);
     db.close();
     db = openGatewayDatabase(databasePath);
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
-    ).toEqual([{ version: 1 }, { version: 2 }]);
+    ).toEqual(migrationVersions);
     expect(db.prepare("SELECT COUNT(*) AS count FROM families").get()).toEqual({ count: 0 });
+  });
+
+  it("creates the mobile pairing schema without weakening the V2 identity model", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-mobile-schema-"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+
+    const pairingTable = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("mobile_pairing_codes");
+    expect(pairingTable).toEqual({ name: "mobile_pairing_codes" });
+
+    const pairingColumns = db
+      .prepare("PRAGMA table_info(mobile_pairing_codes)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(pairingColumns).toEqual([
+      "pairing_ref",
+      "family_ref",
+      "person_ref",
+      "code_hash",
+      "status",
+      "failed_attempts",
+      "max_attempts",
+      "expires_at",
+      "created_by_entry_binding_ref",
+      "created_at",
+      "consumed_at",
+      "consumed_device_ref",
+      "revoked_at"
+    ]);
+
+    const mobileColumns = db
+      .prepare("PRAGMA table_info(managed_devices)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(mobileColumns).toEqual(
+      expect.arrayContaining([
+        "installation_ref",
+        "system_version",
+        "app_version",
+        "device_model",
+        "last_seen_at"
+      ])
+    );
+
+    expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
   it("bootstraps missing development records without overwriting operational state", () => {

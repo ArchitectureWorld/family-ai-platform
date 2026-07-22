@@ -1,7 +1,13 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { MOBILE_ENTRY_PROTOCOL_VERSION, personalPortalContextSchema } from "@family-ai/contracts";
 import { z } from "zod";
-import { FamilyDomainRepository, type EntryAudience, type EntryContext } from "./familyDomain.js";
+import { FamilyDomainRepository } from "./familyDomain.js";
 import { GatewayRepository } from "./database.js";
+import {
+  EntrySessionAuthenticator,
+  requireEntryRequest
+} from "./entrySessionAuth.js";
+import { MobileDeviceSummaryRepository } from "./mobileDeviceSummary.js";
 import { GatewayDomainError } from "./service.js";
 
 const onboardingSchema = z
@@ -31,11 +37,6 @@ function deviceRef(request: FastifyRequest): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function entrySessionRef(request: FastifyRequest): string | null {
-  const value = request.headers["x-entry-session-ref"];
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
 function invalidRequest(message: string): GatewayDomainError {
   return new GatewayDomainError("REQUEST_INVALID", 400, "validation", false, message);
 }
@@ -45,6 +46,8 @@ export function registerFamilyRoutes(
   input: {
     familyRepository: FamilyDomainRepository;
     gatewayRepository: GatewayRepository;
+    entryAuthenticator: EntrySessionAuthenticator;
+    mobileDeviceSummaryRepository: MobileDeviceSummaryRepository;
   }
 ): void {
   function requireSetupDevice(request: FastifyRequest) {
@@ -63,34 +66,17 @@ export function registerFamilyRoutes(
     return { device, token: token! };
   }
 
-  function requireEntry(
-    request: FastifyRequest,
-    expectedAudience?: EntryAudience
-  ): EntryContext {
-    const sessionRef = entrySessionRef(request);
-    const token = bearerToken(request);
-    const context = sessionRef && token
-      ? input.familyRepository.authenticateEntrySession(sessionRef, token)
-      : null;
-    if (!context) {
-      throw new GatewayDomainError(
-        "ENTRY_SESSION_INVALID",
-        401,
-        "permission",
-        false,
-        "入口会话无效或已失效。"
-      );
-    }
-    if (expectedAudience && context.audience !== expectedAudience) {
-      throw new GatewayDomainError(
-        "ENTRY_AUDIENCE_FORBIDDEN",
-        403,
-        "permission",
-        false,
-        "当前入口没有执行家庭管理操作的权限。"
-      );
-    }
-    return context;
+  function withMobileDeviceCount<T extends { personRef: string; familyRef?: never }>(
+    familyRef: string,
+    member: T
+  ) {
+    return {
+      ...member,
+      activePersonalDeviceCount: input.mobileDeviceSummaryRepository.activePersonalDeviceCount(
+        familyRef,
+        member.personRef
+      )
+    };
   }
 
   app.get("/api/v1/onboarding/status", async () => ({
@@ -110,17 +96,31 @@ export function registerFamilyRoutes(
     return reply.code(201).send(result);
   });
 
-  app.get("/api/v1/portal/context", async (request) => requireEntry(request));
+  app.get("/api/v1/portal/context", async (request) => {
+    const context = requireEntryRequest(request, input.entryAuthenticator);
+    if (context.audience === "personal") {
+      return personalPortalContextSchema.parse({
+        protocolVersion: MOBILE_ENTRY_PROTOCOL_VERSION,
+        ...context
+      });
+    }
+    return {
+      protocolVersion: MOBILE_ENTRY_PROTOCOL_VERSION,
+      ...context
+    };
+  });
 
   app.get("/api/v1/admin/members", async (request) => {
-    const context = requireEntry(request, "family_admin");
+    const context = requireEntryRequest(request, input.entryAuthenticator, "family_admin");
     return {
-      members: input.familyRepository.listMembers(context.family.familyRef)
+      members: input.familyRepository
+        .listMembers(context.family.familyRef)
+        .map((member) => withMobileDeviceCount(context.family.familyRef, member))
     };
   });
 
   app.post("/api/v1/admin/members", async (request, reply) => {
-    const context = requireEntry(request, "family_admin");
+    const context = requireEntryRequest(request, input.entryAuthenticator, "family_admin");
     const parsed = memberSchema.safeParse(request.body);
     if (!parsed.success) {
       throw invalidRequest("成员姓名或家庭角色不正确。");
@@ -130,6 +130,8 @@ export function registerFamilyRoutes(
       displayName: parsed.data.displayName,
       familyRole: parsed.data.familyRole
     });
-    return reply.code(201).send({ member });
+    return reply.code(201).send({
+      member: withMobileDeviceCount(context.family.familyRef, member)
+    });
   });
 }

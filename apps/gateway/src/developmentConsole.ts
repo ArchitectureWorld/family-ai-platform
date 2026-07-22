@@ -28,25 +28,30 @@ function protectedAsset(reply: FastifyReply): FastifyReply {
     .header("X-Frame-Options", "DENY");
 }
 
+function registerTextAsset(
+  app: FastifyInstance,
+  path: string,
+  filename: string,
+  contentType: string
+): void {
+  app.get(path, async (_request, reply) =>
+    protectedAsset(reply)
+      .type(contentType)
+      .send(asset(filename))
+  );
+}
+
 export function registerDevelopmentConsole(
   app: FastifyInstance,
   mode: GatewayMode
 ): void {
   if (mode !== "development") return;
 
-  app.get("/", async (_request, reply) =>
-    protectedAsset(reply)
-      .type("text/html; charset=utf-8")
-      .send(asset("index.html"))
-  );
-  app.get("/acceptance.js", async (_request, reply) =>
-    protectedAsset(reply)
-      .type("text/javascript; charset=utf-8")
-      .send(asset("acceptance.js"))
-  );
-  app.get("/acceptance.css", async (_request, reply) =>
-    protectedAsset(reply)
-      .type("text/css; charset=utf-8")
-      .send(asset("acceptance.css"))
-  );
+  registerTextAsset(app, "/", "index.html", "text/html; charset=utf-8");
+  registerTextAsset(app, "/acceptance.js", "acceptance.js", "text/javascript; charset=utf-8");
+  registerTextAsset(app, "/mobileAcceptance.js", "mobileAcceptance.js", "text/javascript; charset=utf-8");
+  registerTextAsset(app, "/qr.js", "qr.js", "text/javascript; charset=utf-8");
+  registerTextAsset(app, "/qr-v10.mjs", "qr-v10.mjs", "text/javascript; charset=utf-8");
+  registerTextAsset(app, "/acceptance.css", "acceptance.css", "text/css; charset=utf-8");
+  registerTextAsset(app, "/mobile-acceptance.css", "mobile-acceptance.css", "text/css; charset=utf-8");
 }

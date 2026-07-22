@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="light dark" />
   <title>家庭 AI 初始化与入口验收台</title>
   <link rel="stylesheet" href="/acceptance.css" />
+  <link rel="stylesheet" href="/mobile-acceptance.css" />
 </head>
 <body>
   <main class="shell">
@@ -13,7 +14,7 @@
       <div>
         <p class="eyebrow">FAMILY AI PLATFORM · FAMILY FOUNDATION</p>
         <h1>家庭 AI 初始化与入口验收台</h1>
-        <p class="subtitle">不用命令行配置账号。先创建一个家庭，再分别验证“家庭管理”和“个人空间”是否进入正确的 Agent。</p>
+        <p class="subtitle">不用命令行配置账号。可以点击一次完成 Mobile Entry 全流程体验验收，也可以继续按真实用户步骤手动体验。</p>
       </div>
       <div id="connection" class="status neutral">正在连接 Gateway</div>
     </header>
@@ -25,6 +26,21 @@
     </section>
 
     <section id="setupView" class="panel hidden">
+      <div id="mobileAcceptanceRunner" class="acceptance-runner">
+        <div class="acceptance-runner-header">
+          <div>
+            <p class="eyebrow">BEGINNER ONE-CLICK ACCEPTANCE</p>
+            <h2>一键体验验收</h2>
+            <p>只点击一次。页面会自动创建体验家庭、模拟 iPhone 配对、验证个人入口、解绑和远程撤销，并生成中文报告。</p>
+          </div>
+          <button id="runMobileAcceptance" class="primary acceptance-primary-action" type="button">开始一键体验验收</button>
+        </div>
+        <ul id="mobileAcceptanceSteps" class="acceptance-step-list" aria-live="polite"></ul>
+        <div id="mobileAcceptanceReport" class="acceptance-report hidden" aria-live="polite"></div>
+      </div>
+
+      <div class="acceptance-manual-divider">或手动逐步体验</div>
+
       <div class="section-title">
         <span class="step">1</span>
         <div>
@@ -114,7 +130,7 @@
           <span class="step">3</span>
           <div>
             <h2>家庭成员</h2>
-            <p>这里只能在“家庭管理”入口使用。新增成员会获得个人助理分配，但不会让当前管理员进入其私人空间。</p>
+            <p>管理员可以为指定成员生成 5 分钟有效的 iPhone 配对码。配对只建立该成员的个人入口，不授予家庭管理权限。</p>
           </div>
         </div>
         <div id="memberList" class="member-list empty">正在读取成员…</div>
@@ -136,6 +152,42 @@
       </section>
     </section>
 
+    <dialog id="pairingDialog" class="pairing-dialog" aria-labelledby="pairingTitle">
+      <div class="pairing-dialog-card">
+        <div class="pairing-heading">
+          <div>
+            <p class="eyebrow">IPHONE MOBILE ENTRY</p>
+            <h2 id="pairingTitle">生成 iPhone 配对码</h2>
+            <p id="pairingStatus" class="muted">正在生成一次性配对材料…</p>
+          </div>
+          <button id="closePairing" class="icon-button" type="button" aria-label="关闭配对弹窗">×</button>
+        </div>
+        <div id="pairingContent" class="pairing-content hidden">
+          <div class="pairing-identity">
+            <span><small>家庭</small><strong id="pairingFamily">—</strong></span>
+            <span><small>成员</small><strong id="pairingPerson">—</strong></span>
+          </div>
+          <div class="pairing-grid">
+            <div id="pairingQr" class="pairing-qr" aria-live="polite"></div>
+            <div class="pairing-instructions">
+              <span class="status personal">仅创建个人入口</span>
+              <small>手动短码</small>
+              <code id="pairingCode" class="pairing-code">—</code>
+              <div class="countdown-line">
+                <span>剩余有效时间</span>
+                <strong id="pairingCountdown">05:00</strong>
+              </div>
+              <p>在 iPhone 中扫描二维码，或手动输入 Gateway 地址与短码。不要通过聊天或截图长期保存配对码。</p>
+            </div>
+          </div>
+        </div>
+        <div class="pairing-actions">
+          <button id="revokePairing" class="danger hidden" type="button">立即撤销</button>
+          <button id="donePairing" type="button">关闭</button>
+        </div>
+      </div>
+    </dialog>
+
     <section id="recoveryView" class="panel hidden">
       <div class="section-title">
         <span class="step warning">!</span>
@@ -156,7 +208,7 @@
         <span class="step">✓</span>
         <div>
           <h2>验收日志</h2>
-          <p>这里只显示稳定结果和错误码，不显示 Token、SQL、堆栈或本机路径。</p>
+          <p>这里只显示稳定结果和错误码，不显示 Token、配对码、二维码、SQL、堆栈或本机路径。</p>
         </div>
       </div>
       <pre id="log">等待 Gateway…</pre>
@@ -165,5 +217,6 @@
     <footer>该页面只在本机 development 模式启用，用于确认正式 Family / Person / Entry 领域闭环。</footer>
   </main>
   <script type="module" src="/acceptance.js"></script>
+  <script type="module" src="/mobileAcceptance.js"></script>
 </body>
 </html>
