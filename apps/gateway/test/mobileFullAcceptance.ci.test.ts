@@ -12,7 +12,7 @@ function runCaptured(command: string, args: string[], marker: string): void {
     cwd: new URL("../../../", import.meta.url),
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
-    timeout: 14 * 60 * 1000,
+    timeout: 16 * 60 * 1000,
     stdio: ["ignore", "pipe", "pipe"]
   });
   if (result.error || result.status !== 0) {
@@ -21,17 +21,22 @@ function runCaptured(command: string, args: string[], marker: string): void {
   expect(result.stdout).toContain(marker);
 }
 
-describe.runIf(shouldRun)("Mobile Entry exact acceptance", () => {
+describe.runIf(shouldRun)("Foundation and Mobile Entry exact acceptance", () => {
   it(
-    "executes the required Mobile Entry command",
+    "executes both required Docker acceptance commands in order",
     () => {
       runCaptured(
         "bash",
+        ["./scripts/verify-foundation.sh"],
+        "automated verification: PASS"
+      );
+      runCaptured(
+        "bash",
         ["scripts/acceptance-mobile-pairing.sh"],
-        "All Mobile Entry v1 acceptance steps passed."
+        "All Mobile Entry Gateway acceptance steps passed."
       );
     },
-    16 * 60 * 1000
+    34 * 60 * 1000
   );
 
   afterAll(() => {
