@@ -1,0 +1,42 @@
+name: iOS CI
+
+on:
+  pull_request:
+    paths:
+      - "clients/ios/**"
+      - "packages/contracts/**"
+      - ".github/workflows/ios-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "clients/ios/**"
+      - "packages/contracts/**"
+      - ".github/workflows/ios-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Show toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+      - name: Validate project and build app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project clients/ios/FamilyAI.xcodeproj \
+            -scheme FamilyAI \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
