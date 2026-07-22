@@ -13,6 +13,7 @@ fail() {
 command -v docker >/dev/null 2>&1 || fail "未找到 Docker。"
 docker compose version >/dev/null 2>&1 || fail "当前 Docker 不支持 'docker compose'。"
 command -v curl >/dev/null 2>&1 || fail "未找到 curl。"
+command -v git >/dev/null 2>&1 || fail "未找到 Git，无法确认依赖锁已受版本控制。"
 
 umask 077
 mkdir -p "$LOG_DIR"
@@ -21,6 +22,8 @@ cd "$ROOT_DIR"
 
 printf '\n[1/6] Checking the committed dependency lock...\n'
 [[ -f package-lock.json ]] || fail "仓库缺少已提交的 package-lock.json。请不要在验收时临时生成锁文件。"
+git ls-files --error-unmatch -- package-lock.json >/dev/null 2>&1 \
+  || fail "package-lock.json 未受 Git 跟踪。请先将正确的依赖锁加入当前任务分支。"
 printf 'Using the committed package-lock.json.\n'
 
 printf '\n[2/6] Building and verifying the Docker image...\n'
