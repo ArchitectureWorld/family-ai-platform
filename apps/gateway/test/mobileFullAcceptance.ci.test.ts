@@ -15,7 +15,8 @@ function runRedacted(command: string, args: string[], expectedMarker: string): v
     stdio: ["ignore", "pipe", "pipe"]
   });
   if (result.error || result.status !== 0) {
-    throw new Error(`${command} failed with exit code ${result.status ?? "unknown"}`);
+    const label = args[0] ?? command;
+    throw new Error(`${label} failed with exit code ${result.status ?? "unknown"}`);
   }
   expect(result.stdout).toContain(expectedMarker);
 }
