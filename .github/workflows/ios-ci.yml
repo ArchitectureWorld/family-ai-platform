@@ -56,7 +56,13 @@ jobs:
           SIMULATOR_UDID="$(python3 - <<'PY'
           import json
           import subprocess
-          payload = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"], text=True))
+
+          payload = json.loads(
+              subprocess.check_output(
+                  ["xcrun", "simctl", "list", "devices", "available", "-j"],
+                  text=True,
+              )
+          )
           for runtime in sorted(payload["devices"], reverse=True):
               for device in payload["devices"][runtime]:
                   if device["name"].startswith("iPhone"):
@@ -65,11 +71,13 @@ jobs:
           raise SystemExit("No available iPhone simulator")
           PY
           )"
+          test -n "$SIMULATOR_UDID"
           echo "udid=$SIMULATOR_UDID" >> "$GITHUB_OUTPUT"
           xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || true
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
 
       - name: Build test bundles
+        id: build_tests
         run: |
           set -euo pipefail
           xcodebuild -quiet \
@@ -78,41 +86,50 @@ jobs:
             -configuration Debug \
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -destination-timeout 60 \
             -parallel-testing-enabled NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
             build-for-testing
 
-      - name: Run Gateway request-body test
-        id: request_body_test
+      - name: Run unit tests
+        id: unit_tests
         run: |
           set -euo pipefail
-          rm -rf /tmp/FamilyAI-request-body-test.xcresult
+          rm -rf /tmp/FamilyAI-unit-tests.xcresult
           xcodebuild -quiet \
             -project clients/ios/FamilyAI.xcodeproj \
             -scheme FamilyAI \
             -configuration Debug \
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
-            -only-testing:FamilyAITests/GatewayClientTests/testUsesExpectedMethodsPathsAndRequestBodies \
+            -destination-timeout 60 \
+            -only-testing:FamilyAITests \
             -parallel-testing-enabled NO \
-            -resultBundlePath /tmp/FamilyAI-request-body-test.xcresult \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 120 \
+            -resultBundlePath /tmp/FamilyAI-unit-tests.xcresult \
             test-without-building
 
-      - name: Run remaining GatewayClientTests
-        id: remaining_gateway_tests
-        if: always() && steps.simulator.outcome == 'success'
+      - name: Run UI tests
+        id: ui_tests
+        if: always() && steps.simulator.outcome == 'success' && steps.build_tests.outcome == 'success'
         run: |
           set -euo pipefail
-          rm -rf /tmp/FamilyAI-remaining-gateway-tests.xcresult
+          rm -rf /tmp/FamilyAI-ui-tests.xcresult
           xcodebuild -quiet \
             -project clients/ios/FamilyAI.xcodeproj \
             -scheme FamilyAI \
             -configuration Debug \
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
-            -only-testing:FamilyAITests/GatewayClientTests \
-            -skip-testing:FamilyAITests/GatewayClientTests/testUsesExpectedMethodsPathsAndRequestBodies \
+            -destination-timeout 60 \
+            -only-testing:FamilyAIUITests \
             -parallel-testing-enabled NO \
-            -resultBundlePath /tmp/FamilyAI-remaining-gateway-tests.xcresult \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 120 \
+            -resultBundlePath /tmp/FamilyAI-ui-tests.xcresult \
             test-without-building
 
       - name: Summarize test results
@@ -120,13 +137,13 @@ jobs:
         run: |
           set -uo pipefail
           for RESULT in \
-            /tmp/FamilyAI-request-body-test.xcresult \
-            /tmp/FamilyAI-remaining-gateway-tests.xcresult
+            /tmp/FamilyAI-unit-tests.xcresult \
+            /tmp/FamilyAI-ui-tests.xcresult
           do
             if [[ -d "$RESULT" ]]; then
               echo "===== $RESULT ====="
               xcrun xcresulttool get test-results summary --path "$RESULT" || true
             fi
           done
-          echo "Request body test: ${{ steps.request_body_test.outcome }}"
-          echo "Remaining Gateway tests: ${{ steps.remaining_gateway_tests.outcome }}"
+          echo "Unit tests: ${{ steps.unit_tests.outcome }}"
+          echo "UI tests: ${{ steps.ui_tests.outcome }}"
