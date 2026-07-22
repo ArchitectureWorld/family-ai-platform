@@ -7,7 +7,7 @@ const shouldRun =
   process.env.GITHUB_HEAD_REF === "feature/mobile-pairing-gateway" &&
   existsSync(new URL("../../../.git", import.meta.url));
 
-const dependencyDockerfile = `
+const qualityGateDockerfile = `
 FROM node:22.16.0-bookworm-slim
 RUN apt-get update \\
   && apt-get install -y --no-install-recommends python3 make g++ \\
@@ -18,18 +18,23 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/provider-adapter-sdk/package.json packages/provider-adapter-sdk/package.json
 COPY apps/gateway/package.json apps/gateway/package.json
 RUN npm ci
+COPY .gitignore Dockerfile compose.yaml ./
+COPY scripts scripts
+COPY packages packages
+COPY apps apps
+RUN npm run check
 `;
 
-describe.runIf(shouldRun)("Foundation Docker dependency isolation", () => {
+describe.runIf(shouldRun)("Foundation Docker quality-gate isolation", () => {
   it(
-    "builds the verified Node base and installs the committed lockfile",
+    "runs the repository quality gate inside the Docker build environment",
     () => {
       const result = spawnSync(
         "docker",
         ["build", "--progress=plain", "--file", "-", "."],
         {
           cwd: new URL("../../../", import.meta.url),
-          input: dependencyDockerfile,
+          input: qualityGateDockerfile,
           encoding: "utf8",
           maxBuffer: 16 * 1024 * 1024,
           timeout: 12 * 60 * 1000,
@@ -37,7 +42,7 @@ describe.runIf(shouldRun)("Foundation Docker dependency isolation", () => {
         }
       );
       if (result.error || result.status !== 0) {
-        throw new Error(`docker-dependency-stage:${result.status ?? "unknown"}`);
+        throw new Error(`docker-quality-gate:${result.status ?? "unknown"}`);
       }
     },
     14 * 60 * 1000
