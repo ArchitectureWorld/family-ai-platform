@@ -93,7 +93,7 @@ for forbidden in 'agent-control-center.sqlite' '/home/youran/' 'family-ai-platfo
 done
 
 secret_pattern='-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----|sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}'
-if git grep -n -E "$secret_pattern" -- '*.md' '*.mdx' '*.txt' ':!scripts/static-check.sh'; then
+if git grep -n -E -e "$secret_pattern" -- '*.md' '*.mdx' '*.txt' ':!scripts/static-check.sh'; then
   printf 'High-confidence secret-like content found in documentation.\n' >&2
   exit 1
 fi
