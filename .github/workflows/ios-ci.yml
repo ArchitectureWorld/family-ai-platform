@@ -87,7 +87,6 @@ jobs:
             -default-test-execution-time-allowance 60 \
             -maximum-test-execution-time-allowance 120 \
             -resultBundlePath /tmp/FamilyAI-unit-tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO \
             test
 
       - name: Run UI tests
@@ -109,7 +108,6 @@ jobs:
             -default-test-execution-time-allowance 120 \
             -maximum-test-execution-time-allowance 180 \
             -resultBundlePath /tmp/FamilyAI-ui-tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO \
             test
 
       - name: Summarize test results
