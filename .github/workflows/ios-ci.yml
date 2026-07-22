@@ -88,30 +88,11 @@ jobs:
             -parallel-testing-enabled NO \
             build-for-testing
 
-      - name: Run unit test group A1
-        id: unit_group_a1
+      - name: Run CredentialStoreTests
+        id: credential_store_tests
         run: |
           set -euo pipefail
-          rm -rf /tmp/FamilyAI-unit-group-a1.xcresult
-          xcodebuild -quiet \
-            -project clients/ios/FamilyAI.xcodeproj \
-            -scheme FamilyAI \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
-            -only-testing:FamilyAITests/AppCoordinatorTests \
-            -only-testing:FamilyAITests/CachedPersonalContextStoreTests \
-            -only-testing:FamilyAITests/CredentialStoreLayeringTests \
-            -parallel-testing-enabled NO \
-            -resultBundlePath /tmp/FamilyAI-unit-group-a1.xcresult \
-            test-without-building
-
-      - name: Run unit test group A2
-        id: unit_group_a2
-        if: always() && steps.simulator.outcome == 'success'
-        run: |
-          set -euo pipefail
-          rm -rf /tmp/FamilyAI-unit-group-a2.xcresult
+          rm -rf /tmp/FamilyAI-credential-store-tests.xcresult
           xcodebuild -quiet \
             -project clients/ios/FamilyAI.xcodeproj \
             -scheme FamilyAI \
@@ -119,9 +100,25 @@ jobs:
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
             -only-testing:FamilyAITests/CredentialStoreTests \
+            -parallel-testing-enabled NO \
+            -resultBundlePath /tmp/FamilyAI-credential-store-tests.xcresult \
+            test-without-building
+
+      - name: Run GatewayClientTests
+        id: gateway_client_tests
+        if: always() && steps.simulator.outcome == 'success'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/FamilyAI-gateway-client-tests.xcresult
+          xcodebuild -quiet \
+            -project clients/ios/FamilyAI.xcodeproj \
+            -scheme FamilyAI \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
             -only-testing:FamilyAITests/GatewayClientTests \
             -parallel-testing-enabled NO \
-            -resultBundlePath /tmp/FamilyAI-unit-group-a2.xcresult \
+            -resultBundlePath /tmp/FamilyAI-gateway-client-tests.xcresult \
             test-without-building
 
       - name: Summarize test results
@@ -129,13 +126,13 @@ jobs:
         run: |
           set -uo pipefail
           for RESULT in \
-            /tmp/FamilyAI-unit-group-a1.xcresult \
-            /tmp/FamilyAI-unit-group-a2.xcresult
+            /tmp/FamilyAI-credential-store-tests.xcresult \
+            /tmp/FamilyAI-gateway-client-tests.xcresult
           do
             if [[ -d "$RESULT" ]]; then
               echo "===== $RESULT ====="
               xcrun xcresulttool get test-results summary --path "$RESULT" || true
             fi
           done
-          echo "Group A1: ${{ steps.unit_group_a1.outcome }}"
-          echo "Group A2: ${{ steps.unit_group_a2.outcome }}"
+          echo "CredentialStoreTests: ${{ steps.credential_store_tests.outcome }}"
+          echo "GatewayClientTests: ${{ steps.gateway_client_tests.outcome }}"
