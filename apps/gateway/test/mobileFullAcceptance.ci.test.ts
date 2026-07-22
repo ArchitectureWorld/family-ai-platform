@@ -7,7 +7,7 @@ const shouldRun =
   process.env.GITHUB_HEAD_REF === "feature/mobile-pairing-gateway" &&
   existsSync(new URL("../../../.git", import.meta.url));
 
-const sharedTestsDockerfile = `
+const buildDockerfile = `
 FROM node:22.16.0-bookworm-slim
 RUN apt-get update \\
   && apt-get install -y --no-install-recommends python3 make g++ \\
@@ -20,21 +20,21 @@ COPY apps/gateway/package.json apps/gateway/package.json
 RUN npm ci
 COPY packages packages
 COPY apps apps
-RUN npm run build:adapter-sdk \\
-  && npm run test -w @family-ai/contracts \\
-  && npm run test -w @family-ai/provider-adapter-sdk
+RUN npm run typecheck \\
+  && npm run build \\
+  && npm prune --omit=dev
 `;
 
-describe.runIf(shouldRun)("Shared workspace Docker test isolation", () => {
+describe.runIf(shouldRun)("Docker typecheck and build isolation", () => {
   it(
-    "runs Contracts and Provider tests inside Docker",
+    "typechecks, builds, and prunes production dependencies inside Docker",
     () => {
       const result = spawnSync(
         "docker",
         ["build", "--progress=plain", "--file", "-", "."],
         {
           cwd: new URL("../../../", import.meta.url),
-          input: sharedTestsDockerfile,
+          input: buildDockerfile,
           encoding: "utf8",
           maxBuffer: 12 * 1024 * 1024,
           timeout: 10 * 60 * 1000,
@@ -42,7 +42,7 @@ describe.runIf(shouldRun)("Shared workspace Docker test isolation", () => {
         }
       );
       if (result.error || result.status !== 0) {
-        throw new Error(`docker-shared-tests:${result.status ?? "unknown"}`);
+        throw new Error(`docker-typecheck-build:${result.status ?? "unknown"}`);
       }
     },
     12 * 60 * 1000
