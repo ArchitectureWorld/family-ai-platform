@@ -73,7 +73,7 @@ export const pairingQrPayloadSchema = z
 export const pairingPreviewRequestSchema = z
   .object({
     protocolVersion: protocolVersionSchema,
-    pairingRef: pairingRefSchema,
+    pairingRef: pairingRefSchema.optional(),
     code: pairingCodeSchema
   })
   .strict();
@@ -102,7 +102,7 @@ export const mobileDeviceDescriptorSchema = z
 export const pairingClaimRequestSchema = z
   .object({
     protocolVersion: protocolVersionSchema,
-    pairingRef: pairingRefSchema,
+    pairingRef: pairingRefSchema.optional(),
     code: pairingCodeSchema,
     installationId: z.string().uuid(),
     deviceCredential: deviceCredentialSchema,
@@ -149,7 +149,7 @@ export const mobileOperationResponseSchema = z
 
 export const personalPortalContextSchema = z
   .object({
-    protocolVersion: protocolVersionSchema.optional(),
+    protocolVersion: protocolVersionSchema,
     audience: z.literal("personal"),
     entrySessionRef: entrySessionRefSchema,
     entryBindingRef: entryBindingRefSchema,
