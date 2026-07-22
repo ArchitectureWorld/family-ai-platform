@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
   PROTOCOL_VERSION,
   type MessageEnvelope,
-  type ProviderInvocationRequest
+  type ProviderInvocationRequest,
+  type PublicError
 } from "@family-ai/contracts";
 import type { ProviderAdapter } from "@family-ai/provider-adapter-sdk";
 import {
@@ -15,6 +16,8 @@ export class GatewayDomainError extends Error {
   constructor(
     readonly code: string,
     readonly statusCode: number,
+    readonly category: PublicError["category"],
+    readonly retryable: boolean,
     message: string
   ) {
     super(message);
@@ -81,6 +84,8 @@ function assertFixedRoute(device: AuthenticatedDevice, envelope: MessageEnvelope
     throw new GatewayDomainError(
       "FIXED_ROUTE_REQUIRED",
       403,
+      "permission",
+      false,
       "消息来源或目标不属于当前设备的固定个人助理。"
     );
   }
@@ -111,6 +116,8 @@ export class MessageService {
       throw new GatewayDomainError(
         "IDEMPOTENCY_CONFLICT",
         409,
+        "conflict",
+        false,
         "同一个幂等键已用于不同的请求内容。"
       );
     }
@@ -137,6 +144,8 @@ export class MessageService {
       throw new GatewayDomainError(
         "CONVERSATION_NOT_FOUND",
         404,
+        "permission",
+        false,
         "没有找到这个会话。"
       );
     }
@@ -175,10 +184,13 @@ export class MessageService {
         !providerResult.output?.[0] ||
         !providerResult.externalSessionRef
       ) {
-        const statusCode = providerResult.status === "timed_out" ? 504 : 502;
+        const timedOut = providerResult.status === "timed_out";
+        const statusCode = timedOut ? 504 : 502;
         throw new GatewayDomainError(
           providerResult.error?.code ?? "PROVIDER_UNAVAILABLE",
           statusCode,
+          providerResult.error?.category ?? (timedOut ? "timeout" : "availability"),
+          providerResult.error?.retryable ?? true,
           providerResult.error?.message ?? "个人助理暂时不可用，请稍后重试。"
         );
       }

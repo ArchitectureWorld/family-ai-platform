@@ -28,10 +28,7 @@ grep -Fq 'RUN npm run check' Dockerfile || {
   exit 1
 }
 
-grep -Fq 'node:22.16.0-bookworm-slim' scripts/verify-foundation.sh || {
-  printf 'Foundation verification must generate the lock with the verified Node image.\n' >&2
-  exit 1
-}
+bash scripts/test-verify-foundation-preflight.sh
 
 if grep -Eq 'command -v (node|npm)' scripts/verify-foundation.sh; then
   printf 'One-command verification must not require Node or npm on the host.\n' >&2

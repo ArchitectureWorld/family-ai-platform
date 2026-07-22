@@ -6,13 +6,15 @@
 
 1. [`00-family-ai-platform-stable-architecture.md`](./00-family-ai-platform-stable-architecture.md)：当前稳定总架构与系统边界；
 2. [`01-identity-and-binding.md`](./01-identity-and-binding.md)：Family、Person、Identity、EntryBinding、Device 与 AssistantAssignment；
-3. [`02-chat-work-domain.md`](./02-chat-work-domain.md)：Chat / Work 双模型、归档、转换和上下文边界；
-4. [`03-single-gateway-concurrency.md`](./03-single-gateway-concurrency.md)：单 Gateway、并行输入输出和局部有序执行；
-5. [`04-multi-terminal-strategy.md`](./04-multi-terminal-strategy.md)：Web、iOS、HarmonyOS 与 DIY 的 1+N 多终端策略。
+3. [`01a-family-manager-and-dual-entry.md`](./01a-family-manager-and-dual-entry.md)：家庭管家、FamilyManagerAssignment，以及同一 Person / Device 上的 Admin / Personal 双入口；
+4. [`02-chat-work-domain.md`](./02-chat-work-domain.md)：Chat / Work 双模型、归档、转换和上下文边界；
+5. [`03-single-gateway-concurrency.md`](./03-single-gateway-concurrency.md)：单 Gateway、并行输入输出和局部有序执行；
+6. [`04-multi-terminal-strategy.md`](./04-multi-terminal-strategy.md)：Web、iOS、HarmonyOS 与 DIY 的 1+N 多终端策略。
 
 ## 文档权威性
 
 - 本目录记录已经确认并稳定的架构结论；
+- `01a` 是对 `01` 中“个人助理分配”边界的正式补充：家庭管理必须读取 FamilyManagerAssignment，不能复用 Person 的 AssistantAssignment；
 - `docs/reviews/` 记录阶段性 Review、风险和建议，不直接替代本目录；
 - `docs/archive/` 保存讨论过程中形成的原始文档，不作为新开发的直接实现规格；
 - Foundation 设计、实现计划和验收记录继续保留在原有 `docs/superpowers/`、`docs/development/` 与 `docs/acceptance/` 目录。

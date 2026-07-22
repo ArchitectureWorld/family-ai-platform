@@ -29,19 +29,21 @@ describe("gateway database", () => {
     if (directory) rmSync(directory, { recursive: true, force: true });
   });
 
-  it("applies numbered migrations once and keeps foreign keys valid", () => {
+  it("applies numbered migrations once and starts the formal Family domain empty", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-db-"));
     const databasePath = join(directory, "gateway.sqlite");
     db = openGatewayDatabase(databasePath);
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
-    ).toEqual([{ version: 1 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }]);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM families").get()).toEqual({ count: 0 });
     expect(db.pragma("foreign_key_check")).toEqual([]);
     db.close();
     db = openGatewayDatabase(databasePath);
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
-    ).toEqual([{ version: 1 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }]);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM families").get()).toEqual({ count: 0 });
   });
 
   it("bootstraps missing development records without overwriting operational state", () => {

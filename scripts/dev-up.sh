@@ -89,11 +89,17 @@ cat <<EOF
 
 Family AI Gateway Foundation 已启动。
 
-体验验收页面：
+家庭初始化与双入口验收页面：
 $ACCEPTANCE_URL
 
-自动验收：
+完整一键验收：
+./scripts/verify-foundation.sh
+
+单独运行旧消息内核验收：
 ./scripts/acceptance.sh
+
+单独运行家庭初始化 API 验收：
+bash ./scripts/acceptance-onboarding.sh
 
 停止但保留数据：
 ./scripts/dev-down.sh

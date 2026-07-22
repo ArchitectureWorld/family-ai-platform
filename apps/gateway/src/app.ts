@@ -3,7 +3,8 @@ import { z } from "zod";
 import {
   PROTOCOL_VERSION,
   messageEnvelopeSchema,
-  type MessageEnvelope
+  type MessageEnvelope,
+  type PublicError
 } from "@family-ai/contracts";
 import {
   FakeProviderAdapter,
@@ -17,6 +18,8 @@ import {
   type DevelopmentBootstrapInput
 } from "./database.js";
 import { registerDevelopmentConsole } from "./developmentConsole.js";
+import { FamilyDomainRepository } from "./familyDomain.js";
+import { registerFamilyRoutes } from "./familyRoutes.js";
 import { GatewayDomainError, MessageService } from "./service.js";
 
 export type GatewayMode = "test" | "development" | "production";
@@ -45,17 +48,25 @@ const conversationSchema = z
   .object({ title: z.string().trim().min(1).max(80) })
   .strict();
 
+function errorBody(input: PublicError): PublicError {
+  return input;
+}
+
 function publicError(reply: FastifyReply, error: unknown) {
   if (error instanceof GatewayDomainError) {
-    return reply.code(error.statusCode).send({
+    return reply.code(error.statusCode).send(errorBody({
       code: error.code,
-      message: error.message
-    });
+      category: error.category,
+      message: error.message,
+      retryable: error.retryable
+    }));
   }
-  return reply.code(500).send({
+  return reply.code(500).send(errorBody({
     code: "GATEWAY_INTERNAL_ERROR",
-    message: "Family AI 暂时无法完成这个操作，请稍后重试。"
-  });
+    category: "internal",
+    message: "Family AI 暂时无法完成这个操作，请稍后重试。",
+    retryable: true
+  }));
 }
 
 function bearerToken(request: FastifyRequest): string | null {
@@ -71,15 +82,23 @@ function deviceRef(request: FastifyRequest): string | null {
 }
 
 export async function buildGatewayApp(options: BuildGatewayAppOptions) {
+  if (options.mode === "production" && !options.providerAdapter) {
+    throw new Error("production requires an explicit provider adapter");
+  }
+
   const app = Fastify({ logger: false });
   const db = openGatewayDatabase(options.databasePath);
-  const bootstrap: DevelopmentBootstrapInput = {
-    ...defaultBootstrap,
-    ...options.bootstrap,
-    deviceToken: options.deviceToken
-  };
-  runDevelopmentBootstrap(db, bootstrap);
+  if (options.mode !== "production") {
+    const bootstrap: DevelopmentBootstrapInput = {
+      ...defaultBootstrap,
+      ...options.bootstrap,
+      deviceToken: options.deviceToken
+    };
+    runDevelopmentBootstrap(db, bootstrap);
+  }
+
   const repository = new GatewayRepository(db);
+  const familyRepository = new FamilyDomainRepository(db);
   const providerAdapter = options.providerAdapter ?? new FakeProviderAdapter();
   const messageService = new MessageService(repository, providerAdapter);
 
@@ -92,16 +111,19 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     const token = bearerToken(request);
     const device = ref && token ? repository.authenticateDevice(ref, token) : null;
     if (!device) {
-      reply.code(401).send({
+      reply.code(401).send(errorBody({
         code: "DEVICE_AUTH_INVALID",
-        message: "设备编号或设备令牌不正确。"
-      });
+        category: "permission",
+        message: "设备编号或设备令牌不正确。",
+        retryable: false
+      }));
       return null;
     }
     return device;
   }
 
   registerDevelopmentConsole(app, options.mode);
+  registerFamilyRoutes(app, { familyRepository, gatewayRepository: repository });
 
   app.get("/health", async () => ({
     ok: true,
@@ -120,10 +142,12 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     if (!device) return;
     const parsed = conversationSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({
+      return reply.code(400).send(errorBody({
         code: "REQUEST_INVALID",
-        message: "会话标题不正确。"
-      });
+        category: "validation",
+        message: "会话标题不正确。",
+        retryable: false
+      }));
     }
     const conversation = repository.createConversation({
       memberRef: device.memberRef,
@@ -151,10 +175,12 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
       device.agentRef
     );
     if (!conversation) {
-      return reply.code(404).send({
+      return reply.code(404).send(errorBody({
         code: "CONVERSATION_NOT_FOUND",
-        message: "没有找到这个会话。"
-      });
+        category: "permission",
+        message: "没有找到这个会话。",
+        retryable: false
+      }));
     }
     return { conversation, messages: repository.listMessages(conversationRef) };
   });
@@ -164,10 +190,12 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     if (!device) return;
     const parsed = messageEnvelopeSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({
+      return reply.code(400).send(errorBody({
         code: "MESSAGE_INVALID",
-        message: "消息格式不正确。"
-      });
+        category: "validation",
+        message: "消息格式不正确。",
+        retryable: false
+      }));
     }
     const { conversationRef } = request.params as { conversationRef: string };
     try {
