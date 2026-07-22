@@ -1,0 +1,499 @@
+# iOS Mobile Entry Foundation Design
+
+**Status:** Approved
+
+**Date:** 2026-07-22
+
+## 1. Goal
+
+Build the first real iPhone personal entry for Family AI without waiting for Chat, Work, push notifications, or production Agent runtime.
+
+The first milestone must let a family administrator generate a short-lived pairing QR code for one member, let that member claim the identity on a physical iPhone, persist device and session credentials securely, restore the session after restart, renew expired sessions, protect the app with local authentication, and display a real personal portal context from the Gateway.
+
+## 2. Product boundary
+
+The iOS first version is a **personal entry only**.
+
+Included:
+
+- QR-code and manual pairing;
+- device registration and binding to one Person;
+- Personal EntrySession issuance and renewal;
+- Keychain credential persistence;
+- Face ID or device-passcode app lock;
+- real personal home using `GET /api/v1/portal/context`;
+- offline identity state;
+- logout and device unbinding.
+
+Excluded:
+
+- family creation;
+- member administration;
+- administrator entry in iOS;
+- mock Chat messages;
+- Work;
+- push notifications;
+- phone-number verification;
+- TestFlight or App Store delivery;
+- public Internet exposure.
+
+Family creation, member management, pairing-code generation, device listing, and administrator revocation remain in the Web administration interface.
+
+## 3. Repository and technology baseline
+
+The iOS application lives in the existing monorepo:
+
+```text
+family-ai-platform/
+├── apps/gateway/
+├── clients/ios/
+├── packages/contracts/
+└── docs/
+```
+
+The iOS project is not part of npm workspaces.
+
+Technology baseline:
+
+- minimum iOS version: iOS 17;
+- UI: SwiftUI;
+- state observation: Observation;
+- concurrency: Swift Concurrency;
+- networking: URLSession;
+- secure storage: Keychain Services;
+- QR scanning: AVFoundation;
+- local authentication: LocalAuthentication;
+- dependency policy: Apple frameworks first; no Redux, Composable Architecture, third-party networking, or local database in this milestone.
+
+## 4. Network path
+
+Physical-iPhone development uses a private Tailscale path:
+
+```text
+Family AI iOS
+→ Tailscale private network
+→ Tailscale Serve HTTPS
+→ Gateway 127.0.0.1:8790
+```
+
+Rules:
+
+- Gateway continues to bind only to loopback;
+- Tailscale Funnel is forbidden;
+- port 8790 is not exposed directly to the LAN or public Internet;
+- Tailscale provides reachability only, not Family AI identity or authorization;
+- the Gateway host name must not contain a real name, address, or other private information;
+- the recommended node name is `family-ai-gateway`.
+
+## 5. Pairing flow
+
+The administrator selects a member in the Web member-management page and generates a pairing code.
+
+```text
+Web administrator selects Person
+→ Gateway creates one-time pairing material
+→ Web shows QR code and manual code
+→ iPhone scans or enters the code
+→ iPhone requests a non-consuming preview
+→ iPhone displays family, person, Gateway host, and device name
+→ user confirms on iPhone
+→ iPhone creates installationId and deviceCredential
+→ Gateway atomically consumes the code and creates mobile identity records
+→ Gateway returns a seven-day Personal EntrySession
+→ iOS writes credentials to Keychain
+→ iOS loads real portal context
+```
+
+Pairing-code rules:
+
+- bound to exactly one `familyRef + personRef`;
+- five-minute lifetime;
+- one successful consumption;
+- maximum five failed attempts;
+- generated only by a `family_admin` entry;
+- cannot create a `family_admin` binding;
+- successful claim immediately invalidates the code;
+- administrator can revoke an unused code;
+- multiple personal devices may be bound to one Person;
+- repeated claim with the same installation identity and device credential is idempotent.
+
+## 6. QR payload
+
+The QR code uses a versioned custom URL:
+
+```text
+familyai://pair#v=1&gateway=<https-url>&pairingRef=<ref>&code=<code>&expiresAt=<timestamp>
+```
+
+The secret-bearing values are placed in the URL fragment so they are not sent to a generic HTTP server by URL resolution.
+
+Validation rules:
+
+- scheme must be `familyai`;
+- host must be `pair`;
+- protocol version must be `1`;
+- Gateway URL must use HTTPS;
+- Gateway URL must not contain username, password, query, or fragment;
+- production code must not hard-code a personal Tailnet address;
+- the Web UI must not log or persist the complete QR payload.
+
+## 7. Credential model
+
+Three independent values are required:
+
+### 7.1 installationId
+
+- random UUID generated on first app launch;
+- stored in Keychain;
+- identifies one app installation;
+- is not an authentication secret;
+- must not be derived from a phone number, serial number, IDFV, advertising identifier, or hardware fingerprint.
+
+### 7.2 deviceCredential
+
+- 32 cryptographically random bytes generated by iOS;
+- stored only in iPhone Keychain as plaintext;
+- sent to Gateway only over HTTPS during claim and device-authenticated calls;
+- stored by Gateway only as SHA-256;
+- remains valid until local unbind, administrator revocation, or device-loss revocation;
+- cannot access personal business data directly;
+- can only renew a Personal EntrySession, inspect device authorization state, or unbind the current device.
+
+### 7.3 Personal EntrySession
+
+- seven-day lifetime;
+- token stored in iPhone Keychain and only as a hash in Gateway SQLite;
+- used for portal and future personal-business APIs;
+- silently renewed with the device credential;
+- all prior active personal sessions for the same device are revoked when a new one is issued.
+
+## 8. Authentication headers
+
+Personal entry authentication:
+
+```http
+Authorization: Bearer <entrySessionToken>
+X-Entry-Session-Ref: <entrySessionRef>
+```
+
+Device authentication:
+
+```http
+Authorization: Device <deviceCredential>
+X-Device-Ref: <deviceRef>
+```
+
+The two authentication modes must not be accepted interchangeably.
+
+## 9. API contract
+
+All mobile-entry request and response bodies carry `protocolVersion: 1`.
+
+Administrator APIs:
+
+```text
+POST   /api/v1/admin/members/{personRef}/pairing-codes
+DELETE /api/v1/admin/pairing-codes/{pairingRef}
+DELETE /api/v1/admin/devices/{deviceRef}
+```
+
+Mobile public pairing APIs:
+
+```text
+POST /api/v1/mobile/pairing/preview
+POST /api/v1/mobile/pairing/claim
+```
+
+Mobile authenticated APIs:
+
+```text
+POST   /api/v1/mobile/session/renew
+POST   /api/v1/mobile/session/logout
+DELETE /api/v1/mobile/device
+```
+
+Existing personal context API:
+
+```text
+GET /api/v1/portal/context
+```
+
+The TypeScript schemas and JSON fixtures in `packages/contracts` are the protocol source of truth. Swift models must match those fixtures exactly.
+
+## 10. Database migration V3
+
+Add `mobile_pairing_codes` with:
+
+```text
+pairing_ref
+family_ref
+person_ref
+code_hash
+status
+failed_attempts
+max_attempts
+expires_at
+created_by_entry_binding_ref
+created_at
+consumed_at
+consumed_device_ref
+revoked_at
+```
+
+Allowed status values:
+
+```text
+active
+consumed
+revoked
+expired
+```
+
+Extend `managed_devices` with:
+
+```text
+installation_ref
+system_version
+app_version
+device_model
+last_seen_at
+```
+
+Storage rules:
+
+- `installation_ref = SHA-256(installationId)`;
+- `credential_hash = SHA-256(deviceCredential)`;
+- pairing codes, device credentials, and session tokens must never be stored in plaintext;
+- migrations must remain forward-only and transactional;
+- the existing V2 family identity model remains intact.
+
+## 11. Gateway transaction boundaries
+
+A successful claim is one SQLite transaction:
+
+```text
+validate pairing code
+→ verify active family membership and personal-assistant assignment
+→ resolve idempotent retry
+→ create ManagedDevice
+→ create person-scoped DeviceBinding
+→ create personal EntryBinding
+→ create seven-day EntrySession
+→ mark pairing code consumed
+```
+
+Any failure rolls back all records and does not consume the pairing code unless the failure is an invalid-code attempt that increments `failed_attempts`.
+
+Device revocation is also transactional:
+
+```text
+revoke all EntrySessions
+→ revoke EntryBindings
+→ revoke DeviceBinding
+→ mark ManagedDevice revoked
+```
+
+## 12. Stable error codes
+
+The iOS client uses codes, never localized messages, for state decisions.
+
+Required codes:
+
+- `PAIRING_INVALID`;
+- `PAIRING_EXPIRED`;
+- `PAIRING_CONSUMED`;
+- `PAIRING_ATTEMPTS_EXCEEDED`;
+- `PAIRING_TARGET_INACTIVE`;
+- `DEVICE_AUTH_INVALID`;
+- `DEVICE_REVOKED`;
+- `ENTRY_SESSION_EXPIRED`;
+- `ENTRY_SESSION_INVALID`;
+- `ENTRY_AUDIENCE_FORBIDDEN`;
+- `PROTOCOL_VERSION_UNSUPPORTED`.
+
+Transport unavailability is mapped locally to `GATEWAY_UNREACHABLE`; it is not a server error code.
+
+## 13. iOS architecture
+
+```text
+FamilyAI/
+├── App/
+│   ├── FamilyAIApp.swift
+│   ├── AppEnvironment.swift
+│   └── AppCoordinator.swift
+├── Features/
+│   ├── Pairing/
+│   ├── PersonalHome/
+│   ├── AppLock/
+│   └── Settings/
+├── Core/
+│   ├── Networking/
+│   ├── Authentication/
+│   ├── Security/
+│   ├── Persistence/
+│   ├── Models/
+│   └── Diagnostics/
+└── Resources/
+```
+
+Feature code cannot directly access Keychain or assemble authentication headers. Those operations are owned by `CredentialStore`, `GatewayClient`, and `SessionManager`.
+
+## 14. App state machine
+
+```swift
+enum AppState {
+    case launching
+    case needsPairing
+    case pairing(PairingState)
+    case restoringSession
+    case locked
+    case authenticated(PersonalContext)
+    case offline(CachedPersonalContext?)
+    case authorizationRevoked
+    case fatalConfigurationError
+}
+```
+
+Startup behavior:
+
+```text
+read Gateway profile and Keychain
+→ no device authorization: needsPairing
+→ valid session: fetch portal context
+→ expired or invalid session: renew once with device credential
+→ revoked device: clear authorization and return to pairing
+→ unreachable Gateway: preserve credentials and enter offline state
+```
+
+Concurrent session renewal is serialized by an `actor SessionManager` so only one renewal request can be active.
+
+## 15. Keychain lifecycle
+
+Store:
+
+```text
+installationId
+gatewayBaseURL
+deviceRef
+deviceCredential
+entryBindingRef
+entrySessionRef
+entrySessionToken
+entrySessionExpiresAt
+```
+
+Rules:
+
+- logout removes only session credentials;
+- local unbind removes device and session credentials but may retain installationId;
+- administrator revocation removes all device and session authorization on the next server response;
+- new session credentials are written completely before old credentials are removed;
+- credentials are never written to UserDefaults, logs, crash metadata, fixtures, screenshots, or repository files.
+
+## 16. Local app lock
+
+Default policy:
+
+```text
+background ≤ 5 minutes → restore directly
+background > 5 minutes → Face ID or device passcode
+```
+
+Rules:
+
+- use `LocalAuthentication`;
+- cancellation leaves the app locked;
+- unbinding requires a fresh system authentication;
+- an opaque privacy cover is displayed before entering background;
+- biometric data never leaves iOS;
+- local lock does not revoke server sessions.
+
+## 17. Personal home
+
+The first home page uses only real `portal/context` data:
+
+- family display name;
+- person display name;
+- family role;
+- personal-assistant display name and status;
+- current device display name;
+- Gateway connectivity;
+- session expiration state;
+- Chat unavailable state.
+
+The empty Chat copy is:
+
+```text
+个人助理入口已建立
+Chat 服务将在下一阶段接入
+```
+
+No mock Chat, Work, push, Agent response, or offline message queue is permitted in this milestone.
+
+## 18. Offline behavior
+
+When Gateway is unreachable:
+
+- preserve all credentials;
+- display the last successful non-sensitive personal context;
+- show an explicit offline and stale-data indicator;
+- do not interpret network failure as logout or revocation.
+
+Allowed cache fields:
+
+- display names;
+- family role;
+- device display name;
+- last successful synchronization time.
+
+Credentials, pairing material, administrator data, and future Chat messages are not part of this cache.
+
+## 19. Testing
+
+Gateway tests must prove:
+
+- expired, consumed, revoked, and exhausted codes cannot be claimed;
+- non-admin entries cannot generate codes;
+- claims can only create personal entries;
+- repeated identical claim is idempotent;
+- revoked devices cannot renew;
+- only one active personal session remains after renewal;
+- database rows contain no plaintext credential material;
+- claim and revocation transactions roll back on failure.
+
+iOS tests must prove:
+
+- QR parser rejects unsafe and malformed URLs;
+- Gateway errors map to stable client states;
+- Keychain lifecycle follows logout and unbind rules;
+- session renewal is serialized;
+- app state transitions are deterministic;
+- device revocation clears authorization;
+- offline transport errors preserve authorization;
+- local lock timeout and privacy-cover behavior are correct.
+
+Physical-device acceptance must prove:
+
+- Tailscale Serve HTTPS is reachable;
+- camera scanning works;
+- pairing binds the intended Person;
+- credentials survive process termination;
+- expired sessions renew silently;
+- Face ID or device passcode unlocks after five minutes;
+- stopped Gateway produces offline state, not logout;
+- administrator revocation returns the iPhone to pairing.
+
+## 20. Delivery structure
+
+Development is delivered as stacked, reviewable pull requests:
+
+1. **PR 0 — Mobile Entry Contract v1:** this design, schemas, fixtures, and plans;
+2. **PR 1 — Gateway Mobile Pairing:** migration, pairing, session, Web administration, and tests;
+3. **PR 2 — iOS Mobile Entry Foundation:** Xcode project, features, security, networking, and tests;
+4. **PR 3 — Mobile Entry E2E:** Tailscale setup documentation and physical-iPhone acceptance evidence.
+
+Public-repository hardening is an independent security PR and must land before real mobile credentials are used outside synthetic test data.
+
+## 21. Definition of done
+
+The milestone is complete only when an administrator can generate a five-minute QR code for one member, a physical iPhone can claim it through Tailscale HTTPS, the Gateway creates the correct person-scoped device and personal entry, the app restores and renews its session from Keychain, the personal home displays real context, local authentication protects the UI, network loss is represented as offline, and administrator revocation forces the app back to pairing.
