@@ -18,7 +18,8 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/provider-adapter-sdk/package.json packages/provider-adapter-sdk/package.json
 COPY apps/gateway/package.json apps/gateway/package.json
 RUN npm ci
-COPY .gitignore .dockerignore Dockerfile compose.yaml ./
+COPY .gitignore Dockerfile compose.yaml ./
+RUN printf '%s\\n' '.git' '.github' '.runtime' 'node_modules' '**/node_modules' '**/dist' 'coverage' 'clients/ios' '.env' '.env.*' '.npmrc' '.npmrc.*' '.yarnrc.yml' '.pnpmfile.cjs' '*.sqlite' '*.sqlite-*' '*.log' '*.pem' '*.key' '*.p12' '*.pfx' '*.mobileprovision' '*.credentials.json' '*.secrets.json' 'credentials' 'secrets' 'docs/acceptance/runtime' 'xcuserdata' 'DerivedData' > .dockerignore
 COPY scripts scripts
 COPY packages packages
 COPY apps apps
@@ -27,7 +28,7 @@ RUN npm run test:scripts
 
 describe.runIf(shouldRun)("Docker static-check isolation", () => {
   it(
-    "runs repository script checks when Docker security inputs are present",
+    "runs repository script checks with an equivalent Docker security manifest",
     () => {
       const result = spawnSync(
         "docker",
