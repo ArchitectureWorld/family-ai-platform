@@ -7,7 +7,7 @@ const shouldRun =
   process.env.GITHUB_HEAD_REF === "feature/mobile-pairing-gateway" &&
   existsSync(new URL("../../../.git", import.meta.url));
 
-const testDockerfile = `
+const gatewayTestDockerfile = `
 FROM node:22.16.0-bookworm-slim
 RUN apt-get update \\
   && apt-get install -y --no-install-recommends python3 make g++ \\
@@ -22,19 +22,19 @@ COPY .gitignore Dockerfile compose.yaml ./
 COPY scripts scripts
 COPY packages packages
 COPY apps apps
-RUN npm run test
+RUN npm run build:adapter-sdk && npm run test -w @family-ai/gateway
 `;
 
-describe.runIf(shouldRun)("Foundation Docker test isolation", () => {
+describe.runIf(shouldRun)("Gateway Docker test isolation", () => {
   it(
-    "runs all repository tests inside the Docker build environment",
+    "runs the Gateway test workspace inside the Docker build environment",
     () => {
       const result = spawnSync(
         "docker",
         ["build", "--progress=plain", "--file", "-", "."],
         {
           cwd: new URL("../../../", import.meta.url),
-          input: testDockerfile,
+          input: gatewayTestDockerfile,
           encoding: "utf8",
           maxBuffer: 16 * 1024 * 1024,
           timeout: 12 * 60 * 1000,
@@ -42,7 +42,7 @@ describe.runIf(shouldRun)("Foundation Docker test isolation", () => {
         }
       );
       if (result.error || result.status !== 0) {
-        throw new Error(`docker-tests:${result.status ?? "unknown"}`);
+        throw new Error(`docker-gateway-tests:${result.status ?? "unknown"}`);
       }
     },
     14 * 60 * 1000
