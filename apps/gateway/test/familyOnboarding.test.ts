@@ -29,7 +29,15 @@ function expectPublicError(
   response: { json(): unknown },
   expected: { code: string; category: string; retryable: boolean }
 ) {
-  expect(response.json()).toMatchObject({
+  const body = response.json() as {
+    error?: { code: string; category: string; message: string; retryable: boolean };
+    code?: string;
+    category?: string;
+    message?: string;
+    retryable?: boolean;
+  };
+  const error = body.error ?? body;
+  expect(error).toMatchObject({
     code: expected.code,
     category: expected.category,
     message: expect.any(String),
@@ -139,6 +147,7 @@ describe("Family onboarding and dual-entry sessions", () => {
     });
     expect(adminContext.statusCode).toBe(200);
     expect(adminContext.json()).toMatchObject({
+      protocolVersion: 1,
       audience: "family_admin",
       entrySessionRef: admin.entrySessionRef,
       family: { familyRef: result.family.familyRef, displayName: "测试家庭" },
@@ -156,6 +165,7 @@ describe("Family onboarding and dual-entry sessions", () => {
     });
     expect(personalContext.statusCode).toBe(200);
     expect(personalContext.json()).toMatchObject({
+      protocolVersion: 1,
       audience: "personal",
       entrySessionRef: personal.entrySessionRef,
       family: { familyRef: result.family.familyRef },
@@ -303,6 +313,7 @@ describe("Family onboarding and dual-entry sessions", () => {
       });
       expect(context.statusCode).toBe(200);
       expect(context.json()).toMatchObject({
+        protocolVersion: 1,
         entrySessionRef: entry.entrySessionRef,
         person: { personRef: result.owner.personRef },
         device: { deviceRef: result.device.deviceRef },

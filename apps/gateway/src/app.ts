@@ -1,8 +1,11 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  MOBILE_ENTRY_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   messageEnvelopeSchema,
+  mobileGatewayErrorCodeSchema,
+  mobileGatewayErrorSchema,
   type MessageEnvelope,
   type PublicError
 } from "@family-ai/contracts";
@@ -18,8 +21,12 @@ import {
   type DevelopmentBootstrapInput
 } from "./database.js";
 import { registerDevelopmentConsole } from "./developmentConsole.js";
+import { EntrySessionAuthenticator } from "./entrySessionAuth.js";
 import { FamilyDomainRepository } from "./familyDomain.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
+import { MobileDeviceSummaryRepository } from "./mobileDeviceSummary.js";
+import { MobilePairingRepository } from "./mobilePairing.js";
+import { registerMobileRoutes } from "./mobileRoutes.js";
 import { GatewayDomainError, MessageService } from "./service.js";
 
 export type GatewayMode = "test" | "development" | "production";
@@ -52,13 +59,51 @@ function errorBody(input: PublicError): PublicError {
   return input;
 }
 
-function publicError(reply: FastifyReply, error: unknown) {
+function mobileErrorRoute(request: FastifyRequest): boolean {
+  const path = request.url.split("?", 1)[0] ?? request.url;
+  const deviceAuthorization = request.headers.authorization?.startsWith("Device ") ?? false;
+  return deviceAuthorization ||
+    path.startsWith("/api/v1/mobile/") ||
+    path === "/api/v1/portal/context" ||
+    path.startsWith("/api/v1/admin/pairing-codes/") ||
+    path.startsWith("/api/v1/admin/devices/") ||
+    /^\/api\/v1\/admin\/members\/[^/]+\/pairing-codes$/.test(path);
+}
+
+function publicError(request: FastifyRequest, reply: FastifyReply, error: unknown) {
   if (error instanceof GatewayDomainError) {
+    if (
+      mobileErrorRoute(request) &&
+      mobileGatewayErrorCodeSchema.safeParse(error.code).success
+    ) {
+      return reply.code(error.statusCode).send(mobileGatewayErrorSchema.parse({
+        protocolVersion: MOBILE_ENTRY_PROTOCOL_VERSION,
+        error: {
+          code: error.code,
+          category: error.category,
+          message: error.message,
+          retryable: error.retryable,
+          requestId: `request:${String(request.id)}`
+        }
+      }));
+    }
     return reply.code(error.statusCode).send(errorBody({
       code: error.code,
       category: error.category,
       message: error.message,
       retryable: error.retryable
+    }));
+  }
+  if (mobileErrorRoute(request)) {
+    return reply.code(500).send(mobileGatewayErrorSchema.parse({
+      protocolVersion: MOBILE_ENTRY_PROTOCOL_VERSION,
+      error: {
+        code: "PAIRING_INVALID",
+        category: "internal",
+        message: "Family AI 暂时无法完成这个操作，请稍后重试。",
+        retryable: true,
+        requestId: `request:${String(request.id)}`
+      }
     }));
   }
   return reply.code(500).send(errorBody({
@@ -99,6 +144,9 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
 
   const repository = new GatewayRepository(db);
   const familyRepository = new FamilyDomainRepository(db);
+  const entryAuthenticator = new EntrySessionAuthenticator(db, familyRepository);
+  const mobileDeviceSummaryRepository = new MobileDeviceSummaryRepository(db);
+  const mobileRepository = new MobilePairingRepository(db);
   const providerAdapter = options.providerAdapter ?? new FakeProviderAdapter();
   const messageService = new MessageService(repository, providerAdapter);
 
@@ -123,7 +171,13 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   }
 
   registerDevelopmentConsole(app, options.mode);
-  registerFamilyRoutes(app, { familyRepository, gatewayRepository: repository });
+  registerFamilyRoutes(app, {
+    familyRepository,
+    gatewayRepository: repository,
+    entryAuthenticator,
+    mobileDeviceSummaryRepository
+  });
+  registerMobileRoutes(app, { mobileRepository, entryAuthenticator });
 
   app.get("/health", async () => ({
     ok: true,
@@ -206,11 +260,11 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
       });
       return reply.code(result.statusCode).send(result.body);
     } catch (error) {
-      return publicError(reply, error);
+      return publicError(request, reply, error);
     }
   });
 
-  app.setErrorHandler((error, _request, reply) => publicError(reply, error));
+  app.setErrorHandler((error, request, reply) => publicError(request, reply, error));
 
   return app;
 }
