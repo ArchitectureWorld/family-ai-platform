@@ -1,0 +1,4 @@
+title = "Family AI Platform secret scanning"
+
+[extend]
+useDefault = true
