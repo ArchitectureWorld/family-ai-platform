@@ -25,14 +25,15 @@ RUN rm apps/gateway/test/mobileFullAcceptance.ci.test.ts; \\
       .env|.env.*|.npmrc|.npmrc.*|*.pem|*.key|*.p12|*.pfx|*.mobileprovision|*.sqlite|*.sqlite-*|*.credentials.json|*.secrets.json|*/Local.xcconfig|*/xcuserdata/*|*/DerivedData/*|.runtime/*|docs/acceptance/runtime/*) exit 11 ;; \\
     esac; \\
   done < <(git ls-files 2>/dev/null || true); \\
-  for forbidden in 'agent-control-center.sqlite' '/home/youran/' 'family-ai-platform-legacy/data'; do \\
+  for encoded in 'YWdlbnQtY29udHJvbC1jZW50ZXIuc3FsaXRl' 'L2hvbWUveW91cmFuLw==' 'ZmFtaWx5LWFpLXBsYXRmb3JtLWxlZ2FjeS9kYXRh'; do \\
+    forbidden="$(printf '%s' "$encoded" | base64 -d)"; \\
     if grep -R --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.runtime --exclude-dir=coverage --exclude='*.md' --exclude='static-check.sh' -Fq "$forbidden" apps packages scripts Dockerfile compose.yaml package.json tsconfig.base.json 2>/dev/null; then exit 12; fi; \\
   done
 `;
 
 describe.runIf(shouldRun)("Docker sensitive-file scan isolation", () => {
   it(
-    "runs tracked-file and forbidden-reference scans",
+    "runs tracked-file and forbidden-reference scans without self-contamination",
     () => {
       const result = spawnSync(
         "docker",
