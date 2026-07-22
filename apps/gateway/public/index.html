@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="light dark" />
   <title>家庭 AI 初始化与入口验收台</title>
   <link rel="stylesheet" href="/acceptance.css" />
+  <link rel="stylesheet" href="/mobile-acceptance.css" />
 </head>
 <body>
   <main class="shell">
@@ -13,7 +14,7 @@
       <div>
         <p class="eyebrow">FAMILY AI PLATFORM · FAMILY FOUNDATION</p>
         <h1>家庭 AI 初始化与入口验收台</h1>
-        <p class="subtitle">不用命令行配置账号。先创建一个家庭，再分别验证“家庭管理”和“个人空间”是否进入正确的 Agent。</p>
+        <p class="subtitle">不用命令行配置账号。可以点击一次完成 Mobile Entry 全流程体验验收，也可以继续按真实用户步骤手动体验。</p>
       </div>
       <div id="connection" class="status neutral">正在连接 Gateway</div>
     </header>
@@ -25,6 +26,21 @@
     </section>
 
     <section id="setupView" class="panel hidden">
+      <div id="mobileAcceptanceRunner" class="acceptance-runner">
+        <div class="acceptance-runner-header">
+          <div>
+            <p class="eyebrow">BEGINNER ONE-CLICK ACCEPTANCE</p>
+            <h2>一键体验验收</h2>
+            <p>只点击一次。页面会自动创建体验家庭、模拟 iPhone 配对、验证个人入口、解绑和远程撤销，并生成中文报告。</p>
+          </div>
+          <button id="runMobileAcceptance" class="primary acceptance-primary-action" type="button">开始一键体验验收</button>
+        </div>
+        <ul id="mobileAcceptanceSteps" class="acceptance-step-list" aria-live="polite"></ul>
+        <div id="mobileAcceptanceReport" class="acceptance-report hidden" aria-live="polite"></div>
+      </div>
+
+      <div class="acceptance-manual-divider">或手动逐步体验</div>
+
       <div class="section-title">
         <span class="step">1</span>
         <div>
@@ -201,5 +217,6 @@
     <footer>该页面只在本机 development 模式启用，用于确认正式 Family / Person / Entry 领域闭环。</footer>
   </main>
   <script type="module" src="/acceptance.js"></script>
+  <script type="module" src="/mobileAcceptance.js"></script>
 </body>
 </html>
