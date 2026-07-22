@@ -93,7 +93,6 @@ jobs:
 
       - name: Run unit tests
         id: unit_tests
-        continue-on-error: true
         run: |
           set -euo pipefail
           rm -rf /tmp/FamilyAI-unit-tests.xcresult
@@ -115,7 +114,7 @@ jobs:
 
       - name: Run UI tests
         id: ui_tests
-        continue-on-error: true
+        if: always() && steps.simulator.outcome == 'success'
         run: |
           set -euo pipefail
           rm -rf /tmp/FamilyAI-ui-tests.xcresult
@@ -151,8 +150,3 @@ jobs:
 
           echo "Unit tests: ${{ steps.unit_tests.outcome }}"
           echo "UI tests: ${{ steps.ui_tests.outcome }}"
-
-          if [[ "${{ steps.unit_tests.outcome }}" != "success" ]] || \
-             [[ "${{ steps.ui_tests.outcome }}" != "success" ]]; then
-            exit 1
-          fi
