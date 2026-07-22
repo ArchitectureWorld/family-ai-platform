@@ -199,6 +199,36 @@ CREATE INDEX entry_sessions_binding_status_idx
   ON entry_sessions(entry_binding_ref, status, expires_at);
 `;
 
+const MIGRATION_V3 = `
+ALTER TABLE managed_devices ADD COLUMN installation_ref TEXT;
+ALTER TABLE managed_devices ADD COLUMN system_version TEXT;
+ALTER TABLE managed_devices ADD COLUMN app_version TEXT;
+ALTER TABLE managed_devices ADD COLUMN device_model TEXT;
+ALTER TABLE managed_devices ADD COLUMN last_seen_at TEXT;
+CREATE UNIQUE INDEX managed_device_installation_idx
+  ON managed_devices(installation_ref)
+  WHERE installation_ref IS NOT NULL;
+CREATE TABLE mobile_pairing_codes (
+  pairing_ref TEXT PRIMARY KEY,
+  family_ref TEXT NOT NULL REFERENCES families(family_ref) ON DELETE CASCADE,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK (status IN ('active', 'consumed', 'revoked', 'expired')),
+  failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+  max_attempts INTEGER NOT NULL CHECK (max_attempts > 0),
+  expires_at TEXT NOT NULL,
+  created_by_entry_binding_ref TEXT NOT NULL REFERENCES entry_bindings(entry_binding_ref),
+  created_at TEXT NOT NULL,
+  consumed_at TEXT,
+  consumed_device_ref TEXT REFERENCES managed_devices(device_ref),
+  revoked_at TEXT
+);
+CREATE INDEX mobile_pairing_target_status_idx
+  ON mobile_pairing_codes(family_ref, person_ref, status, expires_at);
+CREATE INDEX mobile_pairing_expiry_idx
+  ON mobile_pairing_codes(status, expires_at);
+`;
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -220,7 +250,7 @@ function applyMigrations(db: GatewayDatabase): void {
   }
 
   let latest = latestMigrationVersion(db);
-  if (latest > 2 || latest < 1) {
+  if (latest > 3 || latest < 1) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
   if (latest === 1) {
@@ -232,7 +262,16 @@ function applyMigrations(db: GatewayDatabase): void {
     })();
     latest = 2;
   }
-  if (latest !== 2) {
+  if (latest === 2) {
+    db.transaction(() => {
+      db.exec(MIGRATION_V3);
+      db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES(3, ?)").run(
+        new Date().toISOString()
+      );
+    })();
+    latest = 3;
+  }
+  if (latest !== 3) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
