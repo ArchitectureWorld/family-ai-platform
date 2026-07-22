@@ -6,17 +6,18 @@
 
 ## 1. Goal
 
-Build the first real iPhone personal entry for Family AI without waiting for Chat, Work, push notifications, or production Agent runtime.
+Build the first real iPhone personal entry for Family AI without waiting for Chat, Work, push notifications, or the production Agent runtime.
 
-The first milestone must let a family administrator generate a short-lived pairing QR code for one member, let that member claim the identity on a physical iPhone, persist device and session credentials securely, restore the session after restart, renew expired sessions, protect the app with local authentication, and display a real personal portal context from the Gateway.
+The first milestone must let a family administrator generate short-lived pairing material for one member, let that member claim the intended Person on a physical iPhone, persist device and session credentials securely, restore and renew the session, protect local UI access, and display a real personal portal context from the Gateway.
 
 ## 2. Product boundary
 
-The iOS first version is a **personal entry only**.
+The first iOS version is a **personal entry only**.
 
 Included:
 
-- QR-code and manual pairing;
+- QR-code pairing;
+- manual Gateway-address and short-code pairing;
 - device registration and binding to one Person;
 - Personal EntrySession issuance and renewal;
 - Keychain credential persistence;
@@ -51,7 +52,7 @@ family-ai-platform/
 └── docs/
 ```
 
-The iOS project is not part of npm workspaces.
+The iOS project is independent of npm workspaces.
 
 Technology baseline:
 
@@ -63,7 +64,8 @@ Technology baseline:
 - secure storage: Keychain Services;
 - QR scanning: AVFoundation;
 - local authentication: LocalAuthentication;
-- dependency policy: Apple frameworks first; no Redux, Composable Architecture, third-party networking, or local database in this milestone.
+- dependency policy: Apple frameworks first;
+- no Redux, Composable Architecture, third-party networking framework, or local database in this milestone.
 
 ## 4. Network path
 
@@ -87,13 +89,13 @@ Rules:
 
 ## 5. Pairing flow
 
-The administrator selects a member in the Web member-management page and generates a pairing code.
+The administrator selects a member in the Web member-management page and generates pairing material.
 
 ```text
 Web administrator selects Person
 → Gateway creates one-time pairing material
-→ Web shows QR code and manual code
-→ iPhone scans or enters the code
+→ Web shows QR code and manual short code
+→ iPhone scans the QR or enters Gateway HTTPS address + short code
 → iPhone requests a non-consuming preview
 → iPhone displays family, person, Gateway host, and device name
 → user confirms on iPhone
@@ -115,9 +117,12 @@ Pairing-code rules:
 - successful claim immediately invalidates the code;
 - administrator can revoke an unused code;
 - multiple personal devices may be bound to one Person;
-- repeated claim with the same installation identity and device credential is idempotent.
+- repeated claim with the same installation identity and device credential is idempotent;
+- generated short codes must be globally unique while active; collisions are regenerated before persistence.
 
-## 6. QR payload
+## 6. QR and manual pairing payloads
+
+### 6.1 QR mode
 
 The QR code uses a versioned custom URL:
 
@@ -127,7 +132,7 @@ familyai://pair#v=1&gateway=<https-url>&pairingRef=<ref>&code=<code>&expiresAt=<
 
 The secret-bearing values are placed in the URL fragment so they are not sent to a generic HTTP server by URL resolution.
 
-Validation rules:
+QR validation rules:
 
 - scheme must be `familyai`;
 - host must be `pair`;
@@ -135,11 +140,32 @@ Validation rules:
 - Gateway URL must use HTTPS;
 - Gateway URL must not contain username, password, query, or fragment;
 - production code must not hard-code a personal Tailnet address;
-- the Web UI must not log or persist the complete QR payload.
+- the Web UI and iOS diagnostics must not log or persist the complete QR payload.
+
+### 6.2 Manual mode
+
+The manual screen requires:
+
+```text
+Gateway HTTPS address
++ short pairing code
+```
+
+The user is never asked to type or discover an opaque `pairingRef`.
+
+For `pairing/preview` and `pairing/claim`:
+
+- `code` is required;
+- `pairingRef` is optional;
+- QR mode supplies both `pairingRef` and `code`;
+- manual mode supplies only `code`;
+- when `pairingRef` is present, Gateway must verify that the ref and code identify the same active pairing record;
+- when `pairingRef` is absent, Gateway resolves the active record by the unique code hash;
+- a mismatched ref and code is `PAIRING_INVALID` and counts as a failed attempt according to the pairing policy.
 
 ## 7. Credential model
 
-Three independent values are required:
+Three independent values are required.
 
 ### 7.1 installationId
 
@@ -187,7 +213,7 @@ The two authentication modes must not be accepted interchangeably.
 
 ## 9. API contract
 
-All mobile-entry request and response bodies carry `protocolVersion: 1`.
+All mobile-entry request and response bodies, including the personal portal context consumed by iOS, carry required `protocolVersion: 1`.
 
 Administrator APIs:
 
@@ -204,6 +230,25 @@ POST /api/v1/mobile/pairing/preview
 POST /api/v1/mobile/pairing/claim
 ```
 
+Code-only manual request shape:
+
+```json
+{
+  "protocolVersion": 1,
+  "code": "ABCD-EFGH"
+}
+```
+
+QR-derived request shape:
+
+```json
+{
+  "protocolVersion": 1,
+  "pairingRef": "pairing:...",
+  "code": "ABCD-EFGH"
+}
+```
+
 Mobile authenticated APIs:
 
 ```text
@@ -218,7 +263,7 @@ Existing personal context API:
 GET /api/v1/portal/context
 ```
 
-The TypeScript schemas and JSON fixtures in `packages/contracts` are the protocol source of truth. Swift models must match those fixtures exactly.
+The TypeScript schemas and JSON fixtures in `packages/contracts` are the protocol source of truth. Swift models must match those fixtures exactly and reject missing or unsupported protocol versions.
 
 ## 10. Database migration V3
 
@@ -264,7 +309,7 @@ Storage rules:
 - `installation_ref = SHA-256(installationId)`;
 - `credential_hash = SHA-256(deviceCredential)`;
 - pairing codes, device credentials, and session tokens must never be stored in plaintext;
-- migrations must remain forward-only and transactional;
+- migrations remain forward-only and transactional;
 - the existing V2 family identity model remains intact.
 
 ## 11. Gateway transaction boundaries
@@ -272,7 +317,8 @@ Storage rules:
 A successful claim is one SQLite transaction:
 
 ```text
-validate pairing code
+resolve pairing by code and optional pairingRef
+→ validate pairing status, target, attempts, and expiry
 → verify active family membership and personal-assistant assignment
 → resolve idempotent retry
 → create ManagedDevice
@@ -408,7 +454,7 @@ Rules:
 - biometric data never leaves iOS;
 - local lock does not revoke server sessions.
 
-## 17. Personal home
+## 17. Personal home and offline behavior
 
 The first home page uses only real `portal/context` data:
 
@@ -430,8 +476,6 @@ Chat 服务将在下一阶段接入
 
 No mock Chat, Work, push, Agent response, or offline message queue is permitted in this milestone.
 
-## 18. Offline behavior
-
 When Gateway is unreachable:
 
 - preserve all credentials;
@@ -448,10 +492,12 @@ Allowed cache fields:
 
 Credentials, pairing material, administrator data, and future Chat messages are not part of this cache.
 
-## 19. Testing
+## 18. Testing
 
 Gateway tests must prove:
 
+- code-only manual preview and claim work without a hidden pairing ref;
+- a supplied pairing ref must match the code;
 - expired, consumed, revoked, and exhausted codes cannot be claimed;
 - non-admin entries cannot generate codes;
 - claims can only create personal entries;
@@ -459,12 +505,15 @@ Gateway tests must prove:
 - revoked devices cannot renew;
 - only one active personal session remains after renewal;
 - database rows contain no plaintext credential material;
-- claim and revocation transactions roll back on failure.
+- claim and revocation transactions roll back on failure;
+- personal portal responses include `protocolVersion: 1`.
 
 iOS tests must prove:
 
+- manual pairing works with Gateway address and short code only;
 - QR parser rejects unsafe and malformed URLs;
 - Gateway errors map to stable client states;
+- missing or unsupported protocol versions are rejected;
 - Keychain lifecycle follows logout and unbind rules;
 - session renewal is serialized;
 - app state transitions are deterministic;
@@ -476,6 +525,7 @@ Physical-device acceptance must prove:
 
 - Tailscale Serve HTTPS is reachable;
 - camera scanning works;
+- manual short-code pairing works;
 - pairing binds the intended Person;
 - credentials survive process termination;
 - expired sessions renew silently;
@@ -483,17 +533,21 @@ Physical-device acceptance must prove:
 - stopped Gateway produces offline state, not logout;
 - administrator revocation returns the iPhone to pairing.
 
-## 20. Delivery structure
+## 19. Delivery structure
 
-Development is delivered as stacked, reviewable pull requests:
+All work follows the repository rule of **independent branches and pull requests directly targeting `main`**. Feature branches must not be used as PR bases.
 
-1. **PR 0 — Mobile Entry Contract v1:** this design, schemas, fixtures, and plans;
-2. **PR 1 — Gateway Mobile Pairing:** migration, pairing, session, Web administration, and tests;
-3. **PR 2 — iOS Mobile Entry Foundation:** Xcode project, features, security, networking, and tests;
-4. **PR 3 — Mobile Entry E2E:** Tailscale setup documentation and physical-iPhone acceptance evidence.
+Delivery order:
+
+1. **Mobile Entry Contract v1:** this design, schemas, fixtures, and plans merge into `main`;
+2. **Gateway Mobile Pairing:** branch from the then-current `main`, independent PR to `main`;
+3. **iOS Mobile Entry Foundation:** branch from the then-current `main`, independent PR to `main`, developed in parallel with Gateway against the frozen fixtures;
+4. **Mobile Entry E2E:** after Gateway and iOS land, branch from the then-current `main`, independent PR to `main` containing Tailscale setup documentation and physical-iPhone acceptance evidence.
+
+No PR is stacked on another feature branch. Existing development branches must be updated to the latest `main` and retargeted to `main` after this contract PR merges.
 
 Public-repository hardening is an independent security PR and must land before real mobile credentials are used outside synthetic test data.
 
-## 21. Definition of done
+## 20. Definition of done
 
-The milestone is complete only when an administrator can generate a five-minute QR code for one member, a physical iPhone can claim it through Tailscale HTTPS, the Gateway creates the correct person-scoped device and personal entry, the app restores and renews its session from Keychain, the personal home displays real context, local authentication protects the UI, network loss is represented as offline, and administrator revocation forces the app back to pairing.
+The milestone is complete only when an administrator can generate a five-minute QR code and manual short code for one member, a physical iPhone can claim it through Tailscale HTTPS, the Gateway creates the correct person-scoped device and personal entry, the app restores and renews its session from Keychain, the personal home displays versioned real context, local authentication protects the UI, network loss is represented as offline, and administrator revocation forces the app back to pairing.
