@@ -17,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ios-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: macos-15
@@ -24,6 +28,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          show-progress: false
 
       - name: Show toolchain
         run: |
@@ -71,6 +77,20 @@ jobs:
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
           xcrun simctl list devices | grep "$SIMULATOR_UDID"
 
+      - name: Build test bundles
+        run: |
+          set -euo pipefail
+          xcodebuild -quiet \
+            -project clients/ios/FamilyAI.xcodeproj \
+            -scheme FamilyAI \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -destination-timeout 60 \
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
+            build-for-testing
+
       - name: Run unit tests
         id: unit_tests
         continue-on-error: true
@@ -91,7 +111,7 @@ jobs:
             -default-test-execution-time-allowance 60 \
             -maximum-test-execution-time-allowance 120 \
             -resultBundlePath /tmp/FamilyAI-unit-tests.xcresult \
-            test
+            test-without-building
 
       - name: Run UI tests
         id: ui_tests
@@ -113,7 +133,7 @@ jobs:
             -default-test-execution-time-allowance 120 \
             -maximum-test-execution-time-allowance 180 \
             -resultBundlePath /tmp/FamilyAI-ui-tests.xcresult \
-            test
+            test-without-building
 
       - name: Summarize test results
         if: always()
