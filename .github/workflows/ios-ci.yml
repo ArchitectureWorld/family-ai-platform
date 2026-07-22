@@ -91,11 +91,33 @@ jobs:
             -maximum-concurrent-test-simulator-destinations 1 \
             build-for-testing
 
-      - name: Run unit tests
-        id: unit_tests
+      - name: Run contract fixture tests
+        id: fixture_tests
         run: |
           set -euo pipefail
-          rm -rf /tmp/FamilyAI-unit-tests.xcresult
+          rm -rf /tmp/FamilyAI-fixture-tests.xcresult
+          xcodebuild -quiet \
+            -project clients/ios/FamilyAI.xcodeproj \
+            -scheme FamilyAI \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -destination-timeout 60 \
+            -only-testing:FamilyAITests/MobileEntryFixtureTests \
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 120 \
+            -resultBundlePath /tmp/FamilyAI-fixture-tests.xcresult \
+            test-without-building
+
+      - name: Run remaining unit tests
+        id: remaining_unit_tests
+        if: always() && steps.simulator.outcome == 'success'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/FamilyAI-remaining-unit-tests.xcresult
           xcodebuild -quiet \
             -project clients/ios/FamilyAI.xcodeproj \
             -scheme FamilyAI \
@@ -104,12 +126,13 @@ jobs:
             -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
             -destination-timeout 60 \
             -only-testing:FamilyAITests \
+            -skip-testing:FamilyAITests/MobileEntryFixtureTests \
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 60 \
             -maximum-test-execution-time-allowance 120 \
-            -resultBundlePath /tmp/FamilyAI-unit-tests.xcresult \
+            -resultBundlePath /tmp/FamilyAI-remaining-unit-tests.xcresult \
             test-without-building
 
       - name: Run UI tests
@@ -139,7 +162,8 @@ jobs:
         run: |
           set -uo pipefail
           for RESULT in \
-            /tmp/FamilyAI-unit-tests.xcresult \
+            /tmp/FamilyAI-fixture-tests.xcresult \
+            /tmp/FamilyAI-remaining-unit-tests.xcresult \
             /tmp/FamilyAI-ui-tests.xcresult
           do
             if [[ -d "$RESULT" ]]; then
@@ -148,5 +172,6 @@ jobs:
             fi
           done
 
-          echo "Unit tests: ${{ steps.unit_tests.outcome }}"
+          echo "Fixture tests: ${{ steps.fixture_tests.outcome }}"
+          echo "Remaining unit tests: ${{ steps.remaining_unit_tests.outcome }}"
           echo "UI tests: ${{ steps.ui_tests.outcome }}"
