@@ -34,6 +34,35 @@ describe("mobile entry protocol v1", () => {
     mobileGatewayErrorSchema.parse(fixture("session-expired-error.json"));
   });
 
+  it("supports code-only manual pairing and validates optional QR references", () => {
+    const preview = fixture("pairing-preview-request.json") as Record<string, unknown>;
+    expect(preview).not.toHaveProperty("pairingRef");
+    expect(pairingPreviewRequestSchema.safeParse(preview).success).toBe(true);
+    expect(
+      pairingPreviewRequestSchema.safeParse({
+        ...preview,
+        pairingRef: "pairing:test-mobile-1"
+      }).success
+    ).toBe(true);
+    expect(
+      pairingPreviewRequestSchema.safeParse({ ...preview, pairingRef: "device:wrong-kind" })
+        .success
+    ).toBe(false);
+
+    const claim = fixture("pairing-claim-request.json") as Record<string, unknown>;
+    expect(claim).not.toHaveProperty("pairingRef");
+    expect(pairingClaimRequestSchema.safeParse(claim).success).toBe(true);
+    expect(
+      pairingClaimRequestSchema.safeParse({
+        ...claim,
+        pairingRef: "pairing:test-mobile-1"
+      }).success
+    ).toBe(true);
+    expect(
+      pairingClaimRequestSchema.safeParse({ ...claim, pairingRef: "device:wrong-kind" }).success
+    ).toBe(false);
+  });
+
   it.each([
     "http://family-ai-gateway.example.ts.net",
     "https://user:password@family-ai-gateway.example.ts.net",
@@ -65,6 +94,16 @@ describe("mobile entry protocol v1", () => {
       false
     );
     expect(pairingPreviewRequestSchema.safeParse({ ...request, databaseId: 42 }).success).toBe(
+      false
+    );
+  });
+
+  it("requires protocolVersion on personal portal contexts", () => {
+    const context = fixture("portal-context-personal.json") as Record<string, unknown>;
+    const { protocolVersion, ...unversioned } = context;
+    expect(protocolVersion).toBe(1);
+    expect(personalPortalContextSchema.safeParse(unversioned).success).toBe(false);
+    expect(personalPortalContextSchema.safeParse({ ...context, protocolVersion: 2 }).success).toBe(
       false
     );
   });
