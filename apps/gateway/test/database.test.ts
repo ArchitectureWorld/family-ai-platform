@@ -7,6 +7,7 @@ import {
   runDevelopmentBootstrap,
   type GatewayDatabase
 } from "../src/database.js";
+import { DomainEventStore } from "../src/domainEvents.js";
 
 const bootstrap = {
   memberRef: "member:test",
@@ -209,6 +210,79 @@ describe("gateway database", () => {
     ]);
 
     expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("installs the versioned Person event and transactional outbox subsystem", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-domain-event-schema-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openGatewayDatabase(databasePath);
+    new DomainEventStore(db, () => new Date("2026-07-23T18:00:00.000Z"));
+
+    expect(db.prepare(
+      "SELECT version FROM domain_event_schema_migrations ORDER BY version"
+    ).all()).toEqual([{ version: 1 }]);
+
+    const tables = db.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table'
+         AND name IN ('person_event_sequences', 'domain_events', 'outbox_events')
+       ORDER BY name`
+    ).all();
+    expect(tables).toEqual([
+      { name: "domain_events" },
+      { name: "outbox_events" },
+      { name: "person_event_sequences" }
+    ]);
+
+    const eventColumns = db.prepare("PRAGMA table_info(domain_events)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(eventColumns).toEqual([
+      "event_ref",
+      "person_ref",
+      "event_sequence",
+      "event_type",
+      "aggregate_type",
+      "aggregate_ref",
+      "thread_ref",
+      "payload_json",
+      "occurred_at",
+      "created_at"
+    ]);
+
+    const outboxColumns = db.prepare("PRAGMA table_info(outbox_events)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(outboxColumns).toEqual([
+      "event_ref",
+      "status",
+      "attempt_count",
+      "available_at",
+      "claimed_by",
+      "claimed_until",
+      "published_at",
+      "last_error_json",
+      "updated_at"
+    ]);
+
+    const indexes = db.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'index'
+         AND name IN ('domain_events_person_sequence_idx', 'outbox_events_dispatch_idx')
+       ORDER BY name`
+    ).all();
+    expect(indexes).toEqual([
+      { name: "domain_events_person_sequence_idx" },
+      { name: "outbox_events_dispatch_idx" }
+    ]);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+
+    db.close();
+    db = openGatewayDatabase(databasePath);
+    new DomainEventStore(db, () => new Date("2026-07-23T18:01:00.000Z"));
+    expect(db.prepare(
+      "SELECT version FROM domain_event_schema_migrations ORDER BY version"
+    ).all()).toEqual([{ version: 1 }]);
   });
 
   it("bootstraps missing development records without overwriting operational state", () => {
