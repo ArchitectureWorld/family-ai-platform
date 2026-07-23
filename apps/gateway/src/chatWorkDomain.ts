@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  ChatWorkConversion,
   DailyEpisode,
   HomeChatStream,
   ThreadActor,
@@ -7,7 +8,8 @@ import type {
   ThreadMessageContent,
   ThreadMessageOrigin,
   WorkConversation,
-  WorkConversationStatus
+  WorkConversationStatus,
+  WorkProgressSnapshot
 } from "@family-ai/contracts";
 import type { GatewayDatabase } from "./database.js";
 import { GatewayDomainError } from "./service.js";
@@ -21,6 +23,16 @@ export interface ThreadMessagePage {
   threadRef: string;
   messages: ThreadMessage[];
   nextBeforeSequence: number | null;
+}
+
+export interface ChatWorkConversionRecord extends ChatWorkConversion {
+  decisions: string[];
+  openQuestions: string[];
+}
+
+export interface CreateWorkFromChatResult {
+  conversation: WorkConversation;
+  conversion: ChatWorkConversion;
 }
 
 function nullableString(value: unknown): string | null {
@@ -49,6 +61,26 @@ function threadNotFound(): GatewayDomainError {
     "permission",
     false,
     "没有找到这个对话线程。"
+  );
+}
+
+function workNotFound(): GatewayDomainError {
+  return new GatewayDomainError(
+    "WORK_NOT_FOUND",
+    404,
+    "permission",
+    false,
+    "没有找到这个 Work。"
+  );
+}
+
+function chatSourceInvalid(): GatewayDomainError {
+  return new GatewayDomainError(
+    "CHAT_SOURCE_INVALID",
+    400,
+    "validation",
+    false,
+    "Chat 转 Work 的来源消息无效。"
   );
 }
 
@@ -160,6 +192,28 @@ function mapThreadMessage(row: Record<string, unknown>): ThreadMessage {
     content,
     occurredAt: String(row.occurred_at),
     createdAt: String(row.created_at)
+  };
+}
+
+function parseStringArray(value: unknown): string[] {
+  const parsed = JSON.parse(String(value)) as unknown;
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
+    throw new Error("Stored Chat Work string array is invalid");
+  }
+  return parsed;
+}
+
+function mapWorkProgressSnapshot(row: Record<string, unknown>): WorkProgressSnapshot {
+  const deadlines = JSON.parse(String(row.deadlines_json)) as WorkProgressSnapshot["deadlines"];
+  return {
+    workConversationRef: String(row.work_conversation_ref),
+    status: row.status as WorkConversationStatus,
+    phaseSummary: String(row.phase_summary),
+    incompleteTasks: parseStringArray(row.incomplete_tasks_json),
+    risks: parseStringArray(row.risks_json),
+    pendingConfirmations: parseStringArray(row.pending_confirmations_json),
+    deadlines,
+    updatedAt: String(row.updated_at)
   };
 }
 
@@ -517,6 +571,198 @@ export class ChatWorkDomainRepository {
         ? messages[0]!.threadSequence
         : null
     };
+  }
+
+  createWorkFromChat(input: {
+    personRef: string;
+    title: string;
+    goal: string;
+    source: {
+      homeChatStreamRef: string;
+      dailyEpisodeRef: string | null;
+      messageRefs: string[];
+    };
+    decisions: string[];
+    openQuestions: string[];
+  }): CreateWorkFromChatResult {
+    requirePerson(this.db, input.personRef);
+    const title = normalizedRequired(input.title, "title");
+    const goal = normalizedRequired(input.goal, "goal");
+    if (
+      input.source.messageRefs.length === 0 ||
+      new Set(input.source.messageRefs).size !== input.source.messageRefs.length
+    ) {
+      throw chatSourceInvalid();
+    }
+
+    const create = this.db.transaction(() => {
+      const homeChat = this.db.prepare(
+        `SELECT thread_ref FROM home_chat_streams
+         WHERE home_chat_stream_ref = ? AND person_ref = ? AND status = 'active'`
+      ).get(
+        input.source.homeChatStreamRef,
+        input.personRef
+      ) as { thread_ref: string } | undefined;
+      if (!homeChat) throw chatSourceInvalid();
+
+      if (input.source.dailyEpisodeRef) {
+        const episode = this.db.prepare(
+          `SELECT 1 FROM daily_episodes
+           WHERE daily_episode_ref = ?
+             AND home_chat_stream_ref = ?
+             AND thread_ref = ?`
+        ).get(
+          input.source.dailyEpisodeRef,
+          input.source.homeChatStreamRef,
+          homeChat.thread_ref
+        );
+        if (!episode) throw chatSourceInvalid();
+      }
+
+      const placeholders = input.source.messageRefs.map(() => "?").join(", ");
+      const sourceRows = this.db.prepare(
+        `SELECT message_ref FROM thread_messages
+         WHERE thread_ref = ? AND message_ref IN (${placeholders})`
+      ).all(
+        homeChat.thread_ref,
+        ...input.source.messageRefs
+      ) as Array<{ message_ref: string }>;
+      if (sourceRows.length !== input.source.messageRefs.length) {
+        throw chatSourceInvalid();
+      }
+
+      const now = this.now().toISOString();
+      const conversation = this.insertWorkConversation({
+        personRef: input.personRef,
+        title,
+        goal,
+        now
+      });
+      const conversionRef = `chat-work-conversion:${randomUUID()}`;
+      this.db.prepare(
+        `INSERT INTO chat_work_conversions
+         (conversion_ref, person_ref, home_chat_stream_ref, daily_episode_ref,
+          work_conversation_ref, decisions_json, open_questions_json, created_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        conversionRef,
+        input.personRef,
+        input.source.homeChatStreamRef,
+        input.source.dailyEpisodeRef,
+        conversation.workConversationRef,
+        JSON.stringify(input.decisions),
+        JSON.stringify(input.openQuestions),
+        now
+      );
+      const insertMessage = this.db.prepare(
+        `INSERT INTO chat_work_conversion_messages
+         (conversion_ref, message_ref, source_order)
+         VALUES(?, ?, ?)`
+      );
+      input.source.messageRefs.forEach((messageRef, sourceOrder) => {
+        insertMessage.run(conversionRef, messageRef, sourceOrder);
+      });
+
+      const stored = this.getChatWorkConversion(input.personRef, conversionRef);
+      if (!stored) throw new Error("Chat Work conversion was not readable after creation");
+      const conversion: ChatWorkConversion = {
+        conversionRef: stored.conversionRef,
+        homeChatStreamRef: stored.homeChatStreamRef,
+        dailyEpisodeRef: stored.dailyEpisodeRef,
+        sourceMessageRefs: stored.sourceMessageRefs,
+        workConversationRef: stored.workConversationRef,
+        createdAt: stored.createdAt
+      };
+      return { conversation, conversion };
+    });
+
+    return create();
+  }
+
+  getChatWorkConversion(
+    personRef: string,
+    conversionRef: string
+  ): ChatWorkConversionRecord | null {
+    const row = this.db.prepare(
+      `SELECT conversion_ref, home_chat_stream_ref, daily_episode_ref,
+              work_conversation_ref, decisions_json, open_questions_json, created_at
+       FROM chat_work_conversions
+       WHERE conversion_ref = ? AND person_ref = ?`
+    ).get(conversionRef, personRef) as Record<string, unknown> | undefined;
+    if (!row) return null;
+
+    const messageRows = this.db.prepare(
+      `SELECT message_ref FROM chat_work_conversion_messages
+       WHERE conversion_ref = ?
+       ORDER BY source_order`
+    ).all(conversionRef) as Array<{ message_ref: string }>;
+    return {
+      conversionRef: String(row.conversion_ref),
+      homeChatStreamRef: String(row.home_chat_stream_ref),
+      dailyEpisodeRef: nullableString(row.daily_episode_ref),
+      sourceMessageRefs: messageRows.map((item) => String(item.message_ref)),
+      workConversationRef: String(row.work_conversation_ref),
+      createdAt: String(row.created_at),
+      decisions: parseStringArray(row.decisions_json),
+      openQuestions: parseStringArray(row.open_questions_json)
+    };
+  }
+
+  saveWorkProgressSnapshot(input: {
+    personRef: string;
+    snapshot: WorkProgressSnapshot;
+  }): WorkProgressSnapshot {
+    const save = this.db.transaction(() => {
+      if (!this.getWorkConversation(input.personRef, input.snapshot.workConversationRef)) {
+        throw workNotFound();
+      }
+      this.db.prepare(
+        `INSERT INTO work_progress_snapshots
+         (work_conversation_ref, status, phase_summary, incomplete_tasks_json, risks_json,
+          pending_confirmations_json, deadlines_json, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(work_conversation_ref) DO UPDATE SET
+           status = excluded.status,
+           phase_summary = excluded.phase_summary,
+           incomplete_tasks_json = excluded.incomplete_tasks_json,
+           risks_json = excluded.risks_json,
+           pending_confirmations_json = excluded.pending_confirmations_json,
+           deadlines_json = excluded.deadlines_json,
+           updated_at = excluded.updated_at`
+      ).run(
+        input.snapshot.workConversationRef,
+        input.snapshot.status,
+        input.snapshot.phaseSummary,
+        JSON.stringify(input.snapshot.incompleteTasks),
+        JSON.stringify(input.snapshot.risks),
+        JSON.stringify(input.snapshot.pendingConfirmations),
+        JSON.stringify(input.snapshot.deadlines),
+        input.snapshot.updatedAt
+      );
+      const snapshot = this.getWorkProgressSnapshot(
+        input.personRef,
+        input.snapshot.workConversationRef
+      );
+      if (!snapshot) throw new Error("Work progress snapshot was not readable after save");
+      return snapshot;
+    });
+    return save();
+  }
+
+  getWorkProgressSnapshot(
+    personRef: string,
+    workConversationRef: string
+  ): WorkProgressSnapshot | null {
+    const row = this.db.prepare(
+      `SELECT p.work_conversation_ref, p.status, p.phase_summary,
+              p.incomplete_tasks_json, p.risks_json, p.pending_confirmations_json,
+              p.deadlines_json, p.updated_at
+       FROM work_progress_snapshots p
+       JOIN work_conversations w
+         ON w.work_conversation_ref = p.work_conversation_ref
+       WHERE p.work_conversation_ref = ? AND w.person_ref = ?`
+    ).get(workConversationRef, personRef) as Record<string, unknown> | undefined;
+    return row ? mapWorkProgressSnapshot(row) : null;
   }
 
   private requireThread(personRef: string, threadRef: string): void {
