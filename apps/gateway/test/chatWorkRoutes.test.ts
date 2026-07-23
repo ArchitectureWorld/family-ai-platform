@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
+import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
+import { openGatewayDatabase } from "../src/database.js";
 
 const deviceToken = "chat-work-routes-bootstrap-device-token";
 const bootstrapHeaders = {
@@ -277,5 +279,102 @@ describe("Chat Work HTTP routes", () => {
     expect(older.json().messages.map(
       (message: { threadSequence: number }) => message.threadSequence
     )).toEqual([2, 3]);
+  });
+
+  it("converts Chat references into a Work and reads a trusted progress snapshot after restart", async () => {
+    const chatResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat?timezone=UTC",
+      headers: entryHeaders(personal)
+    });
+    const chat = chatResponse.json().chat as {
+      threadRef: string;
+      homeChatStreamRef: string;
+    };
+    const episode = chatResponse.json().currentEpisode as { dailyEpisodeRef: string };
+
+    currentNow = new Date("2026-07-24T06:31:00.000Z");
+    const source = await app.inject({
+      method: "POST",
+      url: `/api/v1/threads/${encodeURIComponent(chat.threadRef)}/messages`,
+      headers: entryHeaders(personal),
+      payload: {
+        protocolVersion: 1,
+        clientMessageId: "conversion-source-0001",
+        occurredAt: currentNow.toISOString(),
+        content: { type: "text", text: "把当前讨论转成 Work。", language: "zh-CN" }
+      }
+    });
+    expect(source.statusCode).toBe(201);
+    const sourceMessageRef = source.json().message.messageRef as string;
+
+    const conversion = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/work-conversions",
+      headers: entryHeaders(personal),
+      payload: {
+        protocolVersion: 1,
+        title: "正式 HTTP 路由",
+        goal: "把 Chat 讨论转为独立 Work",
+        source: {
+          homeChatStreamRef: chat.homeChatStreamRef,
+          dailyEpisodeRef: episode.dailyEpisodeRef,
+          messageRefs: [sourceMessageRef]
+        },
+        decisions: ["只实现路由层"],
+        openQuestions: ["何时接入 Provider"]
+      }
+    });
+    expect(conversion.statusCode).toBe(201);
+    expect(conversion.json()).toMatchObject({
+      protocolVersion: 1,
+      conversation: {
+        title: "正式 HTTP 路由",
+        personRef: ownerPersonRef
+      },
+      conversion: {
+        homeChatStreamRef: chat.homeChatStreamRef,
+        sourceMessageRefs: [sourceMessageRef]
+      }
+    });
+
+    const workConversationRef = conversion.json().conversation.workConversationRef as string;
+    await app.close();
+
+    const db = openGatewayDatabase(databasePath);
+    const repository = new ChatWorkDomainRepository(db, () => currentNow);
+    repository.saveWorkProgressSnapshot({
+      personRef: ownerPersonRef,
+      snapshot: {
+        workConversationRef,
+        status: "active",
+        phaseSummary: "HTTP 路由已建立",
+        incompleteTasks: ["接入 Provider"],
+        risks: ["不得影响 PR #14"],
+        pendingConfirmations: [],
+        deadlines: [{
+          label: "完成路由验收",
+          dueAt: "2026-07-25T06:30:00.000Z"
+        }],
+        updatedAt: "2026-07-24T07:00:00.000Z"
+      }
+    });
+    db.close();
+
+    await openApp();
+    const progress = await app.inject({
+      method: "GET",
+      url: `/api/v1/work-conversations/${encodeURIComponent(workConversationRef)}/progress`,
+      headers: entryHeaders(personal)
+    });
+    expect(progress.statusCode).toBe(200);
+    expect(progress.json()).toMatchObject({
+      protocolVersion: 1,
+      snapshot: {
+        workConversationRef,
+        phaseSummary: "HTTP 路由已建立",
+        risks: ["不得影响 PR #14"]
+      }
+    });
   });
 });
