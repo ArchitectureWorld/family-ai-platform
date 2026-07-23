@@ -25,6 +25,7 @@ import {
   type DevelopmentBootstrapInput
 } from "./database.js";
 import { registerDevelopmentConsole } from "./developmentConsole.js";
+import { DomainEventStore } from "./domainEvents.js";
 import { EntrySessionAuthenticator } from "./entrySessionAuth.js";
 import { FamilyDomainRepository } from "./familyDomain.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
@@ -144,6 +145,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   const app = Fastify({ logger: false });
   const db = openGatewayDatabase(options.databasePath);
   const now = options.now ?? (() => new Date());
+  new DomainEventStore(db, now);
   if (options.mode !== "production") {
     const bootstrap: DevelopmentBootstrapInput = {
       ...defaultBootstrap,
