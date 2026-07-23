@@ -1,0 +1,52 @@
+{
+  "protocolVersion": 1,
+  "threadRef": "thread:home-alice",
+  "messages": [
+    {
+      "messageRef": "message:chat-0001",
+      "threadRef": "thread:home-alice",
+      "threadSequence": 1,
+      "clientMessageId": "web-chat-0001",
+      "actor": {
+        "type": "person",
+        "personRef": "person:alice"
+      },
+      "origin": {
+        "deviceRef": "device:web-alice",
+        "connectionRef": "connection:web-20260723",
+        "entryAudience": "personal"
+      },
+      "content": {
+        "type": "text",
+        "text": "请把我们刚才的讨论转成一个 Work。",
+        "language": "zh-CN"
+      },
+      "occurredAt": "2026-07-23T08:01:00.000Z",
+      "createdAt": "2026-07-23T08:01:00.100Z"
+    },
+    {
+      "messageRef": "message:chat-0002",
+      "threadRef": "thread:home-alice",
+      "threadSequence": 2,
+      "clientMessageId": "assistant-chat-0002",
+      "actor": {
+        "type": "assistant",
+        "assignmentRef": "assignment:alice-personal-assistant",
+        "agentRef": "agent:personal-assistant"
+      },
+      "origin": {
+        "deviceRef": null,
+        "connectionRef": null,
+        "entryAudience": "personal"
+      },
+      "content": {
+        "type": "text",
+        "text": "可以，我会先整理标题、目标和相关消息引用。",
+        "language": "zh-CN"
+      },
+      "occurredAt": "2026-07-23T08:01:01.000Z",
+      "createdAt": "2026-07-23T08:01:01.100Z"
+    }
+  ],
+  "nextBeforeSequence": null
+}
