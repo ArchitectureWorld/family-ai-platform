@@ -16,6 +16,7 @@ import {
 } from "@family-ai/contracts";
 import { z } from "zod";
 import type { ChatWorkDomainRepository } from "./chatWorkDomain.js";
+import type { ChatWorkMessageService } from "./chatWorkMessageService.js";
 import {
   requireEntryRequest,
   type EntrySessionAuthenticator
@@ -94,6 +95,7 @@ export function registerChatWorkRoutes(
   app: FastifyInstance,
   input: {
     repository: ChatWorkDomainRepository;
+    messageService: ChatWorkMessageService;
     entryAuthenticator: EntrySessionAuthenticator;
     now?: () => Date;
   }
@@ -189,25 +191,17 @@ export function registerChatWorkRoutes(
       request.body,
       "消息内容或协议版本不正确。"
     );
-    const message = input.repository.appendThreadMessage({
+    const result = await input.messageService.sendPersonMessage({
       personRef: context.person.personRef,
+      deviceRef: context.device.deviceRef,
       threadRef: params.threadRef,
       clientMessageId: command.clientMessageId,
-      actor: {
-        type: "person",
-        personRef: context.person.personRef
-      },
-      origin: {
-        deviceRef: context.device.deviceRef,
-        connectionRef: null,
-        entryAudience: "personal"
-      },
       content: command.content,
       occurredAt: command.occurredAt
     });
     return reply.code(201).send(sendThreadMessageResponseSchema.parse({
       protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
-      message
+      message: result.message
     }));
   });
 
