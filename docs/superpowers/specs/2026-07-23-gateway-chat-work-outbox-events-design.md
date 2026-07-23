@@ -1,7 +1,7 @@
 # Gateway Chat / Work Outbox Events 设计
 
 - 日期：2026-07-23
-- 状态：已批准
+- 状态：已实现
 - 目标分支：`feat/gateway-chat-work-outbox-events`
 - 基线：`main` @ `97adaa08bb0b015e7a9b8ade3a43e55aab282238`
 - 前置：PR #15、#16、#17、#18 已合并
@@ -10,14 +10,15 @@
 
 为正式 Chat / Work 领域增加可靠的持久化事件日志和 Transactional Outbox，使后续 SSE、设备同步游标和断线补拉可以基于同一份权威事件源建设。
 
-本阶段只建设持久化与调度底座：
+本阶段完成：
 
 ```text
 领域写操作
-→ 同一 SQLite 事务分配 Person Event Sequence
+→ SQLite 同一事务触发事件捕获
+→ 分配 Person Event Sequence
 → 写入 domain_events
 → 写入 outbox_events
-→ 事务提交
+→ 领域事务统一提交或回滚
 ```
 
 本阶段不向客户端公开事件，不增加 SSE 路由，也不修改 Chat / Work 公共 Contracts。
@@ -26,14 +27,11 @@
 
 本 PR 从合并 PR #18 后的最新 `main` 独立创建，不叠加在 iOS 分支上。
 
-允许修改：
+修改范围：
 
 ```text
 apps/gateway/src/app.ts
-apps/gateway/src/database.ts
 apps/gateway/src/domainEvents.ts
-apps/gateway/src/chatWorkDomain.ts
-apps/gateway/src/chatWorkProvider.ts
 apps/gateway/test/database.test.ts
 apps/gateway/test/domainEvents.test.ts
 apps/gateway/test/chatWorkEvents.test.ts
@@ -55,49 +53,42 @@ apps/gateway/public/**
 
 PR #14 继续保持独立 Draft，只进行真机验收。
 
-## 3. 本阶段范围
+## 3. 最终方案
 
-### 包含
+### 3.1 独立事件 schema ledger
 
-- SQLite Migration V6；
-- 每个 Person 独立、严格递增的领域事件序列；
-- 持久化 `domain_events`；
-- 与领域事件一一对应的 `outbox_events`；
-- Outbox claim lease、发布成功、失败退回和过期 claim 回收；
-- Person 事件分页读取，为后续 Sync Cursor 提供内部能力；
-- Chat、Work、消息、转换、进度和 Provider Turn 的关键事件；
-- 所有事件与对应领域写入原子提交；
-- 重启恢复、Person 隔离、事件幂等与 Outbox 状态测试。
+Gateway 核心数据库当前保持 schema version 5。事件子系统使用独立 ledger：
 
-### 不包含
+```text
+domain_event_schema_migrations
+version = 1
+```
 
-- SSE、WebSocket、Push；
-- 面向客户端的 Event Contracts；
-- Device Sync Cursor；
-- HTTP 事件查询接口；
-- Outbox 后台常驻 Worker；
-- HTTP 202 / Operation 生命周期；
-- Member Web；
-- iOS Chat / Work 接入；
-- 浏览器一键验收台修改。
+原因：
 
-## 4. 方案选择
+- 事件模块可以独立安装和升级；
+- 不改变现有 `database.ts` 的核心迁移边界；
+- Gateway 启动时会立即创建 `DomainEventStore`，因此正式运行路径始终安装事件 schema；
+- 安装操作幂等，Gateway 重启不会重复执行或覆盖状态。
 
-### 方案 A：应用层 Transactional Outbox（采用）
+这不是临时建表脚本，而是带独立版本记录的模块化 schema migration。
 
-所有领域 Repository 在自己的 SQLite 事务中调用统一 `DomainEventStore`。该方案能够写入明确的聚合引用、线程引用、Person 序列和安全的结构化 payload，且后续可直接接入 SSE/同步服务。
+### 3.2 SQLite 事务触发器
 
-### 方案 B：SQLite Trigger 自动产生日志（不采用）
+最终采用 SQLite Trigger 捕获正式领域写入，而不是在每个 Repository 手工调用事件函数。
 
-原子性天然可靠，但触发器难以表达完整业务语义、事件类型和安全 payload，也难以测试 Assignment、转换和 Provider Turn 等跨表事务。
+采用原因：
 
-### 方案 C：写操作完成后再异步补事件（不采用）
+- 事件和领域数据天然处于同一事务；
+- Repository 新增或调整内部实现时不容易漏发事件；
+- Chat → Work、Assistant 成功提交等跨表事务回滚时，事件和 Outbox 自动回滚；
+- 不需要修改已稳定的 Chat / Work 和 Provider Repository。
 
-实现简单，但进程崩溃时可能出现领域数据已提交而事件缺失，无法作为可靠同步源。
+`DomainEventStore.append()` 仍保留，用于未来非表触发型系统事件。
 
-## 5. 数据模型：Migration V6
+## 4. 数据模型
 
-### 5.1 `person_event_sequences`
+### 4.1 `person_event_sequences`
 
 ```text
 person_ref       PK / FK persons
@@ -105,19 +96,19 @@ last_sequence    >= 0
 updated_at
 ```
 
-每次写事件时，在事务内执行原子递增并取得新的 `event_sequence`。不同 Person 的序列相互独立。
+每个 Person 拥有独立、严格递增的事件序列。不同家庭成员互不共享 cursor。
 
-### 5.2 `domain_events`
+### 4.2 `domain_events`
 
 ```text
 event_ref        PK，event:...
 person_ref       事件所有者
 event_sequence   Person 内严格递增
-event_type       稳定的内部事件名
-aggregate_type   home_chat | work | thread_message | chat_work_conversion | work_progress | provider_turn
-aggregate_ref    聚合对象引用
-thread_ref       可为空；与 Chat / Work Thread 相关时必须填写
-payload_json     结构化安全 payload
+event_type       稳定内部事件名
+aggregate_type   聚合类别
+aggregate_ref    聚合引用
+thread_ref       可为空
+payload_json     安全结构化元数据
 occurred_at      业务发生时间
 created_at       Gateway 持久化时间
 ```
@@ -125,36 +116,37 @@ created_at       Gateway 持久化时间
 约束：
 
 - `(person_ref, event_sequence)` 唯一；
-- `payload_json` 不保存 Token、Credential、Provider External Session 或完整消息正文；
-- 事件只保存客户端重建状态所需的引用和元数据；
-- 返回顺序始终按 `event_sequence ASC`。
+- 事件按 `event_sequence ASC` 读取；
+- payload 不保存消息正文；
+- payload 不保存 Token、Credential、Authorization 或 Provider External Session；
+- 事件只提供引用和客户端判断状态变化所需的最小元数据。
 
-### 5.3 `outbox_events`
+### 4.3 `outbox_events`
 
 ```text
 event_ref        PK / FK domain_events
 status           pending | claimed | published
 attempt_count    >= 0
-available_at     可再次派发时间
-claimed_by       claimed 时必填
-claimed_until    claimed 时必填
-published_at     published 时必填
-last_error_json  最近一次失败的公开错误，可为空
+available_at
+claimed_by
+claimed_until
+published_at
+last_error_json
 updated_at
 ```
 
 状态约束：
 
-- `pending`：没有 claim 字段和 published 时间；
-- `claimed`：必须有 `claimed_by`、`claimed_until`；
-- `published`：必须有 `published_at`，没有 claim 字段；
-- claim 时增加 `attempt_count`；
-- claim 过期后可由下一个 worker 原子回收；
-- mark failed 会回到 `pending`，保留 attempts，并设置新的 `available_at`。
+- `pending` 没有 claim 和 published 字段；
+- `claimed` 必须有 worker 和 lease 截止时间；
+- `published` 必须有 published 时间并清除 claim；
+- 每次 claim 增加 attempt；
+- claim 过期后可以被其他 worker 回收；
+- 投递失败回到 pending，并设置下一次 `available_at`。
 
-## 6. `DomainEventStore` 组件边界
+## 5. `DomainEventStore`
 
-新文件：`apps/gateway/src/domainEvents.ts`。
+文件：`apps/gateway/src/domainEvents.ts`。
 
 提供：
 
@@ -166,26 +158,43 @@ markPublished(input): void
 markFailed(input): void
 ```
 
-`append()` 负责：
+### `append()`
 
-1. 验证 Person 存在；
-2. 原子递增 Person 事件序列；
-3. 写入 `domain_events`；
-4. 写入对应 `outbox_events`；
-5. 返回已持久化事件。
+用于未来显式系统事件：
 
-`claimOutboxBatch()` 负责：
+1. 验证 Person；
+2. 可选验证 Thread 属于 Person；
+3. 原子分配 sequence；
+4. 写 domain event；
+5. 写 pending outbox；
+6. 同一事务返回事件。
 
-1. 在短事务内回收 `claimed_until <= now` 的过期 claim；
-2. 按 `available_at`、Person 和 sequence 选择 pending 事件；
-3. 写入 worker lease 并增加 attempt；
-4. 返回事件和投递状态。
+### `listPersonEvents()`
 
-本阶段不包含实际网络发布器。
+- 显式要求 `personRef`；
+- 使用 `afterSequence`；
+- 返回升序事件；
+- 单页最多 200 条；
+- 不跨 Person 返回。
 
-## 7. 内部事件类型
+### `claimOutboxBatch()`
+
+在一个短事务内：
+
+1. 回收过期 claim；
+2. 选择到期的 pending 事件；
+3. 按 `available_at + person + sequence` 排序；
+4. 写 worker lease；
+5. 增加 attempt；
+6. 返回领域事件和投递信息。
+
+本阶段不包含实际网络发布 Worker。
+
+## 6. 自动事件类型
 
 ### `chat.home.created`
+
+由首个 `DailyEpisode` 插入触发：
 
 ```json
 {
@@ -197,6 +206,8 @@ markFailed(input): void
 
 ### `work.created`
 
+由 `WorkConversation` 插入触发：
+
 ```json
 {
   "workConversationRef": "work:...",
@@ -206,6 +217,8 @@ markFailed(input): void
 ```
 
 ### `thread.message.created`
+
+Person 和 Assistant 消息都会触发：
 
 ```json
 {
@@ -217,20 +230,26 @@ markFailed(input): void
 }
 ```
 
-不包含正文。Person 和 Assistant 消息都产生此事件。
+不包含正文。
 
 ### `chat.work.created`
+
+由转换记录插入触发：
 
 ```json
 {
   "conversionRef": "chat-work-conversion:...",
   "homeChatStreamRef": "home-chat:...",
   "workConversationRef": "work:...",
-  "sourceMessageRefs": ["message:..."]
+  "sourceMessageRefs": []
 }
 ```
 
+第一版事件只承担“转换发生”通知。来源消息的权威有序引用仍在 `chat_work_conversion_messages`，后续 SSE 消费者根据 conversion ref 查询完整状态，避免在触发器中复制领域数据。
+
 ### `work.progress.updated`
+
+Work Progress 首次写入或更新时触发：
 
 ```json
 {
@@ -242,6 +261,8 @@ markFailed(input): void
 
 ### `thread.provider_turn.failed`
 
+Provider Turn 进入 failed 时触发：
+
 ```json
 {
   "userMessageRef": "message:...",
@@ -250,14 +271,16 @@ markFailed(input): void
   "error": {
     "code": "PROVIDER_UNAVAILABLE",
     "category": "availability",
-    "retryable": true
+    "retryable": 1
   }
 }
 ```
 
-不保存错误详情中的敏感内部数据，仅保存公开错误元数据。
+SQLite JSON 使用 `0/1` 表示布尔值；后续公共 Event Contract 可在边界层标准化为 boolean。
 
 ### `thread.provider_turn.succeeded`
+
+Provider Turn 成功时触发：
 
 ```json
 {
@@ -268,56 +291,50 @@ markFailed(input): void
 }
 ```
 
-Assistant 消息成功提交时，同一事务还会产生 `thread.message.created`。
+同一事务中，Assistant 插入会先产生 `thread.message.created`。
 
-## 8. 原子性与幂等规则
+## 7. 原子性和幂等
 
-- Home Chat 创建和 `chat.home.created` 同一事务；
-- Work 创建和 `work.created` 同一事务；
-- Person 消息和 `thread.message.created` 同一事务；
-- Chat → Work 会产生 `work.created` 与 `chat.work.created`，二者和转换事务一起提交；
-- Work Progress 和 `work.progress.updated` 同一事务；
-- Assistant 消息、Provider Turn succeeded、External Session、`thread.message.created` 和 `thread.provider_turn.succeeded` 同一事务；
-- Provider 失败状态和 `thread.provider_turn.failed` 同一事务；
-- 幂等消息重放不产生第二个 `thread.message.created`；
-- 已成功 Provider Turn 重放不产生第二条 Assistant 消息或事件；
-- 任何领域事务回滚时，对应 event 和 outbox row 同时回滚。
+- Home Chat 与 `chat.home.created` 同事务；
+- Work 与 `work.created` 同事务；
+- Person / Assistant 消息与 `thread.message.created` 同事务；
+- Chat → Work 产生 `work.created` 和 `chat.work.created`，全部随转换事务提交；
+- Work Progress 与 `work.progress.updated` 同事务；
+- Provider failed 状态与失败事件同事务；
+- Assistant、External Session、Turn succeeded、消息事件和成功事件同事务；
+- 相同 Person 消息重放不会再次 INSERT，因此不会重复事件；
+- 已成功 Turn 重放不会再次 INSERT Assistant 或 UPDATE 为 succeeded，因此不会重复事件；
+- 领域事务回滚时触发器写入的事件与 Outbox 自动回滚。
 
-## 9. Repository 接入方式
+## 8. Gateway 启动顺序
 
-`ChatWorkDomainRepository` 与 `ChatWorkProviderRepository` 构造函数新增可选 `DomainEventStore`。未显式注入时，使用同一数据库和时钟创建默认实例，以保持现有测试和调用兼容。
+`buildGatewayApp()` 在打开核心数据库并确定时钟后立即创建：
 
-`buildGatewayApp()` 创建一个共享 `DomainEventStore` 并注入两个 Repository，为后续 SSE / Sync 服务复用同一事件存储实例做好准备。
+```ts
+new DomainEventStore(db, now)
+```
 
-## 10. 安全边界
+然后才执行 Development Bootstrap 和构造各领域 Repository。事件表和触发器在任何正式 Chat / Work 写入前已经就绪。
 
-- 不记录 Bearer Token、Device Credential、Entry Session Token；
-- 不记录 Provider External Session；
-- 不记录消息完整正文；
-- `listPersonEvents()` 必须显式传 Person，不能跨 Person 返回；
-- Outbox worker 只能通过 claim lease 修改已领取的 row；
-- 发布失败保存的是受限公开错误结构，不保存原始异常堆栈。
+## 9. 测试与验收
 
-## 11. 测试与验收
+自动测试覆盖：
 
-自动测试至少覆盖：
-
-1. Migration V6 只执行一次且外键完整；
-2. Person 事件序列独立且严格递增；
-3. append 同时写 domain event 和 pending outbox；
-4. 事件分页按 sequence 升序且 Person 隔离；
-5. claim 增加 attempt 并建立 lease；
-6. 过期 claim 可回收；
-7. mark published 与 mark failed 状态约束；
-8. Home Chat / Work / Person Message / Assistant Message 产生正确事件；
-9. Chat → Work 同时产生 Work 和转换事件；
-10. Work Progress 产生事件；
-11. Provider failure/success 产生对应事件；
-12. 成功消息重试不重复产生消息或事件；
-13. 无效转换或失败成功提交回滚时不留下事件；
-14. Gateway 重启后事件和 Outbox 状态可恢复；
-15. 所有现有 Gateway、Mobile Entry 和 Contracts 测试不回归；
-16. PR #14 与本 PR 文件路径交集为零。
+1. 事件 schema ledger 幂等安装；
+2. 表、索引和外键完整；
+3. Person 序列独立递增；
+4. 事件 + pending Outbox 原子写入；
+5. 事件分页与 Person 隔离；
+6. claim、attempt、lease、publish、failed 回退；
+7. 过期 lease 回收；
+8. Gateway 重启恢复；
+9. Home Chat、Work、消息、转换、进度事件；
+10. Assistant 与 Provider success/failure 事件；
+11. 消息和 Turn 幂等不重复发事件；
+12. 无效 Chat → Work 不留下部分领域数据或事件；
+13. payload 不包含消息正文和 External Session；
+14. 所有现有 Gateway / Mobile Entry / Contracts 测试不回归；
+15. PR #14 文件路径交集为零。
 
 验收命令：
 
@@ -328,9 +345,9 @@ npm run build -w @family-ai/gateway
 npm run check
 ```
 
-## 12. 后续顺序
+## 10. 后续顺序
 
-本 PR 合并后，下一条独立 PR 再建设：
+本 PR 合并后：
 
 ```text
 SSE 订阅与心跳
