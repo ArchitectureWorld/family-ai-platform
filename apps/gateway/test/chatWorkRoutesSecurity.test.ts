@@ -139,4 +139,53 @@ describe("Chat Work HTTP route security", () => {
       });
     }
   });
+
+  it("rejects client-selected actor, origin, connection and malformed message queries", async () => {
+    const chat = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat?timezone=UTC",
+      headers: entryHeaders(personal)
+    });
+    const threadRef = chat.json().chat.threadRef as string;
+    const base = {
+      protocolVersion: 1,
+      clientMessageId: "security-message-0001",
+      occurredAt: "2026-07-24T06:31:00.000Z",
+      content: { type: "text", text: "安全测试" }
+    };
+
+    for (const forged of [
+      { actor: { type: "person", personRef: "person:forged" } },
+      { origin: { deviceRef: "device:forged" } },
+      { connectionRef: "connection:forged" },
+      { deviceRef: "device:forged" }
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+        headers: entryHeaders(personal),
+        payload: { ...base, ...forged }
+      });
+      expect(response.statusCode).toBe(400);
+      expectPublicError(response, {
+        code: "REQUEST_INVALID",
+        category: "validation",
+        retryable: false
+      });
+    }
+
+    for (const query of ["limit=0", "limit=201", "beforeSequence=0", "unknown=1"]) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages?${query}`,
+        headers: entryHeaders(personal)
+      });
+      expect(response.statusCode).toBe(400);
+      expectPublicError(response, {
+        code: "REQUEST_INVALID",
+        category: "validation",
+        retryable: false
+      });
+    }
+  });
 });
