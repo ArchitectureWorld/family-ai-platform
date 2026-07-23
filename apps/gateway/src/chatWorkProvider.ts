@@ -126,6 +126,22 @@ function mapPreparedTurn(
   };
 }
 
+function newTurnIdentity(
+  userMessage: ThreadMessage,
+  context: ThreadProviderContext,
+  requestedAt: string
+) {
+  return {
+    invocationRef: `invocation:${randomUUID()}`,
+    correlationRef: `correlation:${randomUUID()}`,
+    idempotencyKey: `thread-turn:${sha256(
+      `${userMessage.threadRef}:${userMessage.messageRef}:` +
+      `${context.assignmentRef}:${context.providerProfileRef}`
+    ).slice(0, 48)}`,
+    requestedAt
+  };
+}
+
 export class ChatWorkProviderRepository {
   constructor(
     private readonly db: GatewayDatabase,
@@ -152,13 +168,7 @@ export class ChatWorkProviderRepository {
         providerProfileRef: String(assignmentRow.provider_profile_ref)
       };
 
-      const existingRow = this.db.prepare(
-        `SELECT thread_ref, person_ref, provider_conversation_ref,
-                assignment_ref, agent_ref, provider_profile_ref,
-                external_session_ref
-         FROM thread_provider_contexts
-         WHERE thread_ref = ? AND person_ref = ?`
-      ).get(threadRef, personRef) as Record<string, unknown> | undefined;
+      const existingRow = this.readContext(personRef, threadRef);
       const timestamp = this.now().toISOString();
 
       if (!existingRow) {
@@ -178,9 +188,9 @@ export class ChatWorkProviderRepository {
           timestamp
         );
       } else if (
-        String(existingRow.assignment_ref) !== assignment.assignmentRef ||
-        String(existingRow.agent_ref) !== assignment.agentRef ||
-        String(existingRow.provider_profile_ref) !== assignment.providerProfileRef
+        existingRow.assignmentRef !== assignment.assignmentRef ||
+        existingRow.agentRef !== assignment.agentRef ||
+        existingRow.providerProfileRef !== assignment.providerProfileRef
       ) {
         this.db.prepare(
           `UPDATE thread_provider_contexts
@@ -197,15 +207,9 @@ export class ChatWorkProviderRepository {
         );
       }
 
-      const contextRow = this.db.prepare(
-        `SELECT thread_ref, person_ref, provider_conversation_ref,
-                assignment_ref, agent_ref, provider_profile_ref,
-                external_session_ref
-         FROM thread_provider_contexts
-         WHERE thread_ref = ? AND person_ref = ?`
-      ).get(threadRef, personRef) as Record<string, unknown> | undefined;
-      if (!contextRow) throw new Error("Thread Provider Context was not readable after resolution");
-      return mapContext(contextRow);
+      const context = this.readContext(personRef, threadRef);
+      if (!context) throw new Error("Thread Provider Context was not readable after resolution");
+      return context;
     });
 
     return resolve();
@@ -215,52 +219,74 @@ export class ChatWorkProviderRepository {
     personRef: string;
     userMessage: ThreadMessage;
   }): PreparedProviderTurn {
+    this.requirePersonMessage(input.personRef, input.userMessage);
+
+    const immediate = this.readTurn(input.userMessage.messageRef);
+    if (immediate?.status === "succeeded") {
+      const storedContext = this.readContext(input.personRef, input.userMessage.threadRef);
+      if (!storedContext) {
+        throw new Error("Successful Provider Turn has no stored Thread Context");
+      }
+      return mapPreparedTurn(immediate, storedContext);
+    }
+
     const context = this.resolveContext(input.personRef, input.userMessage.threadRef);
     const prepare = this.db.transaction(() => {
-      const message = this.db.prepare(
-        `SELECT 1
-         FROM thread_messages m
-         JOIN interaction_threads t ON t.thread_ref = m.thread_ref
-         WHERE m.message_ref = ?
-           AND m.thread_ref = ?
-           AND m.actor_type = 'person'
-           AND m.actor_person_ref = ?
-           AND t.person_ref = ?`
-      ).get(
-        input.userMessage.messageRef,
-        input.userMessage.threadRef,
-        input.personRef,
-        input.personRef
-      );
-      if (!message) throw threadNotFound();
-
-      const existing = this.db.prepare(
-        `SELECT user_message_ref, thread_ref, invocation_ref, correlation_ref,
-                idempotency_key, assignment_ref, agent_ref, provider_profile_ref,
-                status, attempt_count, assistant_message_ref, requested_at
-         FROM thread_provider_turns
-         WHERE user_message_ref = ?`
-      ).get(input.userMessage.messageRef) as StoredTurnRow | undefined;
+      this.requirePersonMessage(input.personRef, input.userMessage);
+      const existing = this.readTurn(input.userMessage.messageRef);
 
       if (existing?.status === "succeeded") {
-        return mapPreparedTurn(existing, context);
+        const storedContext = this.readContext(input.personRef, input.userMessage.threadRef);
+        if (!storedContext) {
+          throw new Error("Successful Provider Turn has no stored Thread Context");
+        }
+        return mapPreparedTurn(existing, storedContext);
       }
 
       if (existing) {
-        this.db.prepare(
-          `UPDATE thread_provider_turns
-           SET status = 'pending', attempt_count = attempt_count + 1,
-               assistant_message_ref = NULL, error_json = NULL, completed_at = NULL
-           WHERE user_message_ref = ? AND status <> 'succeeded'`
-        ).run(input.userMessage.messageRef);
+        const contextChanged =
+          String(existing.assignment_ref) !== context.assignmentRef ||
+          String(existing.agent_ref) !== context.agentRef ||
+          String(existing.provider_profile_ref) !== context.providerProfileRef;
+
+        if (contextChanged) {
+          const identity = newTurnIdentity(
+            input.userMessage,
+            context,
+            this.now().toISOString()
+          );
+          this.db.prepare(
+            `UPDATE thread_provider_turns
+             SET invocation_ref = ?, correlation_ref = ?, idempotency_key = ?,
+                 assignment_ref = ?, agent_ref = ?, provider_profile_ref = ?,
+                 status = 'pending', attempt_count = attempt_count + 1,
+                 assistant_message_ref = NULL, error_json = NULL,
+                 requested_at = ?, completed_at = NULL
+             WHERE user_message_ref = ? AND status <> 'succeeded'`
+          ).run(
+            identity.invocationRef,
+            identity.correlationRef,
+            identity.idempotencyKey,
+            context.assignmentRef,
+            context.agentRef,
+            context.providerProfileRef,
+            identity.requestedAt,
+            input.userMessage.messageRef
+          );
+        } else {
+          this.db.prepare(
+            `UPDATE thread_provider_turns
+             SET status = 'pending', attempt_count = attempt_count + 1,
+                 assistant_message_ref = NULL, error_json = NULL, completed_at = NULL
+             WHERE user_message_ref = ? AND status <> 'succeeded'`
+          ).run(input.userMessage.messageRef);
+        }
       } else {
-        const requestedAt = this.now().toISOString();
-        const invocationRef = `invocation:${randomUUID()}`;
-        const correlationRef = `correlation:${randomUUID()}`;
-        const idempotencyKey = `thread-turn:${sha256(
-          `${input.userMessage.threadRef}:${input.userMessage.messageRef}:` +
-          `${context.assignmentRef}:${context.providerProfileRef}`
-        ).slice(0, 48)}`;
+        const identity = newTurnIdentity(
+          input.userMessage,
+          context,
+          this.now().toISOString()
+        );
         this.db.prepare(
           `INSERT INTO thread_provider_turns
            (user_message_ref, thread_ref, invocation_ref, correlation_ref, idempotency_key,
@@ -270,23 +296,17 @@ export class ChatWorkProviderRepository {
         ).run(
           input.userMessage.messageRef,
           input.userMessage.threadRef,
-          invocationRef,
-          correlationRef,
-          idempotencyKey,
+          identity.invocationRef,
+          identity.correlationRef,
+          identity.idempotencyKey,
           context.assignmentRef,
           context.agentRef,
           context.providerProfileRef,
-          requestedAt
+          identity.requestedAt
         );
       }
 
-      const preparedRow = this.db.prepare(
-        `SELECT user_message_ref, thread_ref, invocation_ref, correlation_ref,
-                idempotency_key, assignment_ref, agent_ref, provider_profile_ref,
-                status, attempt_count, assistant_message_ref, requested_at
-         FROM thread_provider_turns
-         WHERE user_message_ref = ?`
-      ).get(input.userMessage.messageRef) as StoredTurnRow | undefined;
+      const preparedRow = this.readTurn(input.userMessage.messageRef);
       if (!preparedRow || preparedRow.status !== "pending") {
         throw new Error("Provider Turn was not pending after preparation");
       }
@@ -327,17 +347,10 @@ export class ChatWorkProviderRepository {
     completedAt: string;
   }): string {
     const commit = this.db.transaction(() => {
-      const storedTurn = this.db.prepare(
-        `SELECT user_message_ref, thread_ref, invocation_ref, correlation_ref,
-                idempotency_key, assignment_ref, agent_ref, provider_profile_ref,
-                status, attempt_count, assistant_message_ref, requested_at
-         FROM thread_provider_turns
-         WHERE user_message_ref = ? AND thread_ref = ?`
-      ).get(
-        input.userMessage.messageRef,
-        input.userMessage.threadRef
-      ) as StoredTurnRow | undefined;
-      if (!storedTurn) throw providerTurnNotFound();
+      const storedTurn = this.readTurn(input.userMessage.messageRef);
+      if (!storedTurn || String(storedTurn.thread_ref) !== input.userMessage.threadRef) {
+        throw providerTurnNotFound();
+      }
       if (storedTurn.status === "succeeded" && storedTurn.assistant_message_ref) {
         return String(storedTurn.assistant_message_ref);
       }
@@ -397,7 +410,7 @@ export class ChatWorkProviderRepository {
          WHERE thread_ref = ? AND archive_status = 'open'`
       ).run(sequence.last_sequence, input.userMessage.threadRef);
 
-      this.db.prepare(
+      const contextUpdated = this.db.prepare(
         `UPDATE thread_provider_contexts
          SET external_session_ref = ?, updated_at = ?
          WHERE thread_ref = ? AND person_ref = ?
@@ -411,6 +424,9 @@ export class ChatWorkProviderRepository {
         storedTurn.agent_ref,
         storedTurn.provider_profile_ref
       );
+      if (contextUpdated.changes !== 1) {
+        throw new Error("Thread Provider Context changed before success commit");
+      }
 
       const updated = this.db.prepare(
         `UPDATE thread_provider_turns
@@ -430,5 +446,46 @@ export class ChatWorkProviderRepository {
     });
 
     return commit();
+  }
+
+  private requirePersonMessage(personRef: string, userMessage: ThreadMessage): void {
+    const message = this.db.prepare(
+      `SELECT 1
+       FROM thread_messages m
+       JOIN interaction_threads t ON t.thread_ref = m.thread_ref
+       WHERE m.message_ref = ?
+         AND m.thread_ref = ?
+         AND m.actor_type = 'person'
+         AND m.actor_person_ref = ?
+         AND t.person_ref = ?`
+    ).get(
+      userMessage.messageRef,
+      userMessage.threadRef,
+      personRef,
+      personRef
+    );
+    if (!message) throw threadNotFound();
+  }
+
+  private readContext(personRef: string, threadRef: string): ThreadProviderContext | null {
+    const row = this.db.prepare(
+      `SELECT thread_ref, person_ref, provider_conversation_ref,
+              assignment_ref, agent_ref, provider_profile_ref,
+              external_session_ref
+       FROM thread_provider_contexts
+       WHERE thread_ref = ? AND person_ref = ?`
+    ).get(threadRef, personRef) as Record<string, unknown> | undefined;
+    return row ? mapContext(row) : null;
+  }
+
+  private readTurn(userMessageRef: string): StoredTurnRow | null {
+    const row = this.db.prepare(
+      `SELECT user_message_ref, thread_ref, invocation_ref, correlation_ref,
+              idempotency_key, assignment_ref, agent_ref, provider_profile_ref,
+              status, attempt_count, assistant_message_ref, requested_at
+       FROM thread_provider_turns
+       WHERE user_message_ref = ?`
+    ).get(userMessageRef) as StoredTurnRow | undefined;
+    return row ?? null;
   }
 }
