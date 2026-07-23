@@ -3,12 +3,16 @@ import {
   CHAT_WORK_PROTOCOL_VERSION,
   createWorkConversationRequestSchema,
   createWorkConversationResponseSchema,
+  createWorkFromChatRequestSchema,
+  createWorkFromChatResponseSchema,
   homeChatStreamResponseSchema,
   interactionThreadRefSchema,
   sendThreadMessageRequestSchema,
   sendThreadMessageResponseSchema,
   threadMessageListResponseSchema,
-  workConversationListResponseSchema
+  workConversationListResponseSchema,
+  workConversationRefSchema,
+  workProgressSnapshotResponseSchema
 } from "@family-ai/contracts";
 import { z } from "zod";
 import type { ChatWorkDomainRepository } from "./chatWorkDomain.js";
@@ -35,8 +39,22 @@ const threadMessagesQuerySchema = z
   })
   .strict();
 
+const workProgressParamsSchema = z
+  .object({ workConversationRef: workConversationRefSchema })
+  .strict();
+
 function invalidRequest(message: string): GatewayDomainError {
   return new GatewayDomainError("REQUEST_INVALID", 400, "validation", false, message);
+}
+
+function workProgressNotFound(): GatewayDomainError {
+  return new GatewayDomainError(
+    "WORK_PROGRESS_NOT_FOUND",
+    404,
+    "permission",
+    false,
+    "没有找到这个 Work 的进度。"
+  );
 }
 
 function parseRequest<T>(schema: z.ZodType<T>, value: unknown, message: string): T {
@@ -192,4 +210,46 @@ export function registerChatWorkRoutes(
       message
     }));
   });
+
+  app.post("/api/v1/chat/work-conversions", async (request, reply) => {
+    const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
+    const command = parseRequest(
+      createWorkFromChatRequestSchema,
+      request.body,
+      "Chat 转 Work 请求或协议版本不正确。"
+    );
+    const result = input.repository.createWorkFromChat({
+      personRef: context.person.personRef,
+      title: command.title,
+      goal: command.goal,
+      source: command.source,
+      decisions: command.decisions,
+      openQuestions: command.openQuestions
+    });
+    return reply.code(201).send(createWorkFromChatResponseSchema.parse({
+      protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+      ...result
+    }));
+  });
+
+  app.get(
+    "/api/v1/work-conversations/:workConversationRef/progress",
+    async (request) => {
+      const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
+      const params = parseRequest(
+        workProgressParamsSchema,
+        request.params,
+        "Work 编号不正确。"
+      );
+      const snapshot = input.repository.getWorkProgressSnapshot(
+        context.person.personRef,
+        params.workConversationRef
+      );
+      if (!snapshot) throw workProgressNotFound();
+      return workProgressSnapshotResponseSchema.parse({
+        protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+        snapshot
+      });
+    }
+  );
 }
