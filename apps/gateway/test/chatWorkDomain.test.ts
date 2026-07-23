@@ -221,4 +221,181 @@ describe("Chat Work domain foundation", () => {
       expect(error).toMatchObject({ code: "THREAD_NOT_FOUND" });
     }
   });
+
+  it("creates a Work from Chat references without copying source message bodies", () => {
+    const chat = repository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const first = repository.appendThreadMessage(
+      ownerMessageInput(chat.chat.threadRef, "owner-chat-source-0001", "第一个来源消息")
+    );
+    currentNow = new Date("2026-07-23T12:01:00.000Z");
+    const second = repository.appendThreadMessage(
+      ownerMessageInput(chat.chat.threadRef, "owner-chat-source-0002", "第二个来源消息")
+    );
+
+    const result = repository.createWorkFromChat({
+      personRef: ownerPersonRef,
+      title: "正式领域底座",
+      goal: "把 Chat 讨论转为独立 Work",
+      source: {
+        homeChatStreamRef: chat.chat.homeChatStreamRef,
+        dailyEpisodeRef: chat.currentEpisode!.dailyEpisodeRef,
+        messageRefs: [first.messageRef, second.messageRef]
+      },
+      decisions: ["先稳定 Gateway 领域模型"],
+      openQuestions: ["何时加入 SSE"]
+    });
+
+    expect(result.conversation.threadKind).toBe("work");
+    expect(result.conversion).toMatchObject({
+      homeChatStreamRef: chat.chat.homeChatStreamRef,
+      dailyEpisodeRef: chat.currentEpisode!.dailyEpisodeRef,
+      sourceMessageRefs: [first.messageRef, second.messageRef],
+      workConversationRef: result.conversation.workConversationRef
+    });
+    const stored = repository.getChatWorkConversion(
+      ownerPersonRef,
+      result.conversion.conversionRef
+    );
+    expect(stored).toMatchObject({
+      ...result.conversion,
+      decisions: ["先稳定 Gateway 领域模型"],
+      openQuestions: ["何时加入 SSE"]
+    });
+    expect(repository.getChatWorkConversion(
+      adultPersonRef,
+      result.conversion.conversionRef
+    )).toBeNull();
+    expect(JSON.stringify(stored)).not.toContain("第一个来源消息");
+    expect(JSON.stringify(stored)).not.toContain("第二个来源消息");
+  });
+
+  it("rolls back the Work when any Chat source reference is invalid", () => {
+    const chat = repository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const valid = repository.appendThreadMessage(
+      ownerMessageInput(chat.chat.threadRef, "owner-chat-valid-source", "有效来源消息")
+    );
+    const before = repository.listWorkConversations(ownerPersonRef).length;
+
+    try {
+      repository.createWorkFromChat({
+        personRef: ownerPersonRef,
+        title: "不应保存",
+        goal: "验证事务回滚",
+        source: {
+          homeChatStreamRef: chat.chat.homeChatStreamRef,
+          dailyEpisodeRef: chat.currentEpisode!.dailyEpisodeRef,
+          messageRefs: [valid.messageRef, "message:not-in-this-chat"]
+        },
+        decisions: [],
+        openQuestions: []
+      });
+      throw new Error("Expected invalid Chat source to fail");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "CHAT_SOURCE_INVALID" });
+    }
+
+    expect(repository.listWorkConversations(ownerPersonRef)).toHaveLength(before);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM chat_work_conversions").get())
+      .toEqual({ count: 0 });
+  });
+
+  it("upserts Work progress and restores Chat Work state after a database restart", () => {
+    const chat = repository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const sourceMessage = repository.appendThreadMessage(
+      ownerMessageInput(chat.chat.threadRef, "owner-chat-restart-source", "重启后仍需存在")
+    );
+    const conversionResult = repository.createWorkFromChat({
+      personRef: ownerPersonRef,
+      title: "持续事项",
+      goal: "验证状态恢复",
+      source: {
+        homeChatStreamRef: chat.chat.homeChatStreamRef,
+        dailyEpisodeRef: chat.currentEpisode!.dailyEpisodeRef,
+        messageRefs: [sourceMessage.messageRef]
+      },
+      decisions: ["保持 SQLite 为权威"],
+      openQuestions: []
+    });
+    const firstSnapshot = repository.saveWorkProgressSnapshot({
+      personRef: ownerPersonRef,
+      snapshot: {
+        workConversationRef: conversionResult.conversation.workConversationRef,
+        status: "active",
+        phaseSummary: "完成领域模型设计",
+        incompleteTasks: ["实现 HTTP 路由"],
+        risks: ["不能影响 PR #14"],
+        pendingConfirmations: [],
+        deadlines: [{
+          label: "完成 Gateway 底座",
+          dueAt: "2026-07-24T12:00:00.000Z"
+        }],
+        updatedAt: "2026-07-23T13:00:00.000Z"
+      }
+    });
+    const latestSnapshot = repository.saveWorkProgressSnapshot({
+      personRef: ownerPersonRef,
+      snapshot: {
+        ...firstSnapshot,
+        phaseSummary: "领域底座已进入验证",
+        incompleteTasks: ["完成冲突扫描"],
+        updatedAt: "2026-07-23T14:00:00.000Z"
+      }
+    });
+    expect(repository.getWorkProgressSnapshot(
+      ownerPersonRef,
+      conversionResult.conversation.workConversationRef
+    )).toEqual(latestSnapshot);
+    expect(repository.getWorkProgressSnapshot(
+      adultPersonRef,
+      conversionResult.conversation.workConversationRef
+    )).toBeNull();
+
+    db.close();
+    db = openGatewayDatabase(databasePath);
+    repository = new ChatWorkDomainRepository(db, () => currentNow);
+
+    expect(repository.getHomeChat(ownerPersonRef)).toEqual({
+      chat: {
+        ...chat.chat,
+        lastSequence: 1,
+        lastActiveAt: initialNow
+      },
+      currentEpisode: {
+        ...chat.currentEpisode!,
+        lastMessageSequence: 1
+      }
+    });
+    expect(repository.listThreadMessages({
+      personRef: ownerPersonRef,
+      threadRef: chat.chat.threadRef
+    }).messages).toEqual([sourceMessage]);
+    expect(repository.getWorkConversation(
+      ownerPersonRef,
+      conversionResult.conversation.workConversationRef
+    )).toEqual(conversionResult.conversation);
+    expect(repository.getChatWorkConversion(
+      ownerPersonRef,
+      conversionResult.conversion.conversionRef
+    )).toMatchObject({
+      ...conversionResult.conversion,
+      decisions: ["保持 SQLite 为权威"],
+      openQuestions: []
+    });
+    expect(repository.getWorkProgressSnapshot(
+      ownerPersonRef,
+      conversionResult.conversation.workConversationRef
+    )).toEqual(latestSnapshot);
+  });
 });
