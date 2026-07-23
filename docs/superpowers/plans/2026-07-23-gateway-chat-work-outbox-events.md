@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为正式 Chat / Work 领域增加 Person 级持久化事件序列、Transaction Outbox 和可租约投递状态，为后续 SSE 与 Sync Cursor 提供可靠底座。
+**Goal:** 为正式 Chat / Work 领域增加 Person 级持久化事件序列、Transactional Outbox 和可租约投递状态，为后续 SSE 与 Sync Cursor 提供可靠底座。
 
-**Architecture:** 事件子系统使用独立、版本化的 schema ledger，并由 SQLite Trigger 在领域事务内捕获 Chat / Work / Provider 状态变化。`DomainEventStore` 提供显式事件追加、Person 事件分页以及 Outbox claim / publish / fail API；Gateway 启动时在任何正式领域写入前安装该模块。
+**Architecture:** 事件子系统使用独立、版本化的 Schema Ledger，并由 SQLite Trigger 在领域事务内捕获 Chat / Work / Provider 状态变化。`DomainEventStore` 提供显式事件追加、Person 事件分页和 Outbox Claim / Publish / Fail API；Gateway 启动时在任何正式领域写入前安装模块。
 
 **Tech Stack:** TypeScript 6、Fastify、better-sqlite3、Vitest 4、SQLite JSON1 / Trigger。
 
@@ -13,118 +13,78 @@
 - 基线固定为 `main` commit `97adaa08bb0b015e7a9b8ade3a43e55aab282238`。
 - 不修改 `clients/ios/**`、`.github/workflows/**`、`packages/contracts/**`。
 - 不修改 Mobile Entry 配对、Session、认证和浏览器一键验收台。
-- 领域数据与对应 event/outbox 必须同事务提交或回滚。
-- Event payload 不得包含消息正文、Token、Credential、Authorization 或 Provider External Session。
-- Outbox 只有持有未过期 lease 的 Worker 才能完成 publish 或 fail 状态更新。
+- 领域数据与对应 Event / Outbox 必须同事务提交或回滚。
+- Event Payload 不得包含消息正文、Token、Credential、Authorization 或 Provider External Session。
+- 只有持有匹配且未过期 Lease 的 Worker 才能完成 Outbox 状态。
 
 ---
 
 ## File Map
 
-- Create: `apps/gateway/src/domainEvents.ts` — 事件 schema、触发器、事件分页和 Outbox 租约 API。
-- Modify: `apps/gateway/src/app.ts` — Gateway 启动时安装事件子系统。
-- Modify: `apps/gateway/test/database.test.ts` — 模块 schema ledger、表、索引和重启幂等。
-- Create: `apps/gateway/test/domainEvents.test.ts` — 序列、分页、lease、publish、fail、过期回收和重启。
-- Create: `apps/gateway/test/chatWorkEvents.test.ts` — Chat / Work / Provider 事件、幂等、回滚和 payload 安全。
-- Modify: `docs/superpowers/specs/2026-07-23-gateway-chat-work-outbox-events-design.md` — 最终触发器架构。
-- Modify: `docs/superpowers/plans/2026-07-23-gateway-chat-work-outbox-events.md` — 本执行计划。
-
----
-
-### Task 1: Define the missing event subsystem through RED
-
-**Files:**
-- Modify: `apps/gateway/test/database.test.ts`
-- Create: `docs/superpowers/specs/2026-07-23-gateway-chat-work-outbox-events-design.md`
-
-- [x] **Step 1: Define event schema requirements**
-
-The initial test required:
-
-```text
-person_event_sequences
-domain_events
-outbox_events
-domain_events_person_sequence_idx
-outbox_events_dispatch_idx
-```
-
-- [x] **Step 2: Observe RED**
-
-GitHub Actions CI #276 failed because the event schema was absent. Secret Scan #162 passed.
-
-- [x] **Step 3: Review the initial migration approach**
-
-The first draft proposed core Migration V6 plus manual Repository appends. Review identified two avoidable risks:
-
-1. every Repository mutation would need a manually maintained event call;
-2. missing one call could commit domain data without a durable event.
-
-The final architecture therefore moved the event subsystem to its own schema ledger and used SQLite triggers for atomic capture.
-
----
-
-### Task 2: Install a versioned event schema and transactional triggers
-
-**Files:**
 - Create: `apps/gateway/src/domainEvents.ts`
 - Modify: `apps/gateway/src/app.ts`
 - Modify: `apps/gateway/test/database.test.ts`
-
-- [x] **Step 1: Add module schema ledger**
-
-```text
-domain_event_schema_migrations
-version = 1
-```
-
-The installer requires Gateway core schema version 5 and is idempotent across restarts.
-
-- [x] **Step 2: Add event tables**
-
-```text
-person_event_sequences
-domain_events
-outbox_events
-```
-
-- [x] **Step 3: Add transactional triggers**
-
-Triggers emit:
-
-```text
-chat.home.created
-work.created
-thread.message.created
-chat.work.created
-work.progress.updated
-thread.provider_turn.failed
-thread.provider_turn.succeeded
-```
-
-Each trigger performs, inside the caller's existing transaction:
-
-```text
-increment Person sequence
-→ insert domain event
-→ insert pending outbox row
-```
-
-- [x] **Step 4: Install before domain writes**
-
-`buildGatewayApp()` constructs `DomainEventStore` immediately after opening the core database and before Development Bootstrap or Repository construction.
-
-- [x] **Step 5: Verify GREEN**
-
-CI #280 passed the full repository quality gate. Secret Scan #166 passed.
+- Create: `apps/gateway/test/domainEvents.test.ts`
+- Create: `apps/gateway/test/chatWorkEvents.test.ts`
+- Modify: `docs/superpowers/specs/2026-07-23-gateway-chat-work-outbox-events-design.md`
+- Modify: `docs/superpowers/plans/2026-07-23-gateway-chat-work-outbox-events.md`
+- Create: `docs/superpowers/evidence/2026-07-23-gateway-chat-work-outbox-events.md`
 
 ---
 
-### Task 3: Implement `DomainEventStore`
+### Task 1: Define the missing event subsystem
 
-**Files:**
-- Create: `apps/gateway/src/domainEvents.ts`
-- Create: `apps/gateway/test/domainEvents.test.ts`
+- [x] **Write the initial failing schema test**
+
+The test required Person sequences, durable events and Outbox persistence.
+
+- [x] **Observe RED**
+
+CI #276 failed because the event subsystem did not exist. Secret Scan #162 passed.
+
+- [x] **Review the initial V6/manual-append approach**
+
+The initial proposal was rejected during implementation review because manual Repository calls could be omitted. The final design uses a module-owned Schema Ledger plus SQLite triggers, preserving atomicity without changing established repositories.
+
+---
+
+### Task 2: Install the versioned event subsystem
+
+- [x] **Create `domain_event_schema_migrations` version 1**
+- [x] **Create `person_event_sequences`**
+- [x] **Create `domain_events`**
+- [x] **Create `outbox_events`**
+- [x] **Create Person-sequence and dispatch indexes**
+- [x] **Install the subsystem in `buildGatewayApp()` before domain writes**
+- [x] **Verify restart idempotency and foreign keys**
+
+The core Gateway schema remains version 5. The event module has its own explicit migration ledger and requires core schema version 5.
+
+---
+
+### Task 3: Capture formal domain events transactionally
+
+- [x] **Emit `chat.home.created`**
+- [x] **Emit `work.created`**
+- [x] **Emit `thread.message.created` for Person and Assistant messages**
+- [x] **Emit `chat.work.created`**
+- [x] **Emit `work.progress.updated`**
+- [x] **Emit `thread.provider_turn.failed`**
+- [x] **Emit `thread.provider_turn.succeeded`**
+
+Each trigger performs:
+
+```text
+increment Person Sequence
+→ insert Domain Event
+→ insert Pending Outbox
+```
+
+Because triggers execute in the caller's SQLite transaction, any domain rollback also removes the event and Outbox row.
+
+---
+
+### Task 4: Implement `DomainEventStore`
 
 **Interfaces:**
 
@@ -136,104 +96,43 @@ markPublished({ eventRef, workerRef, publishedAt }): void
 markFailed({ eventRef, workerRef, error, availableAt, updatedAt }): void
 ```
 
-- [x] **Step 1: Add explicit event append**
+- [x] **Add explicit atomic event append**
+- [x] **Add Person-isolated ascending pagination**
+- [x] **Add Pending Outbox claim leasing**
+- [x] **Increment Attempt on each Claim**
+- [x] **Recover expired Claims**
+- [x] **Add Published transition**
+- [x] **Add Failed-to-Pending transition with backoff time**
+- [x] **Reject finalization by a different Worker**
+- [x] **Verify database restart recovery**
 
-`append()` verifies Person and optional Thread ownership, allocates a Person sequence, then inserts event and pending Outbox in one transaction.
-
-- [x] **Step 2: Add Person event paging**
-
-Events are returned by `event_sequence ASC`, after an exclusive `afterSequence`, with a maximum page size of 200.
-
-- [x] **Step 3: Add Outbox claim leasing**
-
-Claim logic:
-
-```text
-reclaim expired claims
-→ select available pending rows
-→ order by available_at + Person + sequence
-→ set worker and claimed_until
-→ increment attempt_count
-```
-
-- [x] **Step 4: Add publish and fail transitions**
-
-A matching Worker may publish or return an event to pending. Failed delivery stores only a bounded `PublicError`, not raw exceptions.
-
-- [x] **Step 5: Verify lifecycle and restart**
-
-Tests cover Person sequence independence, paging isolation, retries, expired claim recovery, wrong-worker rejection and database restart recovery.
+CI #280 passed the full quality gate. Secret Scan #166 passed.
 
 ---
 
-### Task 4: Verify Chat / Work / Provider atomic events
+### Task 5: Verify Chat / Work / Provider integration
 
-**Files:**
-- Create: `apps/gateway/test/chatWorkEvents.test.ts`
+- [x] **Verify Home Chat, Work, Message, Conversion and Progress events**
+- [x] **Verify Assistant and Provider Success events**
+- [x] **Verify Provider Failure and Retry events**
+- [x] **Verify identical message replay creates no duplicate Event**
+- [x] **Verify successful Turn replay creates no duplicate Event**
+- [x] **Verify invalid Chat → Work leaves no partial data or Event**
+- [x] **Verify Payload excludes message and Provider output text**
+- [x] **Verify Payload excludes External Session**
 
-- [x] **Step 1: Verify Chat and Work events**
-
-Covered:
-
-```text
-Home Chat creation
-Work creation
-Person message creation
-Chat → Work conversion
-Work Progress update
-```
-
-- [x] **Step 2: Verify Provider events**
-
-Covered:
-
-```text
-Assistant message event
-Provider Turn succeeded
-Provider Turn failed
-failed Turn retry
-successful replay
-```
-
-- [x] **Step 3: Verify idempotency**
-
-Identical Person-message replay does not create a second message event. Successful Provider Turn replay does not create another Assistant message or event.
-
-- [x] **Step 4: Verify rollback**
-
-Invalid Chat → Work conversion leaves no partial Work, conversion event or Outbox row because trigger writes participate in the original SQLite transaction.
-
-- [x] **Step 5: Verify payload safety**
-
-Tests confirm serialized events do not contain:
-
-```text
-message body
-Fake Provider output text
-external-session:
-```
-
-- [x] **Step 6: Verify GREEN**
-
-CI #281 passed the full repository quality gate. Secret Scan #167 passed.
+CI #281 passed the full quality gate. Secret Scan #167 passed.
 
 ---
 
-### Task 5: Enforce active lease finalization
+### Task 6: Enforce active Lease finalization
 
-**Files:**
-- Modify: `apps/gateway/test/domainEvents.test.ts`
-- Modify: `apps/gateway/src/domainEvents.ts`
+- [x] **Write a regression test for expired Worker finalization**
+- [x] **Observe RED**
 
-- [x] **Step 1: Write the regression test**
+CI #283 failed because the previous SQL checked Worker identity but not Lease expiry.
 
-The test claims two events with a one-second lease, then attempts `markPublished()` and `markFailed()` after lease expiry.
-
-- [x] **Step 2: Observe RED**
-
-CI #283 failed, confirming the previous SQL checked Worker identity but not lease expiry.
-
-- [x] **Step 3: Fix at the state-transition boundary**
+- [x] **Fix Publish and Fail state transitions**
 
 Both updates now require:
 
@@ -243,11 +142,39 @@ AND claimed_by = ?
 AND claimed_until > completion_timestamp
 ```
 
-An expired Worker therefore cannot finalize a stale claim. Another worker can reclaim it through `claimOutboxBatch()`.
+- [x] **Verify GREEN**
 
-- [ ] **Step 4: Verify final GREEN**
+CI #285 passed the full quality gate.
 
-Required:
+---
+
+### Task 7: Preserve ordered Chat → Work source references
+
+- [x] **Write a regression test requiring `sourceMessageRefs`**
+- [x] **Observe RED**
+
+CI #286 failed because the conversion event initially contained an empty array.
+
+- [x] **Add source-message enrichment trigger**
+
+Every `chat_work_conversion_messages` insert appends its `message_ref` to the corresponding `chat.work.created` event inside the same transaction.
+
+- [x] **Verify GREEN**
+
+CI #287 passed the full quality gate. Secret Scan #173 passed.
+
+---
+
+### Task 8: Final verification and PR boundary
+
+- [ ] **Run a fresh final CI and Secret Scan on the documentation-complete head**
+- [ ] **Confirm PR comments and Review Threads are empty or resolved**
+- [ ] **Compare PR #19 paths against PR #14; intersection must be zero**
+- [ ] **Confirm PR #14 Head and Draft state are unchanged**
+- [ ] **Update PR #19 description and mark Ready for review**
+- [ ] **Keep PR #19 unmerged**
+
+Final commands represented by the repository quality gate:
 
 ```bash
 npm run test -w @family-ai/gateway
@@ -255,14 +182,3 @@ npm run typecheck -w @family-ai/gateway
 npm run build -w @family-ai/gateway
 npm run check
 ```
-
----
-
-### Task 6: Final PR boundary review
-
-- [ ] **Step 1: Confirm latest CI and Secret Scan pass**
-- [ ] **Step 2: Confirm PR comments and review threads are empty or resolved**
-- [ ] **Step 3: Compare PR #19 paths against PR #14; intersection must be zero**
-- [ ] **Step 4: Confirm PR #14 head and Draft status are unchanged**
-- [ ] **Step 5: Update PR #19 description and mark Ready for review**
-- [ ] **Step 6: Keep PR #19 unmerged**
