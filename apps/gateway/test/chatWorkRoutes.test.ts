@@ -136,4 +136,46 @@ describe("Chat Work HTTP routes", () => {
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json()).toMatchObject({ code: "REQUEST_INVALID" });
   });
+
+  it("creates and lists only the authenticated Person's Work Conversations", async () => {
+    const initial = await app.inject({
+      method: "GET",
+      url: "/api/v1/work-conversations",
+      headers: entryHeaders(personal)
+    });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toEqual({ protocolVersion: 1, conversations: [] });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/work-conversations",
+      headers: entryHeaders(personal),
+      payload: {
+        protocolVersion: 1,
+        title: "家庭 AI 平台",
+        goal: "建立正式 Web 与多端共用的 Work"
+      }
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      protocolVersion: 1,
+      conversation: {
+        threadKind: "work",
+        personRef: ownerPersonRef,
+        title: "家庭 AI 平台",
+        goal: "建立正式 Web 与多端共用的 Work",
+        status: "active",
+        summary: "",
+        archivedAt: null
+      }
+    });
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/v1/work-conversations",
+      headers: entryHeaders(personal)
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().conversations).toEqual([created.json().conversation]);
+  });
 });
