@@ -2,11 +2,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  chatWorkConversionSchema,
   createWorkConversationRequestSchema,
+  createWorkConversationResponseSchema,
   createWorkFromChatRequestSchema,
+  createWorkFromChatResponseSchema,
   dailyEpisodeSchema,
   homeChatStreamResponseSchema,
   sendThreadMessageRequestSchema,
+  sendThreadMessageResponseSchema,
   threadMessageListResponseSchema,
   threadMessageSchema,
   workConversationListResponseSchema,
@@ -96,6 +100,51 @@ describe("Chat / Work protocol v1 commands", () => {
     ).toBeTruthy();
     expect(workProgressSnapshotResponseSchema.parse(fixture("work-progress-response.json"))).toBeTruthy();
     expect(sendThreadMessageRequestSchema.parse(sendMessage)).toEqual(sendMessage);
+  });
+
+  it("accepts canonical response envelopes", () => {
+    const workList = fixture("work-list-response.json") as {
+      conversations: Record<string, unknown>[];
+    };
+    const messageList = fixture("thread-message-list-response.json") as {
+      messages: Record<string, unknown>[];
+    };
+    const conversionRequest = fixture("create-work-from-chat-request.json") as {
+      source: {
+        homeChatStreamRef: string;
+        dailyEpisodeRef: string | null;
+        messageRefs: string[];
+      };
+    };
+    const conversion = {
+      conversionRef: "chat-work-conversion:alice-0001",
+      homeChatStreamRef: conversionRequest.source.homeChatStreamRef,
+      dailyEpisodeRef: conversionRequest.source.dailyEpisodeRef,
+      sourceMessageRefs: conversionRequest.source.messageRefs,
+      workConversationRef: "work:family-ai-platform",
+      createdAt: "2026-07-23T10:05:00.000Z"
+    };
+
+    expect(
+      createWorkConversationResponseSchema.parse({
+        protocolVersion: 1,
+        conversation: workList.conversations[0]
+      })
+    ).toBeTruthy();
+    expect(
+      sendThreadMessageResponseSchema.parse({
+        protocolVersion: 1,
+        message: messageList.messages[0]
+      })
+    ).toBeTruthy();
+    expect(chatWorkConversionSchema.parse(conversion)).toEqual(conversion);
+    expect(
+      createWorkFromChatResponseSchema.parse({
+        protocolVersion: 1,
+        conversation: workList.conversations[0],
+        conversion
+      })
+    ).toBeTruthy();
   });
 
   it.each([
