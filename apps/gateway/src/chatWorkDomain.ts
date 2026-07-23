@@ -84,6 +84,16 @@ function chatSourceInvalid(): GatewayDomainError {
   );
 }
 
+function messageInvalid(message: string): GatewayDomainError {
+  return new GatewayDomainError(
+    "THREAD_MESSAGE_INVALID",
+    400,
+    "validation",
+    false,
+    message
+  );
+}
+
 function mapHomeChatRecord(row: Record<string, unknown>): HomeChatRecord {
   const currentEpisodeRef = nullableString(row.daily_episode_ref);
   const currentEpisode: DailyEpisode | null = currentEpisodeRef
@@ -247,13 +257,11 @@ function canonicalJson(value: unknown): string {
 
 function logicalMessageFingerprint(input: {
   actor: ThreadActor;
-  origin: ThreadMessageOrigin;
   content: ThreadMessageContent;
   occurredAt: string;
 }): string {
   return canonicalJson({
     actor: input.actor,
-    origin: input.origin,
     content: input.content,
     occurredAt: input.occurredAt
   });
@@ -455,23 +463,13 @@ export class ChatWorkDomainRepository {
     content: ThreadMessageContent;
     occurredAt: string;
   }): ThreadMessage {
-    if (input.actor.type === "person" && input.actor.personRef !== input.personRef) {
-      throw new GatewayDomainError(
-        "THREAD_MESSAGE_INVALID",
-        400,
-        "validation",
-        false,
-        "消息发送者与当前家庭成员不一致。"
-      );
-    }
-
     const append = this.db.transaction(() => {
       this.requireThread(input.personRef, input.threadRef);
+      this.validateMessageProvenance(input.personRef, input.actor, input.origin);
       const existing = this.findMessageByClientId(input.threadRef, input.clientMessageId);
       if (existing) {
         const existingFingerprint = logicalMessageFingerprint({
           actor: existing.actor,
-          origin: existing.origin,
           content: existing.content,
           occurredAt: existing.occurredAt
         });
@@ -763,6 +761,68 @@ export class ChatWorkDomainRepository {
        WHERE p.work_conversation_ref = ? AND w.person_ref = ?`
     ).get(workConversationRef, personRef) as Record<string, unknown> | undefined;
     return row ? mapWorkProgressSnapshot(row) : null;
+  }
+
+  private validateMessageProvenance(
+    personRef: string,
+    actor: ThreadActor,
+    origin: ThreadMessageOrigin
+  ): void {
+    switch (actor.type) {
+      case "person": {
+        if (actor.personRef !== personRef || !origin.deviceRef) {
+          throw messageInvalid("Person 消息的成员或设备来源无效。");
+        }
+        const binding = this.db.prepare(
+          `SELECT 1
+           FROM managed_devices d
+           JOIN device_bindings b
+             ON b.device_ref = d.device_ref
+            AND b.status = 'active'
+           LEFT JOIN family_memberships fm
+             ON fm.family_ref = b.family_ref
+            AND fm.person_ref = ?
+            AND fm.status = 'active'
+           WHERE d.device_ref = ?
+             AND d.status = 'active'
+             AND (
+               (b.owner_scope = 'person' AND b.person_ref = ?) OR
+               (b.owner_scope = 'family' AND fm.person_ref IS NOT NULL)
+             )
+           LIMIT 1`
+        ).get(personRef, origin.deviceRef, personRef);
+        if (!binding) {
+          throw messageInvalid("这个设备不能代表当前家庭成员发送消息。");
+        }
+        return;
+      }
+      case "assistant": {
+        const assignment = this.db.prepare(
+          `SELECT 1 FROM assistant_assignments
+           WHERE assignment_ref = ?
+             AND person_ref = ?
+             AND agent_ref = ?
+             AND provider_profile_ref = ?
+             AND status = 'active'`
+        ).get(
+          actor.assignmentRef,
+          personRef,
+          actor.agentRef,
+          actor.providerProfileRef
+        );
+        if (!assignment) {
+          throw messageInvalid("Assistant 消息的 Assignment 来源无效。");
+        }
+        return;
+      }
+      case "system":
+        if (origin.entryAudience !== "system") {
+          throw messageInvalid("System 消息必须使用 system audience。");
+        }
+        return;
+      case "agent":
+        return;
+    }
   }
 
   private requireThread(personRef: string, threadRef: string): void {
