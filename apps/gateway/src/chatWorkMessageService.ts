@@ -161,6 +161,19 @@ export class ChatWorkMessageService {
       }
 
       const result = parsed.data;
+      if (
+        result.invocationRef !== request.invocationRef ||
+        result.correlationRef !== request.correlationRef
+      ) {
+        const error = invalidProviderResponse();
+        this.providerRepository.markTurnFailed({
+          userMessageRef: message.messageRef,
+          error,
+          completedAt: result.completedAt
+        });
+        return throwProviderError(error, 502);
+      }
+
       if (result.status !== "succeeded") {
         const error = result.error ?? unavailableProvider();
         this.providerRepository.markTurnFailed({
