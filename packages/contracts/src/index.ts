@@ -127,3 +127,4 @@ export type ProviderInvocationResult = z.infer<typeof providerInvocationResultSc
 export type AdapterHealth = z.infer<typeof adapterHealthSchema>;
 
 export * from "./mobileEntry.js";
+export * from "./chatWork.js";
