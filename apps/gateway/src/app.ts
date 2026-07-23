@@ -64,7 +64,14 @@ function errorBody(input: PublicError): PublicError {
 
 function mobileErrorRoute(request: FastifyRequest): boolean {
   const path = request.url.split("?", 1)[0] ?? request.url;
-  return path.startsWith("/api/v1/mobile/") ||
+  const chatWorkPath = path === "/api/v1/chat" ||
+    path.startsWith("/api/v1/chat/") ||
+    path === "/api/v1/work-conversations" ||
+    path.startsWith("/api/v1/work-conversations/") ||
+    path.startsWith("/api/v1/threads/");
+  const deviceAuthorization = request.headers.authorization?.startsWith("Device ") ?? false;
+  return (!chatWorkPath && deviceAuthorization) ||
+    path.startsWith("/api/v1/mobile/") ||
     path === "/api/v1/portal/context" ||
     path.startsWith("/api/v1/admin/pairing-codes/") ||
     path.startsWith("/api/v1/admin/devices/") ||
