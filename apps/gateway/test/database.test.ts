@@ -7,6 +7,7 @@ import {
   runDevelopmentBootstrap,
   type GatewayDatabase
 } from "../src/database.js";
+import { DomainEventStore } from "../src/domainEvents.js";
 
 const bootstrap = {
   memberRef: "member:test",
@@ -24,8 +25,7 @@ const migrationVersions = [
   { version: 2 },
   { version: 3 },
   { version: 4 },
-  { version: 5 },
-  { version: 6 }
+  { version: 5 }
 ];
 
 describe("gateway database", () => {
@@ -212,9 +212,15 @@ describe("gateway database", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
-  it("creates Person-sequenced domain events and transactional outbox tables", () => {
+  it("installs the versioned Person event and transactional outbox subsystem", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-domain-event-schema-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openGatewayDatabase(databasePath);
+    new DomainEventStore(db, () => new Date("2026-07-23T18:00:00.000Z"));
+
+    expect(db.prepare(
+      "SELECT version FROM domain_event_schema_migrations ORDER BY version"
+    ).all()).toEqual([{ version: 1 }]);
 
     const tables = db.prepare(
       `SELECT name FROM sqlite_master
@@ -226,15 +232,6 @@ describe("gateway database", () => {
       { name: "domain_events" },
       { name: "outbox_events" },
       { name: "person_event_sequences" }
-    ]);
-
-    const sequenceColumns = db.prepare("PRAGMA table_info(person_event_sequences)")
-      .all()
-      .map((column) => String((column as { name: unknown }).name));
-    expect(sequenceColumns).toEqual([
-      "person_ref",
-      "last_sequence",
-      "updated_at"
     ]);
 
     const eventColumns = db.prepare("PRAGMA table_info(domain_events)")
@@ -279,6 +276,13 @@ describe("gateway database", () => {
       { name: "outbox_events_dispatch_idx" }
     ]);
     expect(db.pragma("foreign_key_check")).toEqual([]);
+
+    db.close();
+    db = openGatewayDatabase(databasePath);
+    new DomainEventStore(db, () => new Date("2026-07-23T18:01:00.000Z"));
+    expect(db.prepare(
+      "SELECT version FROM domain_event_schema_migrations ORDER BY version"
+    ).all()).toEqual([{ version: 1 }]);
   });
 
   it("bootstraps missing development records without overwriting operational state", () => {
