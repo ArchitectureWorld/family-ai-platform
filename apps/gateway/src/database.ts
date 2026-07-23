@@ -229,6 +229,141 @@ CREATE INDEX mobile_pairing_expiry_idx
   ON mobile_pairing_codes(status, expires_at);
 `;
 
+const MIGRATION_V4 = `
+CREATE TABLE interaction_threads (
+  thread_ref TEXT PRIMARY KEY,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  thread_kind TEXT NOT NULL CHECK (thread_kind IN ('home_chat', 'work')),
+  last_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_sequence >= 0),
+  created_at TEXT NOT NULL,
+  last_active_at TEXT NOT NULL
+);
+CREATE INDEX interaction_threads_person_kind_active_idx
+  ON interaction_threads(person_ref, thread_kind, last_active_at DESC);
+
+CREATE TABLE home_chat_streams (
+  home_chat_stream_ref TEXT PRIMARY KEY,
+  thread_ref TEXT NOT NULL UNIQUE REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('active', 'suspended'))
+);
+CREATE UNIQUE INDEX person_active_home_chat_idx
+  ON home_chat_streams(person_ref) WHERE status = 'active';
+
+CREATE TABLE daily_episodes (
+  daily_episode_ref TEXT PRIMARY KEY,
+  home_chat_stream_ref TEXT NOT NULL REFERENCES home_chat_streams(home_chat_stream_ref) ON DELETE CASCADE,
+  thread_ref TEXT NOT NULL REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  local_date TEXT NOT NULL,
+  timezone TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  boundary_reason TEXT NOT NULL CHECK (
+    boundary_reason IN ('initial', 'local_day', 'inactive_gap', 'manual_correction')
+  ),
+  archive_status TEXT NOT NULL CHECK (archive_status IN ('open', 'pending', 'archived', 'failed')),
+  archive_version INTEGER NOT NULL CHECK (archive_version >= 0),
+  last_message_sequence INTEGER NOT NULL CHECK (last_message_sequence >= 0),
+  CHECK (archive_status <> 'open' OR ended_at IS NULL),
+  CHECK (archive_status <> 'archived' OR (ended_at IS NOT NULL AND archive_version >= 1))
+);
+CREATE UNIQUE INDEX home_chat_open_episode_idx
+  ON daily_episodes(home_chat_stream_ref) WHERE archive_status = 'open';
+CREATE INDEX daily_episodes_thread_sequence_idx
+  ON daily_episodes(thread_ref, last_message_sequence);
+
+CREATE TABLE work_conversations (
+  work_conversation_ref TEXT PRIMARY KEY,
+  thread_ref TEXT NOT NULL UNIQUE REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  goal TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (
+    status IN ('active', 'paused', 'waiting_confirmation', 'completed', 'archived')
+  ),
+  archived_at TEXT,
+  CHECK (
+    (status = 'archived' AND archived_at IS NOT NULL) OR
+    (status <> 'archived' AND archived_at IS NULL)
+  )
+);
+CREATE INDEX work_conversations_person_status_idx
+  ON work_conversations(person_ref, status, work_conversation_ref);
+
+CREATE TABLE thread_messages (
+  message_ref TEXT PRIMARY KEY,
+  thread_ref TEXT NOT NULL REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  thread_sequence INTEGER NOT NULL CHECK (thread_sequence > 0),
+  client_message_id TEXT NOT NULL,
+  actor_type TEXT NOT NULL CHECK (actor_type IN ('person', 'assistant', 'agent', 'system')),
+  actor_person_ref TEXT REFERENCES persons(person_ref),
+  actor_assignment_ref TEXT,
+  actor_agent_ref TEXT REFERENCES agents(agent_ref),
+  actor_provider_profile_ref TEXT REFERENCES provider_profiles(provider_profile_ref),
+  actor_system_ref TEXT,
+  origin_device_ref TEXT REFERENCES managed_devices(device_ref),
+  origin_connection_ref TEXT,
+  entry_audience TEXT NOT NULL CHECK (entry_audience IN ('personal', 'family_admin', 'system')),
+  content_type TEXT NOT NULL CHECK (content_type = 'text'),
+  content_text TEXT NOT NULL CHECK (length(content_text) > 0),
+  content_language TEXT,
+  occurred_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  CHECK (
+    (actor_type = 'person' AND actor_person_ref IS NOT NULL AND origin_device_ref IS NOT NULL
+      AND actor_assignment_ref IS NULL AND actor_agent_ref IS NULL
+      AND actor_provider_profile_ref IS NULL AND actor_system_ref IS NULL) OR
+    (actor_type = 'assistant' AND actor_person_ref IS NULL AND actor_assignment_ref IS NOT NULL
+      AND actor_agent_ref IS NOT NULL AND actor_provider_profile_ref IS NOT NULL
+      AND actor_system_ref IS NULL) OR
+    (actor_type = 'agent' AND actor_person_ref IS NULL AND actor_assignment_ref IS NULL
+      AND actor_agent_ref IS NOT NULL AND actor_provider_profile_ref IS NOT NULL
+      AND actor_system_ref IS NULL) OR
+    (actor_type = 'system' AND actor_person_ref IS NULL AND actor_assignment_ref IS NULL
+      AND actor_agent_ref IS NULL AND actor_provider_profile_ref IS NULL
+      AND actor_system_ref IS NOT NULL AND entry_audience = 'system')
+  )
+);
+CREATE UNIQUE INDEX thread_messages_sequence_idx
+  ON thread_messages(thread_ref, thread_sequence);
+CREATE UNIQUE INDEX thread_messages_client_id_idx
+  ON thread_messages(thread_ref, client_message_id);
+CREATE INDEX thread_messages_page_idx
+  ON thread_messages(thread_ref, thread_sequence DESC);
+
+CREATE TABLE chat_work_conversions (
+  conversion_ref TEXT PRIMARY KEY,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  home_chat_stream_ref TEXT NOT NULL REFERENCES home_chat_streams(home_chat_stream_ref),
+  daily_episode_ref TEXT REFERENCES daily_episodes(daily_episode_ref),
+  work_conversation_ref TEXT NOT NULL UNIQUE REFERENCES work_conversations(work_conversation_ref) ON DELETE CASCADE,
+  decisions_json TEXT NOT NULL,
+  open_questions_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE chat_work_conversion_messages (
+  conversion_ref TEXT NOT NULL REFERENCES chat_work_conversions(conversion_ref) ON DELETE CASCADE,
+  message_ref TEXT NOT NULL REFERENCES thread_messages(message_ref),
+  source_order INTEGER NOT NULL CHECK (source_order >= 0),
+  PRIMARY KEY (conversion_ref, message_ref),
+  UNIQUE (conversion_ref, source_order)
+);
+
+CREATE TABLE work_progress_snapshots (
+  work_conversation_ref TEXT PRIMARY KEY REFERENCES work_conversations(work_conversation_ref) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (
+    status IN ('active', 'paused', 'waiting_confirmation', 'completed', 'archived')
+  ),
+  phase_summary TEXT NOT NULL,
+  incomplete_tasks_json TEXT NOT NULL,
+  risks_json TEXT NOT NULL,
+  pending_confirmations_json TEXT NOT NULL,
+  deadlines_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -250,7 +385,7 @@ function applyMigrations(db: GatewayDatabase): void {
   }
 
   let latest = latestMigrationVersion(db);
-  if (latest > 3 || latest < 1) {
+  if (latest > 4 || latest < 1) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
   if (latest === 1) {
@@ -271,7 +406,16 @@ function applyMigrations(db: GatewayDatabase): void {
     })();
     latest = 3;
   }
-  if (latest !== 3) {
+  if (latest === 3) {
+    db.transaction(() => {
+      db.exec(MIGRATION_V4);
+      db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES(4, ?)").run(
+        new Date().toISOString()
+      );
+    })();
+    latest = 4;
+  }
+  if (latest !== 4) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
