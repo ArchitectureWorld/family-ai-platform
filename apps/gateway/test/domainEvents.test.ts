@@ -202,6 +202,56 @@ describe("DomainEventStore", () => {
     expect(reclaimed.some((item) => item.event.eventRef === third.eventRef)).toBe(true);
   });
 
+  it("rejects publish and failure finalization after a claim lease expires", () => {
+    const publishEvent = store.append({
+      personRef: ownerPersonRef,
+      eventType: "test.expired.publish",
+      aggregateType: "work",
+      aggregateRef: "work:expired-publish",
+      payload: {},
+      occurredAt: currentNow.toISOString()
+    });
+    const failEvent = store.append({
+      personRef: ownerPersonRef,
+      eventType: "test.expired.fail",
+      aggregateType: "work",
+      aggregateRef: "work:expired-fail",
+      payload: {},
+      occurredAt: currentNow.toISOString()
+    });
+    store.claimOutboxBatch({
+      workerRef: "worker:expired-finalizer",
+      now: "2026-07-23T18:00:01.000Z",
+      claimedUntil: "2026-07-23T18:00:02.000Z",
+      limit: 2
+    });
+
+    expect(() => store.markPublished({
+      eventRef: publishEvent.eventRef,
+      workerRef: "worker:expired-finalizer",
+      publishedAt: "2026-07-23T18:00:03.000Z"
+    })).toThrow("OUTBOX_CLAIM_INVALID");
+    expect(() => store.markFailed({
+      eventRef: failEvent.eventRef,
+      workerRef: "worker:expired-finalizer",
+      error: {
+        code: "DELIVERY_FAILED",
+        category: "availability",
+        message: "租约已过期。",
+        retryable: true
+      },
+      availableAt: "2026-07-23T18:01:00.000Z",
+      updatedAt: "2026-07-23T18:00:03.000Z"
+    })).toThrow("OUTBOX_CLAIM_INVALID");
+
+    expect(db.prepare(
+      "SELECT status, claimed_by FROM outbox_events WHERE event_ref = ?"
+    ).get(publishEvent.eventRef)).toEqual({
+      status: "claimed",
+      claimed_by: "worker:expired-finalizer"
+    });
+  });
+
   it("recovers events and Outbox state after database restart", () => {
     const event = store.append({
       personRef: ownerPersonRef,
