@@ -104,4 +104,39 @@ describe("Chat Work HTTP route security", () => {
     });
     expect(valid.statusCode).toBe(200);
   });
+
+  it("rejects forged identity fields and unsupported Work protocol versions", async () => {
+    for (const payload of [
+      {
+        protocolVersion: 1,
+        title: "伪造 Work",
+        goal: "不允许客户端指定 Person",
+        personRef: "person:forged"
+      },
+      {
+        protocolVersion: 1,
+        title: "伪造 Work",
+        goal: "不允许客户端指定 Agent",
+        agentRef: "agent:forged"
+      },
+      {
+        protocolVersion: 2,
+        title: "错误版本",
+        goal: "必须拒绝"
+      }
+    ]) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/work-conversations",
+        headers: entryHeaders(personal),
+        payload
+      });
+      expect(response.statusCode).toBe(400);
+      expectPublicError(response, {
+        code: "REQUEST_INVALID",
+        category: "validation",
+        retryable: false
+      });
+    }
+  });
 });
