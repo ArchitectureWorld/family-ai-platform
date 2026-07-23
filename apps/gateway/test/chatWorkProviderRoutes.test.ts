@@ -1,7 +1,16 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FakeProviderAdapter } from "@family-ai/provider-adapter-sdk";
+import {
+  PROTOCOL_VERSION,
+  type AdapterHealth,
+  type ProviderInvocationRequest,
+  type ProviderInvocationResult
+} from "@family-ai/contracts";
+import {
+  FakeProviderAdapter,
+  type ProviderAdapter
+} from "@family-ai/provider-adapter-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
 
@@ -23,6 +32,29 @@ function entryHeaders(entry: EntryCredential) {
   };
 }
 
+class MissingSessionProviderAdapter implements ProviderAdapter {
+  async health(): Promise<AdapterHealth> {
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      adapterRef: "adapter:missing-session-test",
+      status: "online",
+      providerProfiles: ["provider-profile:fake-local"],
+      checkedAt: "2026-07-23T17:00:00.000Z"
+    };
+  }
+
+  async invoke(request: ProviderInvocationRequest): Promise<ProviderInvocationResult> {
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      invocationRef: request.invocationRef,
+      correlationRef: request.correlationRef,
+      status: "succeeded",
+      completedAt: "2026-07-23T17:00:01.000Z",
+      output: [{ type: "text", text: "缺少 External Session 的回复。" }]
+    };
+  }
+}
+
 describe("Chat Work Provider HTTP flow", () => {
   let directory = "";
   let databasePath = "";
@@ -33,7 +65,7 @@ describe("Chat Work Provider HTTP flow", () => {
   let ownerPersonRef = "";
   let ownerDeviceRef = "";
 
-  async function openApp(providerAdapter = adapter) {
+  async function openApp(providerAdapter: ProviderAdapter = adapter) {
     app = await buildGatewayApp({
       databasePath,
       deviceToken,
@@ -103,6 +135,16 @@ describe("Chat Work Provider HTTP flow", () => {
     });
   }
 
+  async function listMessages(threadRef: string) {
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+      headers: entryHeaders(personal)
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json().messages as Array<Record<string, unknown>>;
+  }
+
   it("returns the accepted Person message and persists the generated Assistant reply", async () => {
     const chat = await openChat();
 
@@ -124,14 +166,9 @@ describe("Chat Work Provider HTTP flow", () => {
     });
     expect(sent.json()).not.toHaveProperty("assistantMessage");
 
-    const listed = await app.inject({
-      method: "GET",
-      url: `/api/v1/threads/${encodeURIComponent(chat.threadRef)}/messages`,
-      headers: entryHeaders(personal)
-    });
-    expect(listed.statusCode).toBe(200);
-    expect(listed.json().messages).toHaveLength(2);
-    expect(listed.json().messages[1]).toMatchObject({
+    const messages = await listMessages(chat.threadRef);
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({
       threadSequence: 2,
       actor: {
         type: "assistant",
@@ -189,5 +226,51 @@ describe("Chat Work Provider HTTP flow", () => {
     expect(workSent.statusCode).toBe(201);
     expect(adapter.calls[1]?.externalSessionRef).toBeUndefined();
     expect(adapter.results[1]?.output?.[0]?.text).toBe("Fake Provider 第 1 轮回复。");
+  });
+
+  it("keeps the Person message after Provider failure and succeeds on exact retry", async () => {
+    await app.close();
+    adapter = new FakeProviderAdapter({ failNext: true, clock: () => currentNow });
+    await openApp();
+    const chat = await openChat();
+
+    const failed = await sendMessage(chat.threadRef, "retry", "失败后重试。");
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json()).toMatchObject({
+      code: "PROVIDER_UNAVAILABLE",
+      category: "availability",
+      retryable: true
+    });
+    expect(await listMessages(chat.threadRef)).toHaveLength(1);
+
+    const retried = await sendMessage(chat.threadRef, "retry", "失败后重试。");
+    expect(retried.statusCode).toBe(201);
+    expect(await listMessages(chat.threadRef)).toHaveLength(2);
+    expect(adapter.calls).toHaveLength(2);
+    expect(retried.json().message.threadSequence).toBe(1);
+  });
+
+  it("returns PublicError for an invalid Provider result while preserving the Person message", async () => {
+    await app.close();
+    await openApp(new MissingSessionProviderAdapter());
+    const chat = await openChat();
+
+    const response = await sendMessage(chat.threadRef, "invalid-provider", "请保留这条输入。");
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toMatchObject({
+      code: "PROVIDER_RESPONSE_INVALID",
+      category: "internal",
+      retryable: true,
+      message: expect.any(String)
+    });
+    expect(response.json()).not.toHaveProperty("error");
+    expect(response.json()).not.toHaveProperty("protocolVersion");
+
+    const messages = await listMessages(chat.threadRef);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      actor: { type: "person", personRef: ownerPersonRef },
+      content: { type: "text", text: "请保留这条输入。" }
+    });
   });
 });
