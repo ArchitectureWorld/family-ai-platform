@@ -13,6 +13,8 @@ import {
   FakeProviderAdapter,
   type ProviderAdapter
 } from "@family-ai/provider-adapter-sdk";
+import { ChatWorkDomainRepository } from "./chatWorkDomain.js";
+import { registerChatWorkRoutes } from "./chatWorkRoutes.js";
 import {
   GatewayRepository,
   openGatewayDatabase,
@@ -37,6 +39,7 @@ export interface BuildGatewayAppOptions {
   mode: GatewayMode;
   providerAdapter?: ProviderAdapter;
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
+  now?: () => Date;
 }
 
 const SERVICE_ID = "family-ai-gateway-foundation";
@@ -61,8 +64,13 @@ function errorBody(input: PublicError): PublicError {
 
 function mobileErrorRoute(request: FastifyRequest): boolean {
   const path = request.url.split("?", 1)[0] ?? request.url;
+  const chatWorkPath = path === "/api/v1/chat" ||
+    path.startsWith("/api/v1/chat/") ||
+    path === "/api/v1/work-conversations" ||
+    path.startsWith("/api/v1/work-conversations/") ||
+    path.startsWith("/api/v1/threads/");
   const deviceAuthorization = request.headers.authorization?.startsWith("Device ") ?? false;
-  return deviceAuthorization ||
+  return (!chatWorkPath && deviceAuthorization) ||
     path.startsWith("/api/v1/mobile/") ||
     path === "/api/v1/portal/context" ||
     path.startsWith("/api/v1/admin/pairing-codes/") ||
@@ -133,6 +141,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
 
   const app = Fastify({ logger: false });
   const db = openGatewayDatabase(options.databasePath);
+  const now = options.now ?? (() => new Date());
   if (options.mode !== "production") {
     const bootstrap: DevelopmentBootstrapInput = {
       ...defaultBootstrap,
@@ -144,7 +153,8 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
 
   const repository = new GatewayRepository(db);
   const familyRepository = new FamilyDomainRepository(db);
-  const entryAuthenticator = new EntrySessionAuthenticator(db, familyRepository);
+  const entryAuthenticator = new EntrySessionAuthenticator(db, familyRepository, now);
+  const chatWorkRepository = new ChatWorkDomainRepository(db, now);
   const mobileDeviceSummaryRepository = new MobileDeviceSummaryRepository(db);
   const mobileRepository = new MobilePairingRepository(db);
   const providerAdapter = options.providerAdapter ?? new FakeProviderAdapter();
@@ -181,6 +191,11 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     mobileRepository,
     entryAuthenticator,
     mode: options.mode
+  });
+  registerChatWorkRoutes(app, {
+    repository: chatWorkRepository,
+    entryAuthenticator,
+    now
   });
 
   app.get("/health", async () => ({
