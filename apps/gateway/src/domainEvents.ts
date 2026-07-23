@@ -659,8 +659,15 @@ export class DomainEventStore {
       `UPDATE outbox_events
        SET status = 'published', claimed_by = NULL, claimed_until = NULL,
            published_at = ?, last_error_json = NULL, updated_at = ?
-       WHERE event_ref = ? AND status = 'claimed' AND claimed_by = ?`
-    ).run(input.publishedAt, input.publishedAt, input.eventRef, input.workerRef);
+       WHERE event_ref = ? AND status = 'claimed' AND claimed_by = ?
+         AND claimed_until > ?`
+    ).run(
+      input.publishedAt,
+      input.publishedAt,
+      input.eventRef,
+      input.workerRef,
+      input.publishedAt
+    );
     if (result.changes !== 1) throw claimInvalid();
   }
 
@@ -675,13 +682,15 @@ export class DomainEventStore {
       `UPDATE outbox_events
        SET status = 'pending', available_at = ?, claimed_by = NULL, claimed_until = NULL,
            published_at = NULL, last_error_json = ?, updated_at = ?
-       WHERE event_ref = ? AND status = 'claimed' AND claimed_by = ?`
+       WHERE event_ref = ? AND status = 'claimed' AND claimed_by = ?
+         AND claimed_until > ?`
     ).run(
       input.availableAt,
       JSON.stringify(input.error),
       input.updatedAt,
       input.eventRef,
-      input.workerRef
+      input.workerRef,
+      input.updatedAt
     );
     if (result.changes !== 1) throw claimInvalid();
   }
