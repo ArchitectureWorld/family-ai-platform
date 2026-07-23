@@ -102,6 +102,26 @@ describe("Chat / Work protocol v1 commands", () => {
     expect(sendThreadMessageRequestSchema.parse(sendMessage)).toEqual(sendMessage);
   });
 
+  it("preserves message text exactly and rejects padded client message IDs", () => {
+    const messageWithMeaningfulWhitespace = {
+      ...sendMessage,
+      content: {
+        ...sendMessage.content,
+        text: "  保留原始空格。  "
+      }
+    } as const;
+
+    expect(
+      sendThreadMessageRequestSchema.parse(messageWithMeaningfulWhitespace).content.text
+    ).toBe("  保留原始空格。  ");
+    expect(
+      sendThreadMessageRequestSchema.safeParse({
+        ...sendMessage,
+        clientMessageId: " web-chat-0003 "
+      }).success
+    ).toBe(false);
+  });
+
   it("accepts canonical response envelopes", () => {
     const workList = fixture("work-list-response.json") as {
       conversations: Record<string, unknown>[];
