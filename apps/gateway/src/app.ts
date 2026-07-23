@@ -14,6 +14,8 @@ import {
   type ProviderAdapter
 } from "@family-ai/provider-adapter-sdk";
 import { ChatWorkDomainRepository } from "./chatWorkDomain.js";
+import { ChatWorkMessageService } from "./chatWorkMessageService.js";
+import { ChatWorkProviderRepository } from "./chatWorkProvider.js";
 import { registerChatWorkRoutes } from "./chatWorkRoutes.js";
 import {
   GatewayRepository,
@@ -159,6 +161,13 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   const mobileRepository = new MobilePairingRepository(db);
   const providerAdapter = options.providerAdapter ?? new FakeProviderAdapter();
   const messageService = new MessageService(repository, providerAdapter);
+  const chatWorkProviderRepository = new ChatWorkProviderRepository(db, now);
+  const chatWorkMessageService = new ChatWorkMessageService(
+    chatWorkRepository,
+    chatWorkProviderRepository,
+    providerAdapter,
+    now
+  );
 
   app.addHook("onClose", async () => {
     db.close();
@@ -194,6 +203,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   });
   registerChatWorkRoutes(app, {
     repository: chatWorkRepository,
+    messageService: chatWorkMessageService,
     entryAuthenticator,
     now
   });
