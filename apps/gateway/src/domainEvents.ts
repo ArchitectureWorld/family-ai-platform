@@ -262,6 +262,23 @@ BEGIN
   FROM domain_events WHERE rowid = last_insert_rowid();
 END;
 
+CREATE TRIGGER IF NOT EXISTS domain_event_chat_work_source_message_added
+AFTER INSERT ON chat_work_conversion_messages
+BEGIN
+  UPDATE domain_events
+  SET payload_json = json_set(
+    payload_json,
+    '$.sourceMessageRefs',
+    json_insert(
+      json_extract(payload_json, '$.sourceMessageRefs'),
+      '$[#]',
+      NEW.message_ref
+    )
+  )
+  WHERE event_type = 'chat.work.created'
+    AND aggregate_ref = NEW.conversion_ref;
+END;
+
 CREATE TRIGGER IF NOT EXISTS domain_event_work_progress_inserted
 AFTER INSERT ON work_progress_snapshots
 BEGIN
