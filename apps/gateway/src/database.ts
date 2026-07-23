@@ -364,6 +364,49 @@ CREATE TABLE work_progress_snapshots (
 );
 `;
 
+const MIGRATION_V5 = `
+CREATE TABLE thread_provider_contexts (
+  thread_ref TEXT PRIMARY KEY REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  provider_conversation_ref TEXT NOT NULL UNIQUE,
+  assignment_ref TEXT NOT NULL REFERENCES assistant_assignments(assignment_ref),
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+  external_session_ref TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX thread_provider_context_person_idx
+  ON thread_provider_contexts(person_ref, thread_ref);
+
+CREATE TABLE thread_provider_turns (
+  user_message_ref TEXT PRIMARY KEY REFERENCES thread_messages(message_ref) ON DELETE CASCADE,
+  thread_ref TEXT NOT NULL REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  invocation_ref TEXT NOT NULL UNIQUE,
+  correlation_ref TEXT NOT NULL UNIQUE,
+  idempotency_key TEXT NOT NULL,
+  assignment_ref TEXT NOT NULL REFERENCES assistant_assignments(assignment_ref),
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+  attempt_count INTEGER NOT NULL CHECK (attempt_count > 0),
+  assistant_message_ref TEXT UNIQUE REFERENCES thread_messages(message_ref),
+  error_json TEXT,
+  requested_at TEXT NOT NULL,
+  completed_at TEXT,
+  CHECK (
+    (status = 'pending' AND assistant_message_ref IS NULL AND error_json IS NULL
+      AND completed_at IS NULL) OR
+    (status = 'succeeded' AND assistant_message_ref IS NOT NULL AND error_json IS NULL
+      AND completed_at IS NOT NULL) OR
+    (status = 'failed' AND assistant_message_ref IS NULL AND error_json IS NOT NULL
+      AND completed_at IS NOT NULL)
+  )
+);
+CREATE INDEX thread_provider_turns_thread_status_idx
+  ON thread_provider_turns(thread_ref, status, requested_at);
+`;
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -385,7 +428,7 @@ function applyMigrations(db: GatewayDatabase): void {
   }
 
   let latest = latestMigrationVersion(db);
-  if (latest > 4 || latest < 1) {
+  if (latest > 5 || latest < 1) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
   if (latest === 1) {
@@ -415,7 +458,16 @@ function applyMigrations(db: GatewayDatabase): void {
     })();
     latest = 4;
   }
-  if (latest !== 4) {
+  if (latest === 4) {
+    db.transaction(() => {
+      db.exec(MIGRATION_V5);
+      db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES(5, ?)").run(
+        new Date().toISOString()
+      );
+    })();
+    latest = 5;
+  }
+  if (latest !== 5) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }

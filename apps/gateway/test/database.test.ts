@@ -19,7 +19,13 @@ const bootstrap = {
   providerProfileRef: "provider-profile:fake-local"
 };
 
-const migrationVersions = [{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }];
+const migrationVersions = [
+  { version: 1 },
+  { version: 2 },
+  { version: 3 },
+  { version: 4 },
+  { version: 5 }
+];
 
 describe("gateway database", () => {
   let directory = "";
@@ -148,6 +154,63 @@ describe("gateway database", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
+  it("creates durable Thread Provider contexts and turns", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-provider-turn-schema-"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+
+    const tables = db
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table'
+           AND name IN ('thread_provider_contexts', 'thread_provider_turns')
+         ORDER BY name`
+      )
+      .all();
+    expect(tables).toEqual([
+      { name: "thread_provider_contexts" },
+      { name: "thread_provider_turns" }
+    ]);
+
+    const contextColumns = db
+      .prepare("PRAGMA table_info(thread_provider_contexts)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(contextColumns).toEqual([
+      "thread_ref",
+      "person_ref",
+      "provider_conversation_ref",
+      "assignment_ref",
+      "agent_ref",
+      "provider_profile_ref",
+      "external_session_ref",
+      "created_at",
+      "updated_at"
+    ]);
+
+    const turnColumns = db
+      .prepare("PRAGMA table_info(thread_provider_turns)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(turnColumns).toEqual([
+      "user_message_ref",
+      "thread_ref",
+      "invocation_ref",
+      "correlation_ref",
+      "idempotency_key",
+      "assignment_ref",
+      "agent_ref",
+      "provider_profile_ref",
+      "status",
+      "attempt_count",
+      "assistant_message_ref",
+      "error_json",
+      "requested_at",
+      "completed_at"
+    ]);
+
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
   it("bootstraps missing development records without overwriting operational state", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-bootstrap-"));
     db = openGatewayDatabase(join(directory, "gateway.sqlite"));
@@ -170,10 +233,10 @@ describe("gateway database", () => {
     const after = db
       .prepare("SELECT token_hash, status, display_name FROM devices WHERE device_ref = ?")
       .get(bootstrap.deviceRef) as {
-        token_hash: string;
-        status: string;
-        display_name: string;
-      };
+      token_hash: string;
+      status: string;
+      display_name: string;
+    };
     expect(after.token_hash).toBe(original.token_hash);
     expect(after.status).toBe("revoked");
     expect(after.display_name).toBe(bootstrap.deviceDisplayName);

@@ -181,7 +181,7 @@ describe("Chat Work HTTP routes", () => {
     expect(listed.json().conversations).toEqual([created.json().conversation]);
   });
 
-  it("persists Person messages, replays retries and returns ascending pages", async () => {
+  it("persists Person and Assistant messages, replays retries and returns ascending pages", async () => {
     const chatResponse = await app.inject({
       method: "GET",
       url: "/api/v1/chat?timezone=UTC",
@@ -267,18 +267,22 @@ describe("Chat Work HTTP routes", () => {
     expect(latest.statusCode).toBe(200);
     expect(latest.json().messages.map(
       (message: { threadSequence: number }) => message.threadSequence
-    )).toEqual([4, 5]);
-    expect(latest.json().nextBeforeSequence).toBe(4);
+    )).toEqual([9, 10]);
+    expect(latest.json().nextBeforeSequence).toBe(9);
+    expect(latest.json().messages.map(
+      (message: { actor: { type: string } }) => message.actor.type
+    )).toEqual(["person", "assistant"]);
 
     const older = await app.inject({
       method: "GET",
-      url: `/api/v1/threads/${encodeURIComponent(chat.threadRef)}/messages?beforeSequence=4&limit=2`,
+      url: `/api/v1/threads/${encodeURIComponent(chat.threadRef)}/messages?beforeSequence=9&limit=2`,
       headers: entryHeaders(personal)
     });
     expect(older.statusCode).toBe(200);
     expect(older.json().messages.map(
       (message: { threadSequence: number }) => message.threadSequence
-    )).toEqual([2, 3]);
+    )).toEqual([7, 8]);
+    expect(older.json().nextBeforeSequence).toBe(7);
   });
 
   it("converts Chat references into a Work and reads a trusted progress snapshot after restart", async () => {
@@ -321,8 +325,8 @@ describe("Chat Work HTTP routes", () => {
           dailyEpisodeRef: episode.dailyEpisodeRef,
           messageRefs: [sourceMessageRef]
         },
-        decisions: ["只实现路由层"],
-        openQuestions: ["何时接入 Provider"]
+        decisions: ["路由和 Provider 保持分层"],
+        openQuestions: ["何时接入 SSE"]
       }
     });
     expect(conversion.statusCode).toBe(201);
@@ -349,7 +353,7 @@ describe("Chat Work HTTP routes", () => {
         workConversationRef,
         status: "active",
         phaseSummary: "HTTP 路由已建立",
-        incompleteTasks: ["接入 Provider"],
+        incompleteTasks: ["接入实时同步"],
         risks: ["不得影响 PR #14"],
         pendingConfirmations: [],
         deadlines: [{
