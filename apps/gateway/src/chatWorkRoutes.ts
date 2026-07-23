@@ -1,7 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import {
   CHAT_WORK_PROTOCOL_VERSION,
-  homeChatStreamResponseSchema
+  createWorkConversationRequestSchema,
+  createWorkConversationResponseSchema,
+  homeChatStreamResponseSchema,
+  workConversationListResponseSchema
 } from "@family-ai/contracts";
 import { z } from "zod";
 import type { ChatWorkDomainRepository } from "./chatWorkDomain.js";
@@ -87,5 +90,31 @@ export function registerChatWorkRoutes(
       protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
       ...record
     });
+  });
+
+  app.get("/api/v1/work-conversations", async (request) => {
+    const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
+    return workConversationListResponseSchema.parse({
+      protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+      conversations: input.repository.listWorkConversations(context.person.personRef)
+    });
+  });
+
+  app.post("/api/v1/work-conversations", async (request, reply) => {
+    const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
+    const command = parseRequest(
+      createWorkConversationRequestSchema,
+      request.body,
+      "Work 标题、目标或协议版本不正确。"
+    );
+    const conversation = input.repository.createWorkConversation({
+      personRef: context.person.personRef,
+      title: command.title,
+      goal: command.goal
+    });
+    return reply.code(201).send(createWorkConversationResponseSchema.parse({
+      protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+      conversation
+    }));
   });
 }
