@@ -32,7 +32,8 @@
       "actor": {
         "type": "assistant",
         "assignmentRef": "assignment:alice-personal-assistant",
-        "agentRef": "agent:personal-assistant"
+        "agentRef": "agent:personal-assistant",
+        "providerProfileRef": "provider-profile:fake-local"
       },
       "origin": {
         "deviceRef": null,
