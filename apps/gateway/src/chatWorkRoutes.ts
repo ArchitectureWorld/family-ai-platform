@@ -4,6 +4,10 @@ import {
   createWorkConversationRequestSchema,
   createWorkConversationResponseSchema,
   homeChatStreamResponseSchema,
+  interactionThreadRefSchema,
+  sendThreadMessageRequestSchema,
+  sendThreadMessageResponseSchema,
+  threadMessageListResponseSchema,
   workConversationListResponseSchema
 } from "@family-ai/contracts";
 import { z } from "zod";
@@ -17,6 +21,17 @@ import { GatewayDomainError } from "./service.js";
 const homeChatQuerySchema = z
   .object({
     timezone: z.string().trim().min(1).max(80).optional()
+  })
+  .strict();
+
+const threadParamsSchema = z
+  .object({ threadRef: interactionThreadRefSchema })
+  .strict();
+
+const threadMessagesQuerySchema = z
+  .object({
+    beforeSequence: z.coerce.number().int().positive().optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional()
   })
   .strict();
 
@@ -115,6 +130,66 @@ export function registerChatWorkRoutes(
     return reply.code(201).send(createWorkConversationResponseSchema.parse({
       protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
       conversation
+    }));
+  });
+
+  app.get("/api/v1/threads/:threadRef/messages", async (request) => {
+    const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
+    const params = parseRequest(
+      threadParamsSchema,
+      request.params,
+      "Thread 编号不正确。"
+    );
+    const query = parseRequest(
+      threadMessagesQuerySchema,
+      request.query,
+      "消息分页参数不正确。"
+    );
+    const page = input.repository.listThreadMessages({
+      personRef: context.person.personRef,
+      threadRef: params.threadRef,
+      ...(query.beforeSequence === undefined
+        ? {}
+        : { beforeSequence: query.beforeSequence }),
+      ...(query.limit === undefined ? {} : { limit: query.limit })
+    });
+    return threadMessageListResponseSchema.parse({
+      protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+      ...page
+    });
+  });
+
+  app.post("/api/v1/threads/:threadRef/messages", async (request, reply) => {
+    const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
+    const params = parseRequest(
+      threadParamsSchema,
+      request.params,
+      "Thread 编号不正确。"
+    );
+    const command = parseRequest(
+      sendThreadMessageRequestSchema,
+      request.body,
+      "消息内容或协议版本不正确。"
+    );
+    const message = input.repository.appendThreadMessage({
+      personRef: context.person.personRef,
+      threadRef: params.threadRef,
+      clientMessageId: command.clientMessageId,
+      actor: {
+        type: "person",
+        personRef: context.person.personRef
+      },
+      origin: {
+        deviceRef: context.device.deviceRef,
+        connectionRef: null,
+        entryAudience: "personal"
+      },
+      content: command.content,
+      occurredAt: command.occurredAt
+    });
+    return reply.code(201).send(sendThreadMessageResponseSchema.parse({
+      protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+      message
     }));
   });
 }
