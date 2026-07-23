@@ -19,6 +19,7 @@ function refSchema(prefix: string) {
 const personRefSchema = refSchema("person");
 const assignmentRefSchema = refSchema("assignment");
 const agentRefSchema = refSchema("agent");
+const providerProfileRefSchema = refSchema("provider-profile");
 const deviceRefSchema = refSchema("device");
 const connectionRefSchema = refSchema("connection");
 const systemRefSchema = refSchema("system");
@@ -144,10 +145,17 @@ export const threadActorSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("assistant"),
       assignmentRef: assignmentRefSchema,
-      agentRef: agentRefSchema
+      agentRef: agentRefSchema,
+      providerProfileRef: providerProfileRefSchema
     })
     .strict(),
-  z.object({ type: z.literal("agent"), agentRef: agentRefSchema }).strict(),
+  z
+    .object({
+      type: z.literal("agent"),
+      agentRef: agentRefSchema,
+      providerProfileRef: providerProfileRefSchema
+    })
+    .strict(),
   z.object({ type: z.literal("system"), systemRef: systemRefSchema }).strict()
 ]);
 
@@ -328,7 +336,7 @@ export const createWorkFromChatRequestSchema = createWorkFromChatBaseSchema.supe
   }
 );
 
-export const chatWorkConversionSchema = z
+const chatWorkConversionBaseSchema = z
   .object({
     conversionRef: chatWorkConversionRefSchema,
     homeChatStreamRef: homeChatStreamRefSchema,
@@ -339,13 +347,34 @@ export const chatWorkConversionSchema = z
   })
   .strict();
 
+export const chatWorkConversionSchema = chatWorkConversionBaseSchema.superRefine(
+  (value, context) => {
+    if (new Set(value.sourceMessageRefs).size !== value.sourceMessageRefs.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["sourceMessageRefs"],
+        message: "sourceMessageRefs must be unique"
+      });
+    }
+  }
+);
+
 export const createWorkFromChatResponseSchema = z
   .object({
     protocolVersion: protocolVersionSchema,
     conversation: workConversationSchema,
     conversion: chatWorkConversionSchema
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.conversion.workConversationRef !== value.conversation.workConversationRef) {
+      context.addIssue({
+        code: "custom",
+        path: ["conversion", "workConversationRef"],
+        message: "conversion must target the returned WorkConversation"
+      });
+    }
+  });
 
 export const workProgressSnapshotSchema = z
   .object({
