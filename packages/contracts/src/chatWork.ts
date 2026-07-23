@@ -6,7 +6,7 @@ const protocolVersionSchema = z.literal(CHAT_WORK_PROTOCOL_VERSION);
 const timestampSchema = z.string().datetime({ offset: true });
 const localDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const timezoneSchema = z.string().trim().min(1).max(80);
-const clientMessageIdSchema = z.string().trim().min(8).max(128);
+const clientMessageIdSchema = z.string().min(8).max(128).regex(/^\S+$/);
 const titleSchema = z.string().trim().min(1).max(120);
 const goalSchema = z.string().trim().min(1).max(4000);
 const summarySchema = z.string().trim().max(8000);
@@ -133,7 +133,7 @@ export const workConversationSchema = workConversationBaseSchema.superRefine((va
 export const threadMessageContentSchema = z
   .object({
     type: z.literal("text"),
-    text: z.string().trim().min(1).max(12000),
+    text: z.string().min(1).max(12000),
     language: z.string().regex(/^[a-z]{2,3}(?:-[A-Z]{2})?$/).optional()
   })
   .strict();
