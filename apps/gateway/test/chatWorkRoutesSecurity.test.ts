@@ -188,4 +188,43 @@ describe("Chat Work HTTP route security", () => {
       });
     }
   });
+
+  it("rejects forged Chat-to-Work fields and hides missing progress", async () => {
+    const forged = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/work-conversions",
+      headers: entryHeaders(personal),
+      payload: {
+        protocolVersion: 1,
+        title: "伪造转换",
+        goal: "必须拒绝",
+        personRef: "person:forged",
+        source: {
+          homeChatStreamRef: "home-chat:forged",
+          dailyEpisodeRef: null,
+          messageRefs: ["message:forged"]
+        },
+        decisions: [],
+        openQuestions: []
+      }
+    });
+    expect(forged.statusCode).toBe(400);
+    expectPublicError(forged, {
+      code: "REQUEST_INVALID",
+      category: "validation",
+      retryable: false
+    });
+
+    const missing = await app.inject({
+      method: "GET",
+      url: "/api/v1/work-conversations/work:not-present/progress",
+      headers: entryHeaders(personal)
+    });
+    expect(missing.statusCode).toBe(404);
+    expectPublicError(missing, {
+      code: "WORK_PROGRESS_NOT_FOUND",
+      category: "permission",
+      retryable: false
+    });
+  });
 });
