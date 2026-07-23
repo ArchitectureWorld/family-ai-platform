@@ -1,13 +1,41 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type {
+  AdapterHealth,
+  ProviderInvocationRequest,
+  ProviderInvocationResult
+} from "@family-ai/contracts";
+import {
+  FakeProviderAdapter,
+  type ProviderAdapter
+} from "@family-ai/provider-adapter-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
+import { ChatWorkMessageService } from "../src/chatWorkMessageService.js";
 import { ChatWorkProviderRepository } from "../src/chatWorkProvider.js";
 import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
 import { FamilyDomainRepository } from "../src/familyDomain.js";
 
 const initialNow = "2026-07-23T16:00:00.000Z";
+
+function createFoundation(databasePath: string, now: () => Date) {
+  const db = openGatewayDatabase(databasePath);
+  const familyRepository = new FamilyDomainRepository(db);
+  const onboarding = familyRepository.initializeFamily({
+    familyName: "测试家庭",
+    ownerName: "家庭创建者",
+    deviceName: "测试电脑",
+    deviceCredential: "provider-test-device-credential-with-enough-length"
+  });
+  return {
+    db,
+    ownerPersonRef: onboarding.owner.personRef,
+    ownerDeviceRef: onboarding.device.deviceRef,
+    domainRepository: new ChatWorkDomainRepository(db, now),
+    providerRepository: new ChatWorkProviderRepository(db, now)
+  };
+}
 
 describe("Chat Work Provider repository", () => {
   let directory = "";
@@ -20,19 +48,16 @@ describe("Chat Work Provider repository", () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-chat-work-provider-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
-    const familyRepository = new FamilyDomainRepository(db);
-    const onboarding = familyRepository.initializeFamily({
-      familyName: "测试家庭",
-      ownerName: "家庭创建者",
-      deviceName: "测试电脑",
-      deviceCredential: "provider-test-device-credential-with-enough-length"
-    });
-    ownerPersonRef = onboarding.owner.personRef;
-    ownerDeviceRef = onboarding.device.deviceRef;
     currentNow = new Date(initialNow);
-    domainRepository = new ChatWorkDomainRepository(db, () => currentNow);
-    providerRepository = new ChatWorkProviderRepository(db, () => currentNow);
+    const foundation = createFoundation(
+      join(directory, "gateway.sqlite"),
+      () => currentNow
+    );
+    db = foundation.db;
+    ownerPersonRef = foundation.ownerPersonRef;
+    ownerDeviceRef = foundation.ownerDeviceRef;
+    domainRepository = foundation.domainRepository;
+    providerRepository = foundation.providerRepository;
   });
 
   afterEach(() => {
@@ -198,5 +223,217 @@ describe("Chat Work Provider repository", () => {
       personRef: ownerPersonRef,
       threadRef: chat.chat.threadRef
     }).messages).toHaveLength(2);
+  });
+});
+
+class ControlledProviderAdapter implements ProviderAdapter {
+  readonly calls: ProviderInvocationRequest[] = [];
+  private readonly resolvers: Array<(result: ProviderInvocationResult) => void> = [];
+
+  async health(): Promise<AdapterHealth> {
+    return {
+      protocolVersion: "1.0",
+      adapterRef: "adapter:controlled-test",
+      status: "online",
+      providerProfiles: ["provider-profile:fake-local"],
+      checkedAt: initialNow
+    };
+  }
+
+  async invoke(request: ProviderInvocationRequest): Promise<ProviderInvocationResult> {
+    this.calls.push(structuredClone(request));
+    return new Promise((resolve) => {
+      this.resolvers.push(resolve);
+    });
+  }
+
+  succeed(callIndex: number, turn = 1): void {
+    const request = this.calls[callIndex];
+    const resolve = this.resolvers[callIndex];
+    if (!request || !resolve) throw new Error(`Controlled Provider call ${callIndex} is missing`);
+    resolve({
+      protocolVersion: "1.0",
+      invocationRef: request.invocationRef,
+      correlationRef: request.correlationRef,
+      status: "succeeded",
+      completedAt: `2026-07-23T16:0${callIndex + 1}:30.000Z`,
+      output: [{ type: "text", text: `Controlled Provider 第 ${turn} 轮回复。` }],
+      externalSessionRef: `external-session:controlled-${callIndex}-turn-${turn}`
+    });
+  }
+}
+
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let index = 0; index < 50; index += 1) {
+    if (condition()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Condition did not become true");
+}
+
+describe("Chat Work Message service", () => {
+  let directory = "";
+  let db: GatewayDatabase;
+  let domainRepository: ChatWorkDomainRepository;
+  let providerRepository: ChatWorkProviderRepository;
+  let currentNow: Date;
+  let ownerPersonRef = "";
+  let ownerDeviceRef = "";
+
+  beforeEach(() => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-chat-work-message-service-"));
+    currentNow = new Date(initialNow);
+    const foundation = createFoundation(
+      join(directory, "gateway.sqlite"),
+      () => currentNow
+    );
+    db = foundation.db;
+    ownerPersonRef = foundation.ownerPersonRef;
+    ownerDeviceRef = foundation.ownerDeviceRef;
+    domainRepository = foundation.domainRepository;
+    providerRepository = foundation.providerRepository;
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  function command(threadRef: string, suffix: string) {
+    return {
+      personRef: ownerPersonRef,
+      deviceRef: ownerDeviceRef,
+      threadRef,
+      clientMessageId: `provider-service-${suffix}-0001`,
+      content: { type: "text" as const, text: `消息 ${suffix}`, language: "zh-CN" },
+      occurredAt: currentNow.toISOString()
+    };
+  }
+
+  it("continues one Provider Session per Thread and isolates Work Context", async () => {
+    const adapter = new FakeProviderAdapter({ clock: () => currentNow });
+    const service = new ChatWorkMessageService(
+      domainRepository,
+      providerRepository,
+      adapter,
+      () => currentNow
+    );
+    const chat = domainRepository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+
+    const first = await service.sendPersonMessage(command(chat.chat.threadRef, "chat-first"));
+    expect(first.replayedProviderTurn).toBe(false);
+    expect(adapter.calls).toHaveLength(1);
+    expect(adapter.calls[0]?.externalSessionRef).toBeUndefined();
+
+    currentNow = new Date("2026-07-23T16:01:00.000Z");
+    await service.sendPersonMessage(command(chat.chat.threadRef, "chat-second"));
+    expect(adapter.calls).toHaveLength(2);
+    expect(adapter.calls[1]?.externalSessionRef).toBe(adapter.results[0]?.externalSessionRef);
+
+    const work = domainRepository.createWorkConversation({
+      personRef: ownerPersonRef,
+      title: "独立 Work",
+      goal: "验证 Provider Context 隔离"
+    });
+    currentNow = new Date("2026-07-23T16:02:00.000Z");
+    await service.sendPersonMessage(command(work.threadRef, "work-first"));
+    expect(adapter.calls).toHaveLength(3);
+    expect(adapter.calls[2]?.externalSessionRef).toBeUndefined();
+
+    const chatMessages = domainRepository.listThreadMessages({
+      personRef: ownerPersonRef,
+      threadRef: chat.chat.threadRef
+    }).messages;
+    expect(chatMessages.map((message) => message.content.text)).toEqual([
+      "消息 chat-first",
+      "Fake Provider 第 1 轮回复。",
+      "消息 chat-second",
+      "Fake Provider 第 2 轮回复。"
+    ]);
+    const workMessages = domainRepository.listThreadMessages({
+      personRef: ownerPersonRef,
+      threadRef: work.threadRef
+    }).messages;
+    expect(workMessages.map((message) => message.content.text)).toEqual([
+      "消息 work-first",
+      "Fake Provider 第 1 轮回复。"
+    ]);
+  });
+
+  it("replays a successful Turn without another Provider call or duplicate messages", async () => {
+    const adapter = new FakeProviderAdapter({ clock: () => currentNow });
+    const service = new ChatWorkMessageService(
+      domainRepository,
+      providerRepository,
+      adapter,
+      () => currentNow
+    );
+    const chat = domainRepository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const input = command(chat.chat.threadRef, "replay");
+
+    const first = await service.sendPersonMessage(input);
+    const repeated = await service.sendPersonMessage(input);
+
+    expect(first.replayedProviderTurn).toBe(false);
+    expect(repeated).toMatchObject({
+      message: first.message,
+      assistantMessageRef: first.assistantMessageRef,
+      replayedProviderTurn: true
+    });
+    expect(adapter.calls).toHaveLength(1);
+    expect(domainRepository.listThreadMessages({
+      personRef: ownerPersonRef,
+      threadRef: chat.chat.threadRef
+    }).messages).toHaveLength(2);
+  });
+
+  it("serializes Provider calls in one Thread but allows different Threads to run in parallel", async () => {
+    const adapter = new ControlledProviderAdapter();
+    const service = new ChatWorkMessageService(
+      domainRepository,
+      providerRepository,
+      adapter,
+      () => currentNow
+    );
+    const chat = domainRepository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const work = domainRepository.createWorkConversation({
+      personRef: ownerPersonRef,
+      title: "并行 Work",
+      goal: "验证不同 Thread 并行"
+    });
+
+    const firstChat = service.sendPersonMessage(command(chat.chat.threadRef, "serial-one"));
+    await waitFor(() => adapter.calls.length === 1);
+    currentNow = new Date("2026-07-23T16:01:00.000Z");
+    const secondChat = service.sendPersonMessage(command(chat.chat.threadRef, "serial-two"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(adapter.calls).toHaveLength(1);
+
+    currentNow = new Date("2026-07-23T16:02:00.000Z");
+    const firstWork = service.sendPersonMessage(command(work.threadRef, "parallel-work"));
+    await waitFor(() => adapter.calls.length === 2);
+    expect(adapter.calls.map((call) => call.conversationRef)).toHaveLength(2);
+    expect(adapter.calls[0]?.conversationRef).not.toBe(adapter.calls[1]?.conversationRef);
+
+    adapter.succeed(0, 1);
+    adapter.succeed(1, 1);
+    await firstChat;
+    await firstWork;
+    await waitFor(() => adapter.calls.length === 3);
+    expect(adapter.calls[2]?.externalSessionRef).toBe("external-session:controlled-0-turn-1");
+    adapter.succeed(2, 2);
+    await secondChat;
   });
 });
