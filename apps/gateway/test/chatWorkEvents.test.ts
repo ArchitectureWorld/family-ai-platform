@@ -151,6 +151,12 @@ describe("Chat Work durable events", () => {
       actorType: "person",
       clientMessageId: "event-message-0001"
     });
+    expect(events[4]?.payload).toMatchObject({
+      conversionRef: converted.conversion.conversionRef,
+      homeChatStreamRef: chat.chat.homeChatStreamRef,
+      workConversationRef: converted.conversation.workConversationRef,
+      sourceMessageRefs: [message.messageRef]
+    });
     expect(JSON.stringify(events)).not.toContain("这段正文绝对不能进入事件 payload");
     expect(JSON.stringify(events)).not.toContain("external-session:");
     expect(db.prepare("SELECT COUNT(*) AS count FROM outbox_events").get())
