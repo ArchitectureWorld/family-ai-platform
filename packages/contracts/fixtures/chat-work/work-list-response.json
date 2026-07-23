@@ -1,0 +1,33 @@
+{
+  "protocolVersion": 1,
+  "conversations": [
+    {
+      "threadRef": "thread:work-family-ai",
+      "threadKind": "work",
+      "personRef": "person:alice",
+      "lastSequence": 4,
+      "createdAt": "2026-07-23T09:00:00.000Z",
+      "lastActiveAt": "2026-07-23T09:10:00.000Z",
+      "workConversationRef": "work:family-ai-platform",
+      "title": "家庭 AI 平台",
+      "goal": "完成 Chat 与 Work 的统一协议。",
+      "summary": "协议设计已确认。",
+      "status": "active",
+      "archivedAt": null
+    },
+    {
+      "threadRef": "thread:work-finished",
+      "threadKind": "work",
+      "personRef": "person:alice",
+      "lastSequence": 8,
+      "createdAt": "2026-07-20T09:00:00.000Z",
+      "lastActiveAt": "2026-07-22T09:10:00.000Z",
+      "workConversationRef": "work:finished-example",
+      "title": "已完成事项",
+      "goal": "验证归档约束。",
+      "summary": "事项已经归档。",
+      "status": "archived",
+      "archivedAt": "2026-07-22T09:10:00.000Z"
+    }
+  ]
+}

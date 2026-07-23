@@ -1,0 +1,25 @@
+{
+  "protocolVersion": 1,
+  "snapshot": {
+    "workConversationRef": "work:family-ai-platform",
+    "status": "active",
+    "phaseSummary": "Chat / Work 公共协议正在按 TDD 实现。",
+    "incompleteTasks": [
+      "完成命令 Schema。",
+      "通过完整仓库质量门。"
+    ],
+    "risks": [
+      "避免与 iOS PR 修改同一路径。"
+    ],
+    "pendingConfirmations": [
+      "确认后续 Gateway PR 的数据库迁移边界。"
+    ],
+    "deadlines": [
+      {
+        "label": "完成 Contracts PR",
+        "dueAt": "2026-07-24T18:00:00.000Z"
+      }
+    ],
+    "updatedAt": "2026-07-23T10:00:00.000Z"
+  }
+}

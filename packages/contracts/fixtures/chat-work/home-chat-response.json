@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 1,
+  "chat": {
+    "threadRef": "thread:home-alice",
+    "threadKind": "home_chat",
+    "personRef": "person:alice",
+    "lastSequence": 2,
+    "createdAt": "2026-07-23T08:00:00.000Z",
+    "lastActiveAt": "2026-07-23T08:02:00.000Z",
+    "homeChatStreamRef": "home-chat:alice",
+    "status": "active",
+    "currentEpisodeRef": "daily-episode:alice-2026-07-23"
+  },
+  "currentEpisode": {
+    "dailyEpisodeRef": "daily-episode:alice-2026-07-23",
+    "homeChatStreamRef": "home-chat:alice",
+    "threadRef": "thread:home-alice",
+    "localDate": "2026-07-23",
+    "timezone": "America/Los_Angeles",
+    "startedAt": "2026-07-23T08:00:00.000Z",
+    "endedAt": null,
+    "boundaryReason": "initial",
+    "archiveStatus": "open",
+    "archiveVersion": 0,
+    "lastMessageSequence": 2
+  }
+}

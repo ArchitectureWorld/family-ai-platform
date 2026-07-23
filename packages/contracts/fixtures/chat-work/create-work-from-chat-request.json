@@ -1,0 +1,19 @@
+{
+  "protocolVersion": 1,
+  "title": "家庭 AI 平台",
+  "goal": "把已确认的协议讨论转为独立 Work。",
+  "source": {
+    "homeChatStreamRef": "home-chat:alice",
+    "dailyEpisodeRef": "daily-episode:alice-2026-07-23",
+    "messageRefs": [
+      "message:chat-0001",
+      "message:chat-0002"
+    ]
+  },
+  "decisions": [
+    "Chat 与 Work 保持独立生命周期。"
+  ],
+  "openQuestions": [
+    "何时加入同步 Cursor？"
+  ]
+}
