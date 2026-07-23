@@ -64,9 +64,7 @@ function errorBody(input: PublicError): PublicError {
 
 function mobileErrorRoute(request: FastifyRequest): boolean {
   const path = request.url.split("?", 1)[0] ?? request.url;
-  const deviceAuthorization = request.headers.authorization?.startsWith("Device ") ?? false;
-  return deviceAuthorization ||
-    path.startsWith("/api/v1/mobile/") ||
+  return path.startsWith("/api/v1/mobile/") ||
     path === "/api/v1/portal/context" ||
     path.startsWith("/api/v1/admin/pairing-codes/") ||
     path.startsWith("/api/v1/admin/devices/") ||
