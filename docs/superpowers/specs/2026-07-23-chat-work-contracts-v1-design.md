@@ -1,7 +1,7 @@
 # Chat / Work Contracts v1 设计
 
 - 日期：2026-07-23
-- 状态：已批准
+- 状态：已实现，待评审
 - 目标分支：`feat/chat-work-contracts-v1`
 - 权威依据：`docs/architecture/02-chat-work-domain.md`、`docs/architecture/04-multi-terminal-strategy.md`
 
@@ -71,10 +71,11 @@ packages/contracts/fixtures/mobile-entry/**
 2. 所有请求和响应 envelope 必须携带 `protocolVersion`。
 3. 所有公开对象使用 `.strict()`，拒绝未知字段。
 4. Chat 与 Work 共用消息和 Thread 基础结构，但保持不同生命周期与业务语义。
-5. 客户端命令不能提交可信的 `personRef`、`agentRef`、`deviceRef` 或消息来源；Gateway 后续必须从 Entry Session、DeviceBinding 和请求路径解析。
-6. 服务端响应记录实际 Person、Agent、设备、Connection 和入口 audience。
-7. 原始消息不可因归档或摘要而删除；本协议只描述持久化后的消息事实。
-8. Provider Session 不进入 Chat / Work 所有权模型。
+5. 客户端命令不能提交可信的 `personRef`、`agentRef`、`providerProfileRef`、`deviceRef`、`connectionRef` 或消息来源；Gateway 后续必须从 Entry Session、DeviceBinding、Agent 路由和请求路径解析。
+6. 服务端响应记录实际 Person、Agent、Provider Profile、设备、Connection 和入口 audience。
+7. 原始消息不可因归档或摘要而删除；消息正文在协议解析时不得被裁剪或改写。
+8. `clientMessageId` 是稳定幂等标识，不允许空白字符，也不得在解析时归一化。
+9. Provider Profile 是消息事实与审计信息；Provider Session 不进入 Chat / Work 所有权模型。
 
 ## 5. 领域对象
 
@@ -168,8 +169,8 @@ createdAt
 
 ```text
 person    -> personRef
-assistant -> assignmentRef + agentRef
-agent     -> agentRef
+assistant -> assignmentRef + agentRef + providerProfileRef
+agent     -> agentRef + providerProfileRef
 system    -> systemRef
 ```
 
@@ -181,7 +182,12 @@ connectionRef: string | null
 entryAudience: personal | family_admin | system
 ```
 
-约束：Person 消息必须有 `deviceRef`；System 消息必须使用 `entryAudience = system`。第一版 `content` 只支持文本。
+约束：
+
+- Person 消息必须有 `deviceRef`；
+- Assistant 和 Agent 消息必须记录实际 `providerProfileRef`；
+- System 消息必须使用 `entryAudience = system`；
+- 第一版 `content` 只支持文本，正文按原值保存，不做 `.trim()` 转换。
 
 ## 6. 命令与响应
 
@@ -226,7 +232,7 @@ occurredAt
 content
 ```
 
-Thread 由 URL 路径指定，Person、Agent、Device 和 Origin 由 Gateway 认证上下文确定。
+Thread 由 URL 路径指定，Person、Agent、Provider、Device 和 Origin 由 Gateway 认证与路由上下文确定。
 
 ### 6.4 Chat 转 Work
 
@@ -248,7 +254,7 @@ decisions
 openQuestions
 ```
 
-`messageRefs` 必须非空且唯一。转换只保存消息引用和结构化信息，不复制完整 Chat 历史。
+请求和持久化转换记录中的消息引用都必须非空且唯一。转换只保存消息引用和结构化信息，不复制完整 Chat 历史。响应中的 `conversion.workConversationRef` 必须与返回的 `conversation.workConversationRef` 一致。
 
 ### 6.5 Work 回流信息
 
@@ -347,11 +353,14 @@ work-progress-response.json
 - 所有规范 fixture 成功解析；
 - 错误协议版本被拒绝；
 - 未知字段被拒绝；
-- 客户端命令中的 `personRef`、`agentRef`、`deviceRef` 被拒绝；
+- 客户端命令中的 `personRef`、`agentRef`、`providerProfileRef`、`deviceRef`、`connectionRef` 和 `origin` 被拒绝；
+- 消息正文保持原值，带空白的 `clientMessageId` 被拒绝；
 - DailyEpisode 归档约束；
 - Work archived 状态约束；
 - Person/System 消息来源约束；
-- Chat 转 Work 消息引用非空且唯一；
+- Assistant/Agent 消息必须包含 Provider Profile；
+- Chat 转 Work 请求与转换记录中的消息引用非空且唯一；
+- Chat 转 Work 响应的转换目标与返回 Work 一致；
 - 根包能够导入全部新增类型与 Schema；
 - 现有 Contracts 和 Mobile Entry 测试不回归。
 
@@ -364,7 +373,7 @@ npm run build -w @family-ai/contracts
 npm run check
 ```
 
-全部通过后，比较本分支与最新 `main` 及开放 PR 的文件列表，确认没有修改 `clients/ios/**`、`apps/gateway/**`、Mobile Entry 文件或工作流，再创建 Draft PR。
+全部通过后，比较本分支与最新 `main` 及开放 PR 的文件列表，确认没有修改 `clients/ios/**`、`apps/gateway/**`、Mobile Entry 文件或工作流，再把 Draft PR 更新为可评审状态。
 
 ## 11. 后续顺序
 
