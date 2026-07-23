@@ -19,7 +19,7 @@ const bootstrap = {
   providerProfileRef: "provider-profile:fake-local"
 };
 
-const migrationVersions = [{ version: 1 }, { version: 2 }, { version: 3 }];
+const migrationVersions = [{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }];
 
 describe("gateway database", () => {
   let directory = "";
@@ -94,6 +94,60 @@ describe("gateway database", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
+  it("creates the formal Chat Work domain schema with thread-scoped uniqueness", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-chat-work-schema-"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+
+    const tables = db
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name IN (
+           'interaction_threads',
+           'home_chat_streams',
+           'daily_episodes',
+           'work_conversations',
+           'thread_messages',
+           'chat_work_conversions',
+           'chat_work_conversion_messages',
+           'work_progress_snapshots'
+         ) ORDER BY name`
+      )
+      .all()
+      .map((row) => String((row as { name: unknown }).name));
+
+    expect(tables).toEqual([
+      "chat_work_conversion_messages",
+      "chat_work_conversions",
+      "daily_episodes",
+      "home_chat_streams",
+      "interaction_threads",
+      "thread_messages",
+      "work_conversations",
+      "work_progress_snapshots"
+    ]);
+
+    const indexes = db
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'index' AND name IN (
+           'person_active_home_chat_idx',
+           'home_chat_open_episode_idx',
+           'thread_messages_sequence_idx',
+           'thread_messages_client_id_idx'
+         ) ORDER BY name`
+      )
+      .all()
+      .map((row) => String((row as { name: unknown }).name));
+
+    expect(indexes).toEqual([
+      "home_chat_open_episode_idx",
+      "person_active_home_chat_idx",
+      "thread_messages_client_id_idx",
+      "thread_messages_sequence_idx"
+    ]);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
   it("bootstraps missing development records without overwriting operational state", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-bootstrap-"));
     db = openGatewayDatabase(join(directory, "gateway.sqlite"));
@@ -116,10 +170,10 @@ describe("gateway database", () => {
     const after = db
       .prepare("SELECT token_hash, status, display_name FROM devices WHERE device_ref = ?")
       .get(bootstrap.deviceRef) as {
-      token_hash: string;
-      status: string;
-      display_name: string;
-    };
+        token_hash: string;
+        status: string;
+        display_name: string;
+      };
     expect(after.token_hash).toBe(original.token_hash);
     expect(after.status).toBe("revoked");
     expect(after.display_name).toBe(bootstrap.deviceDisplayName);
