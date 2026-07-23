@@ -181,7 +181,9 @@ describe("Chat / Work protocol v1 commands", () => {
   it.each([
     ["personRef", "person:alice"],
     ["agentRef", "agent:personal-assistant"],
+    ["providerProfileRef", "provider-profile:fake-local"],
     ["deviceRef", "device:web-alice"],
+    ["connectionRef", "connection:web-20260723"],
     ["origin", { deviceRef: "device:web-alice" }]
   ])("rejects trusted identity or origin field %s in a message command", (field, value) => {
     expect(sendThreadMessageRequestSchema.safeParse({ ...sendMessage, [field]: value }).success).toBe(
@@ -209,6 +211,44 @@ describe("Chat / Work protocol v1 commands", () => {
         source: {
           ...request.source,
           messageRefs: ["message:chat-0001", "message:chat-0001"]
+        }
+      }).success
+    ).toBe(false);
+  });
+
+  it("keeps conversion records unique and aligned with the returned Work", () => {
+    const workList = fixture("work-list-response.json") as {
+      conversations: Record<string, unknown>[];
+    };
+    const request = fixture("create-work-from-chat-request.json") as {
+      source: {
+        homeChatStreamRef: string;
+        dailyEpisodeRef: string | null;
+        messageRefs: string[];
+      };
+    };
+    const conversion = {
+      conversionRef: "chat-work-conversion:alice-0002",
+      homeChatStreamRef: request.source.homeChatStreamRef,
+      dailyEpisodeRef: request.source.dailyEpisodeRef,
+      sourceMessageRefs: request.source.messageRefs,
+      workConversationRef: "work:family-ai-platform",
+      createdAt: "2026-07-23T10:06:00.000Z"
+    };
+
+    expect(
+      chatWorkConversionSchema.safeParse({
+        ...conversion,
+        sourceMessageRefs: ["message:chat-0001", "message:chat-0001"]
+      }).success
+    ).toBe(false);
+    expect(
+      createWorkFromChatResponseSchema.safeParse({
+        protocolVersion: 1,
+        conversation: workList.conversations[0],
+        conversion: {
+          ...conversion,
+          workConversationRef: "work:another-conversation"
         }
       }).success
     ).toBe(false);
@@ -269,6 +309,42 @@ describe("Chat / Work protocol v1 cross-field invariants", () => {
         origin: {
           ...origin,
           deviceRef: null
+        }
+      }).success
+    ).toBe(false);
+  });
+
+  it("requires Provider traceability for Assistant and Agent messages", () => {
+    const response = fixture("thread-message-list-response.json") as {
+      messages: Record<string, unknown>[];
+    };
+    const assistantMessage = response.messages[1];
+    const assistantActor = assistantMessage.actor as Record<string, unknown>;
+    const { providerProfileRef, ...assistantWithoutProvider } = assistantActor;
+
+    expect(providerProfileRef).toBe("provider-profile:fake-local");
+    expect(
+      threadMessageSchema.safeParse({
+        ...assistantMessage,
+        actor: assistantWithoutProvider
+      }).success
+    ).toBe(false);
+    expect(
+      threadMessageSchema.safeParse({
+        ...assistantMessage,
+        actor: {
+          type: "agent",
+          agentRef: "agent:work-executor",
+          providerProfileRef: "provider-profile:fake-local"
+        }
+      }).success
+    ).toBe(true);
+    expect(
+      threadMessageSchema.safeParse({
+        ...assistantMessage,
+        actor: {
+          type: "agent",
+          agentRef: "agent:work-executor"
         }
       }).success
     ).toBe(false);
