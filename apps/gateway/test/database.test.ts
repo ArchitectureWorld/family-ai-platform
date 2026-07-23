@@ -24,7 +24,8 @@ const migrationVersions = [
   { version: 2 },
   { version: 3 },
   { version: 4 },
-  { version: 5 }
+  { version: 5 },
+  { version: 6 }
 ];
 
 describe("gateway database", () => {
@@ -208,6 +209,75 @@ describe("gateway database", () => {
       "completed_at"
     ]);
 
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("creates Person-sequenced domain events and transactional outbox tables", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-domain-event-schema-"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+
+    const tables = db.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table'
+         AND name IN ('person_event_sequences', 'domain_events', 'outbox_events')
+       ORDER BY name`
+    ).all();
+    expect(tables).toEqual([
+      { name: "domain_events" },
+      { name: "outbox_events" },
+      { name: "person_event_sequences" }
+    ]);
+
+    const sequenceColumns = db.prepare("PRAGMA table_info(person_event_sequences)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(sequenceColumns).toEqual([
+      "person_ref",
+      "last_sequence",
+      "updated_at"
+    ]);
+
+    const eventColumns = db.prepare("PRAGMA table_info(domain_events)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(eventColumns).toEqual([
+      "event_ref",
+      "person_ref",
+      "event_sequence",
+      "event_type",
+      "aggregate_type",
+      "aggregate_ref",
+      "thread_ref",
+      "payload_json",
+      "occurred_at",
+      "created_at"
+    ]);
+
+    const outboxColumns = db.prepare("PRAGMA table_info(outbox_events)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(outboxColumns).toEqual([
+      "event_ref",
+      "status",
+      "attempt_count",
+      "available_at",
+      "claimed_by",
+      "claimed_until",
+      "published_at",
+      "last_error_json",
+      "updated_at"
+    ]);
+
+    const indexes = db.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'index'
+         AND name IN ('domain_events_person_sequence_idx', 'outbox_events_dispatch_idx')
+       ORDER BY name`
+    ).all();
+    expect(indexes).toEqual([
+      { name: "domain_events_person_sequence_idx" },
+      { name: "outbox_events_dispatch_idx" }
+    ]);
     expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
