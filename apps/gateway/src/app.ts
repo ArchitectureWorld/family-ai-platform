@@ -27,6 +27,10 @@ import {
 import { registerDevelopmentConsole } from "./developmentConsole.js";
 import { DomainEventStore } from "./domainEvents.js";
 import { EntrySessionAuthenticator } from "./entrySessionAuth.js";
+import {
+  PersonEventStreamHub,
+  registerEventStreamRoutes
+} from "./eventStream.js";
 import { FamilyDomainRepository } from "./familyDomain.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
 import { MobileDeviceSummaryRepository } from "./mobileDeviceSummary.js";
@@ -71,7 +75,8 @@ function mobileErrorRoute(request: FastifyRequest): boolean {
     path.startsWith("/api/v1/chat/") ||
     path === "/api/v1/work-conversations" ||
     path.startsWith("/api/v1/work-conversations/") ||
-    path.startsWith("/api/v1/threads/");
+    path.startsWith("/api/v1/threads/") ||
+    path === "/api/v1/events/stream";
   const deviceAuthorization = request.headers.authorization?.startsWith("Device ") ?? false;
   return (!chatWorkPath && deviceAuthorization) ||
     path.startsWith("/api/v1/mobile/") ||
@@ -145,7 +150,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   const app = Fastify({ logger: false });
   const db = openGatewayDatabase(options.databasePath);
   const now = options.now ?? (() => new Date());
-  new DomainEventStore(db, now);
+  const domainEventStore = new DomainEventStore(db, now);
   if (options.mode !== "production") {
     const bootstrap: DevelopmentBootstrapInput = {
       ...defaultBootstrap,
@@ -158,6 +163,11 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   const repository = new GatewayRepository(db);
   const familyRepository = new FamilyDomainRepository(db);
   const entryAuthenticator = new EntrySessionAuthenticator(db, familyRepository, now);
+  const eventStreamHub = new PersonEventStreamHub(
+    domainEventStore,
+    entryAuthenticator,
+    { now }
+  );
   const chatWorkRepository = new ChatWorkDomainRepository(db, now);
   const mobileDeviceSummaryRepository = new MobileDeviceSummaryRepository(db);
   const mobileRepository = new MobilePairingRepository(db);
@@ -172,6 +182,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   );
 
   app.addHook("onClose", async () => {
+    await eventStreamHub.close();
     db.close();
   });
 
@@ -208,6 +219,10 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     messageService: chatWorkMessageService,
     entryAuthenticator,
     now
+  });
+  registerEventStreamRoutes(app, {
+    hub: eventStreamHub,
+    entryAuthenticator
   });
 
   app.get("/health", async () => ({
