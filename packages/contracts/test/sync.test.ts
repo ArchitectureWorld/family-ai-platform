@@ -28,6 +28,25 @@ const knownFiles = [
   "provider-turn-succeeded.json"
 ] as const;
 
+const allFixtureFiles = [
+  ...knownFiles,
+  "opaque-future-event.json",
+  "sync-events-response.json",
+  "sync-ack-request.json",
+  "sync-ack-response.json"
+] as const;
+
+const forbiddenFixtureFragments = [
+  "authorization",
+  "entrysessiontoken",
+  "entry_session_token",
+  "devicecredential",
+  "device_credential",
+  "externalsessionref",
+  "external_session_ref",
+  "bearer "
+] as const;
+
 describe("Event Sync v1 events", () => {
   it("accepts all canonical known events", () => {
     expect(KNOWN_SYNC_EVENT_TYPES).toHaveLength(7);
@@ -94,6 +113,42 @@ describe("Event Sync v1 events", () => {
     for (const payload of payloads) {
       expect(syncEventSchema.safeParse({ ...opaque, payload }).success).toBe(false);
     }
+  });
+
+  it("normalizes SQLite JSON booleans at the public event boundary", () => {
+    const event = fixture("provider-turn-failed.json") as {
+      payload: { error: Record<string, unknown> };
+    };
+    const storedTrue = knownSyncEventSchema.parse({
+      ...event,
+      payload: {
+        ...event.payload,
+        error: { ...event.payload.error, retryable: 1 }
+      }
+    });
+    const storedFalse = knownSyncEventSchema.parse({
+      ...event,
+      payload: {
+        ...event.payload,
+        error: { ...event.payload.error, retryable: 0 }
+      }
+    });
+    expect(storedTrue.eventType).toBe("thread.provider_turn.failed");
+    expect(storedFalse.eventType).toBe("thread.provider_turn.failed");
+    if (storedTrue.eventType === "thread.provider_turn.failed") {
+      expect(storedTrue.payload.error.retryable).toBe(true);
+    }
+    if (storedFalse.eventType === "thread.provider_turn.failed") {
+      expect(storedFalse.payload.error.retryable).toBe(false);
+    }
+  });
+
+  it("keeps canonical Sync fixtures free of credentials and Provider sessions", () => {
+    const serialized = JSON.stringify(allFixtureFiles.map((name) => fixture(name))).toLowerCase();
+    for (const forbidden of forbiddenFixtureFragments) {
+      expect(serialized).not.toContain(forbidden);
+    }
+    expect(serialized).not.toContain("external-session:");
   });
 });
 
