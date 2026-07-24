@@ -57,6 +57,7 @@ export function registerDeviceSyncRoutes(
       afterSequence: requestedAfterSequence,
       limit: parsed.data.limit
     });
+    const latestSequence = input.events.getLatestPersonSequence(context.person.personRef);
 
     return syncEventsResponseSchema.parse({
       protocolVersion: SYNC_PROTOCOL_VERSION,
@@ -65,7 +66,7 @@ export function registerDeviceSyncRoutes(
         personRef: context.person.personRef,
         acknowledgedSequence: state.acknowledgedSequence,
         requestedAfterSequence,
-        latestSequence: state.latestSequence
+        latestSequence
       },
       events: page.events,
       nextAfterSequence: page.nextAfterSequence
