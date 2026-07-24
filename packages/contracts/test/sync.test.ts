@@ -3,9 +3,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   KNOWN_SYNC_EVENT_TYPES,
+  SYNC_PROTOCOL_VERSION,
   knownSyncEventSchema,
   opaqueSyncEventSchema,
-  syncEventSchema
+  syncAckRequestSchema,
+  syncAckResponseSchema,
+  syncEventSchema,
+  syncEventsQuerySchema,
+  syncEventsResponseSchema
 } from "../src/index.js";
 
 function fixture(name: string): unknown {
@@ -89,5 +94,110 @@ describe("Event Sync v1 events", () => {
     for (const payload of payloads) {
       expect(syncEventSchema.safeParse({ ...opaque, payload }).success).toBe(false);
     }
+  });
+});
+
+describe("Event Sync v1 catch-up and ACK", () => {
+  it("normalizes strict decimal query input while preserving leading-zero compatibility", () => {
+    expect(syncEventsQuerySchema.parse({})).toEqual({ limit: 100 });
+    expect(syncEventsQuerySchema.parse({ afterSequence: "001", limit: "020" })).toEqual({
+      afterSequence: 1,
+      limit: 20
+    });
+    expect(syncEventsQuerySchema.parse({ afterSequence: "0", limit: "1" })).toEqual({
+      afterSequence: 0,
+      limit: 1
+    });
+  });
+
+  it("rejects malformed, repeated and unknown query values", () => {
+    for (const query of [
+      { afterSequence: "-1" },
+      { afterSequence: "1.5" },
+      { afterSequence: "1e3" },
+      { afterSequence: " 1" },
+      { afterSequence: "9007199254740992" },
+      { limit: "0" },
+      { limit: "201" },
+      { limit: ["1", "2"] },
+      { unknown: "1" }
+    ]) {
+      expect(syncEventsQuerySchema.safeParse(query).success).toBe(false);
+    }
+  });
+
+  it("accepts canonical catch-up and ACK fixtures", () => {
+    expect(SYNC_PROTOCOL_VERSION).toBe(1);
+    expect(syncEventsResponseSchema.parse(fixture("sync-events-response.json"))).toBeTruthy();
+    expect(syncAckRequestSchema.parse(fixture("sync-ack-request.json"))).toBeTruthy();
+    expect(syncAckResponseSchema.parse(fixture("sync-ack-response.json"))).toBeTruthy();
+  });
+
+  it("keeps catch-up events within one Person and strict sequence order", () => {
+    const response = fixture("sync-events-response.json") as {
+      sync: Record<string, unknown>;
+      events: Array<Record<string, unknown>>;
+      nextAfterSequence: number | null;
+    };
+    expect(syncEventsResponseSchema.safeParse({
+      ...response,
+      events: response.events.map((event, index) => index === 1
+        ? { ...event, personRef: "person:bob" }
+        : event)
+    }).success).toBe(false);
+    expect(syncEventsResponseSchema.safeParse({
+      ...response,
+      events: [response.events[1], response.events[0], ...response.events.slice(2)]
+    }).success).toBe(false);
+    expect(syncEventsResponseSchema.safeParse({
+      ...response,
+      nextAfterSequence: 6
+    }).success).toBe(false);
+    expect(syncEventsResponseSchema.safeParse({
+      ...response,
+      sync: { ...response.sync, acknowledgedSequence: 8 }
+    }).success).toBe(false);
+  });
+
+  it("rejects trusted identity fields in ACK requests", () => {
+    const request = fixture("sync-ack-request.json") as Record<string, unknown>;
+    for (const extra of [
+      { deviceRef: "device:web-alice" },
+      { personRef: "person:alice" },
+      { entryBindingRef: "entry-binding:alice" },
+      { entrySessionRef: "entry-session:alice" },
+      { acknowledgedSequence: 7 },
+      { updatedAt: "2026-07-24T08:08:00.000Z" }
+    ]) {
+      expect(syncAckRequestSchema.safeParse({ ...request, ...extra }).success).toBe(false);
+    }
+  });
+
+  it("keeps ACK advancement consistent with its sequence values", () => {
+    const response = fixture("sync-ack-response.json") as {
+      sync: Record<string, unknown>;
+    };
+    expect(syncAckResponseSchema.safeParse({
+      ...response,
+      sync: { ...response.sync, advanced: false }
+    }).success).toBe(false);
+    expect(syncAckResponseSchema.safeParse({
+      ...response,
+      sync: {
+        ...response.sync,
+        previousSequence: 7,
+        acknowledgedSequence: 7,
+        advanced: true
+      }
+    }).success).toBe(false);
+    expect(syncAckResponseSchema.safeParse({
+      ...response,
+      sync: {
+        ...response.sync,
+        previousSequence: 8,
+        acknowledgedSequence: 7,
+        advanced: false
+      }
+    }).success).toBe(false);
   });
 });
