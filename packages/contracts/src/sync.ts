@@ -403,11 +403,179 @@ export const opaqueSyncEventSchema = syncEventEnvelopeSchema
 export const syncEventSchema = z.union([knownSyncEventSchema, opaqueSyncEventSchema]);
 export const syncSseDataSchema = syncEventSchema;
 
+const syncDecimalStringSchema = z.string().regex(/^\d+$/);
+
+function parseSafeDecimal(value: string, minimum: number, maximum: number): number | null {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum
+    ? parsed
+    : null;
+}
+
+export const syncEventsQuerySchema = z
+  .object({
+    afterSequence: syncDecimalStringSchema.optional(),
+    limit: syncDecimalStringSchema.optional()
+  })
+  .strict()
+  .transform((value, context) => {
+    const afterSequence = value.afterSequence === undefined
+      ? undefined
+      : parseSafeDecimal(value.afterSequence, 0, Number.MAX_SAFE_INTEGER);
+    const limit = value.limit === undefined ? 100 : parseSafeDecimal(value.limit, 1, 200);
+    if (afterSequence === null || limit === null) {
+      context.addIssue({ code: "custom", message: "Sync query values are invalid" });
+      return z.NEVER;
+    }
+    return {
+      ...(afterSequence === undefined ? {} : { afterSequence }),
+      limit
+    };
+  });
+
+const syncEventsResponseBaseSchema = z
+  .object({
+    protocolVersion: z.literal(SYNC_PROTOCOL_VERSION),
+    sync: z
+      .object({
+        deviceRef: syncDeviceRefSchema,
+        personRef: syncPersonRefSchema,
+        acknowledgedSequence: syncCursorSchema,
+        requestedAfterSequence: syncCursorSchema,
+        latestSequence: syncCursorSchema
+      })
+      .strict(),
+    events: z.array(syncEventSchema).max(200),
+    nextAfterSequence: syncEventSequenceSchema.nullable()
+  })
+  .strict();
+
+export const syncEventsResponseSchema = syncEventsResponseBaseSchema.superRefine(
+  (value, context) => {
+    if (value.sync.acknowledgedSequence > value.sync.latestSequence) {
+      context.addIssue({
+        code: "custom",
+        path: ["sync", "acknowledgedSequence"],
+        message: "acknowledgedSequence cannot exceed latestSequence"
+      });
+    }
+
+    let previousSequence = value.sync.requestedAfterSequence;
+    for (const [index, event] of value.events.entries()) {
+      if (event.personRef !== value.sync.personRef) {
+        context.addIssue({
+          code: "custom",
+          path: ["events", index, "personRef"],
+          message: "event personRef must match sync.personRef"
+        });
+      }
+      if (event.eventSequence <= value.sync.requestedAfterSequence) {
+        context.addIssue({
+          code: "custom",
+          path: ["events", index, "eventSequence"],
+          message: "eventSequence must be after requestedAfterSequence"
+        });
+      }
+      if (event.eventSequence > value.sync.latestSequence) {
+        context.addIssue({
+          code: "custom",
+          path: ["events", index, "eventSequence"],
+          message: "eventSequence cannot exceed latestSequence"
+        });
+      }
+      if (event.eventSequence <= previousSequence) {
+        context.addIssue({
+          code: "custom",
+          path: ["events", index, "eventSequence"],
+          message: "events must be strictly increasing"
+        });
+      }
+      previousSequence = event.eventSequence;
+    }
+
+    if (value.events.length === 0) {
+      if (value.nextAfterSequence !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["nextAfterSequence"],
+          message: "empty event pages require a null nextAfterSequence"
+        });
+      }
+      return;
+    }
+
+    if (
+      value.nextAfterSequence !== null &&
+      value.nextAfterSequence !== value.events[value.events.length - 1]!.eventSequence
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["nextAfterSequence"],
+        message: "nextAfterSequence must match the last event sequence"
+      });
+    }
+  }
+);
+
+export const syncAckRequestSchema = z
+  .object({
+    protocolVersion: z.literal(SYNC_PROTOCOL_VERSION),
+    eventSequence: syncEventSequenceSchema,
+    eventRef: syncEventRefSchema
+  })
+  .strict();
+
+const syncAckResponseBaseSchema = z
+  .object({
+    protocolVersion: z.literal(SYNC_PROTOCOL_VERSION),
+    sync: z
+      .object({
+        deviceRef: syncDeviceRefSchema,
+        personRef: syncPersonRefSchema,
+        previousSequence: syncCursorSchema,
+        acknowledgedSequence: syncCursorSchema,
+        advanced: z.boolean(),
+        updatedAt: syncTimestampSchema
+      })
+      .strict()
+  })
+  .strict();
+
+export const syncAckResponseSchema = syncAckResponseBaseSchema.superRefine((value, context) => {
+  const { previousSequence, acknowledgedSequence, advanced } = value.sync;
+  if (acknowledgedSequence < previousSequence) {
+    context.addIssue({
+      code: "custom",
+      path: ["sync", "acknowledgedSequence"],
+      message: "acknowledgedSequence cannot go backwards"
+    });
+  }
+  if (advanced && acknowledgedSequence <= previousSequence) {
+    context.addIssue({
+      code: "custom",
+      path: ["sync", "advanced"],
+      message: "advanced requires acknowledgedSequence to increase"
+    });
+  }
+  if (!advanced && acknowledgedSequence !== previousSequence) {
+    context.addIssue({
+      code: "custom",
+      path: ["sync", "advanced"],
+      message: "non-advanced ACKs must preserve the previous sequence"
+    });
+  }
+});
+
 export type KnownSyncEventType = z.infer<typeof knownSyncEventTypeSchema>;
 export type KnownSyncEvent = z.infer<typeof knownSyncEventSchema>;
 export type OpaqueSyncEvent = z.infer<typeof opaqueSyncEventSchema>;
 export type SyncEvent = z.infer<typeof syncEventSchema>;
 export type SyncSseData = SyncEvent;
+export type SyncEventsQueryInput = z.input<typeof syncEventsQuerySchema>;
+export type SyncEventsQuery = z.output<typeof syncEventsQuerySchema>;
+export type SyncEventsResponse = z.infer<typeof syncEventsResponseSchema>;
+export type SyncAckRequest = z.infer<typeof syncAckRequestSchema>;
+export type SyncAckResponse = z.infer<typeof syncAckResponseSchema>;
 export type ChatHomeCreatedSyncEvent = Extract<
   KnownSyncEvent,
   { eventType: "chat.home.created" }
