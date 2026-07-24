@@ -45,6 +45,8 @@ class PartiallyFailingSource implements PersonEventSource {
 
 class RecordingSink implements EventStreamSink {
   readonly frames: string[] = [];
+  destroyed = false;
+  ended = false;
   private waiter: (() => void) | null = null;
 
   write(chunk: string): boolean {
@@ -60,8 +62,13 @@ class RecordingSink implements EventStreamSink {
     return this;
   }
 
-  end(): void {}
-  destroy(): void {}
+  end(): void {
+    this.ended = true;
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+  }
 
   async waitForDomainEvent(): Promise<void> {
     if (this.frames.some((frame) => frame.startsWith("id: "))) return;
@@ -112,6 +119,58 @@ describe("PersonEventStreamHub failure isolation", () => {
         "person:failing",
         "person:healthy"
       ]));
+    } finally {
+      await hub.close();
+    }
+  });
+
+  it("closes only the connection whose heartbeat authentication throws", async () => {
+    const source: PersonEventSource = {
+      listPersonEvents: () => ({ events: [], nextAfterSequence: null })
+    };
+    const heartbeatAuthenticator: EventStreamAuthenticator = {
+      authenticate: (entrySessionRef, token) => {
+        if (entrySessionRef === "entry-session:failing") {
+          throw new Error("SIMULATED_AUTHENTICATION_FAILURE");
+        }
+        return {
+          status: "authenticated",
+          context: {
+            audience: "personal",
+            person: { personRef: token }
+          }
+        };
+      }
+    };
+    const hub = new PersonEventStreamHub(source, heartbeatAuthenticator, {
+      autoStart: false,
+      now: () => new Date("2026-07-24T13:15:00.000Z")
+    });
+    const failing = new RecordingSink();
+    const healthy = new RecordingSink();
+    hub.register({
+      personRef: "person:failing",
+      cursor: 0,
+      entrySessionRef: "entry-session:failing",
+      token: "person:failing",
+      sink: failing
+    });
+    hub.register({
+      personRef: "person:healthy",
+      cursor: 0,
+      entrySessionRef: "entry-session:healthy",
+      token: "person:healthy",
+      sink: healthy
+    });
+
+    try {
+      await expect(hub.heartbeatAll()).resolves.toBeUndefined();
+      expect(failing.destroyed).toBe(true);
+      expect(healthy.destroyed).toBe(false);
+      expect(healthy.frames.at(-1)).toBe(
+        ": heartbeat 2026-07-24T13:15:00.000Z\n\n"
+      );
+      expect(hub.subscriberCount()).toBe(1);
     } finally {
       await hub.close();
     }
