@@ -1,0 +1,16 @@
+{
+  "eventRef": "event:alice-work-0001",
+  "personRef": "person:alice",
+  "eventSequence": 2,
+  "eventType": "work.created",
+  "aggregateType": "work",
+  "aggregateRef": "work:family-ai-platform",
+  "threadRef": "thread:work-family-ai-platform",
+  "payload": {
+    "workConversationRef": "work:family-ai-platform",
+    "threadRef": "thread:work-family-ai-platform",
+    "status": "active"
+  },
+  "occurredAt": "2026-07-24T08:01:00.000Z",
+  "createdAt": "2026-07-24T08:01:00.000Z"
+}
