@@ -1,6 +1,11 @@
-import { CHAT_WORK_PROTOCOL_VERSION } from "@family-ai/contracts";
+import {
+  SYNC_PROTOCOL_VERSION,
+  syncAckRequestSchema,
+  syncAckResponseSchema,
+  syncEventsQuerySchema,
+  syncEventsResponseSchema
+} from "@family-ai/contracts";
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
 import type { DeviceSyncRepository } from "./deviceSync.js";
 import type { DomainEventStore } from "./domainEvents.js";
 import {
@@ -8,23 +13,6 @@ import {
   type EntrySessionAuthenticator
 } from "./entrySessionAuth.js";
 import { GatewayDomainError } from "./service.js";
-
-const decimalSchema = z.string().regex(/^\d+$/);
-const syncEventsQuerySchema = z
-  .object({
-    afterSequence: decimalSchema.optional(),
-    limit: decimalSchema.optional()
-  })
-  .strict();
-
-const eventRefSchema = z.string().regex(/^event:[a-z0-9][a-z0-9._:-]{1,126}$/);
-const syncAckSchema = z
-  .object({
-    protocolVersion: z.literal(CHAT_WORK_PROTOCOL_VERSION),
-    eventSequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    eventRef: eventRefSchema
-  })
-  .strict();
 
 function invalidRequest(message: string): GatewayDomainError {
   return new GatewayDomainError(
@@ -46,14 +34,6 @@ function syncEventNotFound(): GatewayDomainError {
   );
 }
 
-function safeInteger(value: string, minimum: number, maximum: number): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
-    throw invalidRequest("同步参数不正确。");
-  }
-  return parsed;
-}
-
 export function registerDeviceSyncRoutes(
   app: FastifyInstance,
   input: {
@@ -71,35 +51,31 @@ export function registerDeviceSyncRoutes(
       deviceRef: context.device.deviceRef,
       personRef: context.person.personRef
     });
-    const requestedAfterSequence = parsed.data.afterSequence === undefined
-      ? state.acknowledgedSequence
-      : safeInteger(parsed.data.afterSequence, 0, Number.MAX_SAFE_INTEGER);
-    const limit = parsed.data.limit === undefined
-      ? 100
-      : safeInteger(parsed.data.limit, 1, 200);
+    const requestedAfterSequence = parsed.data.afterSequence ?? state.acknowledgedSequence;
     const page = input.events.listPersonEvents({
       personRef: context.person.personRef,
       afterSequence: requestedAfterSequence,
-      limit
+      limit: parsed.data.limit
     });
+    const latestSequence = input.events.getLatestPersonSequence(context.person.personRef);
 
-    return {
-      protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+    return syncEventsResponseSchema.parse({
+      protocolVersion: SYNC_PROTOCOL_VERSION,
       sync: {
         deviceRef: context.device.deviceRef,
         personRef: context.person.personRef,
         acknowledgedSequence: state.acknowledgedSequence,
         requestedAfterSequence,
-        latestSequence: state.latestSequence
+        latestSequence
       },
       events: page.events,
       nextAfterSequence: page.nextAfterSequence
-    };
+    });
   });
 
   app.post("/api/v1/sync/ack", async (request) => {
     const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
-    const parsed = syncAckSchema.safeParse(request.body);
+    const parsed = syncAckRequestSchema.safeParse(request.body);
     if (!parsed.success) throw invalidRequest("同步确认请求不正确。");
 
     const result = input.repository.acknowledge({
@@ -110,9 +86,9 @@ export function registerDeviceSyncRoutes(
     });
     if (!result) throw syncEventNotFound();
 
-    return {
-      protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+    return syncAckResponseSchema.parse({
+      protocolVersion: SYNC_PROTOCOL_VERSION,
       sync: result
-    };
+    });
   });
 }

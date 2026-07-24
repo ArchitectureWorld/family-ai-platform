@@ -8,15 +8,21 @@ import {
 } from "../src/eventStream.js";
 
 function domainEvent(personRef: string, sequence: number): DomainEvent {
+  const workConversationRef = `work:${personRef}-${sequence}`;
+  const threadRef = `thread:${personRef}`;
   return {
     eventRef: `event:${personRef}-${sequence}`,
     personRef,
     eventSequence: sequence,
     eventType: "work.created",
     aggregateType: "work",
-    aggregateRef: `work:${personRef}-${sequence}`,
-    threadRef: `thread:${personRef}`,
-    payload: { workConversationRef: `work:${personRef}-${sequence}` },
+    aggregateRef: workConversationRef,
+    threadRef,
+    payload: {
+      workConversationRef,
+      threadRef,
+      status: "active"
+    },
     occurredAt: "2026-07-24T13:00:00.000Z",
     createdAt: "2026-07-24T13:00:00.000Z"
   };

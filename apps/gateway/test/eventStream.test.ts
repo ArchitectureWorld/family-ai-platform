@@ -27,20 +27,26 @@ function expectInvalidCursor(run: () => unknown): void {
 }
 
 function event(sequence: number, personRef = "person:test"): DomainEvent {
+  const messageRef = `message:${personRef}-${sequence}`;
+  const threadRef = `thread:${personRef}`;
+  const occurredAt = new Date(Date.UTC(2026, 6, 24, 12, 0, sequence)).toISOString();
   return {
     eventRef: `event:${personRef}-${sequence}`,
     personRef,
     eventSequence: sequence,
     eventType: "thread.message.created",
     aggregateType: "thread_message",
-    aggregateRef: `message:${personRef}-${sequence}`,
-    threadRef: `thread:${personRef}`,
+    aggregateRef: messageRef,
+    threadRef,
     payload: {
-      messageRef: `message:${personRef}-${sequence}`,
-      actorType: sequence % 2 === 0 ? "assistant" : "person"
+      messageRef,
+      threadRef,
+      threadSequence: sequence,
+      actorType: sequence % 2 === 0 ? "assistant" : "person",
+      clientMessageId: `sse-${personRef}-${sequence}`
     },
-    occurredAt: `2026-07-24T12:00:${String(sequence).padStart(2, "0")}.000Z`,
-    createdAt: `2026-07-24T12:00:${String(sequence).padStart(2, "0")}.000Z`
+    occurredAt,
+    createdAt: occurredAt
   };
 }
 
@@ -387,6 +393,10 @@ describe("PersonEventStreamHub connection protection", () => {
 
   it("closes a Subscriber when queued bytes exceed the configured process boundary", async () => {
     const large = event(1);
+    large.eventType = "notification.created";
+    large.aggregateType = "notification";
+    large.aggregateRef = "notification:person-test-1";
+    large.threadRef = null;
     large.payload = { padding: "x".repeat(2048) };
     const source = new FakeEventSource([large]);
     const hub = new PersonEventStreamHub(source, validAuthenticator, {
