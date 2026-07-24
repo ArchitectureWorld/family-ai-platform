@@ -6,6 +6,7 @@ import {
   formatDomainEventFrame,
   formatHeartbeatFrame,
   parseEventStreamCursor,
+  type EventStreamAuthentication,
   type EventStreamAuthenticator,
   type EventStreamSink,
   type PersonEventSource
@@ -78,16 +79,15 @@ class FakeSink implements EventStreamSink {
   ended = false;
   destroyed = false;
   private readonly waiters: Array<{
-    count: number;
+    predicate: (frame: string) => boolean;
     resolve: () => void;
   }> = [];
 
   write(chunk: string): boolean {
     this.frames.push(chunk);
-    const count = this.domainEventIds().length;
     for (let index = this.waiters.length - 1; index >= 0; index -= 1) {
       const waiter = this.waiters[index];
-      if (waiter && count >= waiter.count) {
+      if (waiter && this.frames.some(waiter.predicate)) {
         this.waiters.splice(index, 1);
         waiter.resolve();
       }
@@ -114,22 +114,69 @@ class FakeSink implements EventStreamSink {
     });
   }
 
-  async waitForDomainEvents(count: number): Promise<void> {
-    if (this.domainEventIds().length >= count) return;
+  async waitForFrame(predicate: (frame: string) => boolean): Promise<void> {
+    if (this.frames.some(predicate)) return;
     await new Promise<void>((resolve) => {
-      this.waiters.push({ count, resolve });
+      this.waiters.push({ predicate, resolve });
     });
+  }
+
+  async waitForDomainEvents(count: number): Promise<void> {
+    await this.waitForFrame(() => this.domainEventIds().length >= count);
   }
 }
 
-const validAuthenticator: EventStreamAuthenticator = {
-  authenticate: () => ({
+class BackpressureSink extends FakeSink {
+  private drainListener: (() => void) | null = null;
+  private blockedDomainEvent = false;
+
+  override write(chunk: string): boolean {
+    super.write(chunk);
+    if (!this.blockedDomainEvent && chunk.startsWith("id: ")) {
+      this.blockedDomainEvent = true;
+      return false;
+    }
+    return true;
+  }
+
+  override once(_event: "drain", listener: () => void): this {
+    this.drainListener = listener;
+    return this;
+  }
+
+  releaseDrain(): void {
+    const listener = this.drainListener;
+    this.drainListener = null;
+    listener?.();
+  }
+}
+
+class MutableAuthenticator implements EventStreamAuthenticator {
+  readonly calls: Array<[string, string]> = [];
+  private readonly results = new Map<string, EventStreamAuthentication>();
+
+  set(entrySessionRef: string, result: EventStreamAuthentication): void {
+    this.results.set(entrySessionRef, result);
+  }
+
+  authenticate(entrySessionRef: string, token: string): EventStreamAuthentication {
+    this.calls.push([entrySessionRef, token]);
+    return this.results.get(entrySessionRef) ?? { status: "invalid" };
+  }
+}
+
+function authenticated(personRef: string, audience = "personal"): EventStreamAuthentication {
+  return {
     status: "authenticated",
     context: {
-      audience: "personal",
-      person: { personRef: "person:test" }
+      audience,
+      person: { personRef }
     }
-  })
+  };
+}
+
+const validAuthenticator: EventStreamAuthenticator = {
+  authenticate: () => authenticated("person:test")
 };
 
 describe("Chat Work SSE protocol helpers", () => {
@@ -274,5 +321,160 @@ describe("PersonEventStreamHub shared pump", () => {
       { personRef: "person:test", afterSequence: 200, limit: 200 }
     ]);
     await hub.close();
+  });
+});
+
+describe("PersonEventStreamHub connection protection", () => {
+  it("waits for drain before writing the next frame to one slow Subscriber", async () => {
+    const source = new FakeEventSource([event(1), event(2)]);
+    const hub = new PersonEventStreamHub(source, validAuthenticator, { autoStart: false });
+    const sink = new BackpressureSink();
+    hub.register({
+      personRef: "person:test",
+      cursor: 0,
+      entrySessionRef: "entry-session:backpressure",
+      token: "backpressure-token",
+      sink
+    });
+
+    await hub.pumpPerson("person:test");
+    await sink.waitForDomainEvents(1);
+    expect(sink.domainEventIds()).toEqual([1]);
+
+    sink.releaseDrain();
+    await sink.waitForDomainEvents(2);
+    expect(sink.domainEventIds()).toEqual([1, 2]);
+    await hub.close();
+  });
+
+  it("closes only a slow Subscriber whose queued-frame limit is exceeded", async () => {
+    const source = new FakeEventSource([event(1)]);
+    const hub = new PersonEventStreamHub(source, validAuthenticator, {
+      autoStart: false,
+      maxQueuedFrames: 2
+    });
+    const slow = new BackpressureSink();
+    const healthy = new FakeSink();
+    hub.register({
+      personRef: "person:test",
+      cursor: 0,
+      entrySessionRef: "entry-session:slow",
+      token: "slow-token",
+      sink: slow
+    });
+    hub.register({
+      personRef: "person:test",
+      cursor: 0,
+      entrySessionRef: "entry-session:healthy",
+      token: "healthy-token",
+      sink: healthy
+    });
+
+    await hub.pumpPerson("person:test");
+    await Promise.all([
+      slow.waitForDomainEvents(1),
+      healthy.waitForDomainEvents(1)
+    ]);
+    source.events.push(event(2), event(3));
+    await hub.pumpPerson("person:test");
+    await healthy.waitForDomainEvents(3);
+
+    expect(slow.destroyed).toBe(true);
+    expect(healthy.destroyed).toBe(false);
+    expect(healthy.domainEventIds()).toEqual([1, 2, 3]);
+    await hub.close();
+  });
+
+  it("closes a Subscriber when queued bytes exceed the configured process boundary", async () => {
+    const large = event(1);
+    large.payload = { padding: "x".repeat(2048) };
+    const source = new FakeEventSource([large]);
+    const hub = new PersonEventStreamHub(source, validAuthenticator, {
+      autoStart: false,
+      maxQueuedBytes: 256
+    });
+    const sink = new FakeSink();
+    hub.register({
+      personRef: "person:test",
+      cursor: 0,
+      entrySessionRef: "entry-session:large",
+      token: "large-token",
+      sink
+    });
+
+    await hub.pumpPerson("person:test");
+
+    expect(sink.destroyed).toBe(true);
+    expect(hub.subscriberCount()).toBe(0);
+    await hub.close();
+  });
+
+  it("revalidates credentials before heartbeat and closes invalid connections", async () => {
+    const source = new FakeEventSource([]);
+    const authenticator = new MutableAuthenticator();
+    authenticator.set("entry-session:valid", authenticated("person:test"));
+    authenticator.set("entry-session:expired", { status: "expired" });
+    authenticator.set("entry-session:wrong-person", authenticated("person:other"));
+    authenticator.set("entry-session:admin", authenticated("person:test", "family_admin"));
+    const hub = new PersonEventStreamHub(source, authenticator, {
+      autoStart: false,
+      now: () => new Date("2026-07-24T12:15:00.000Z")
+    });
+    const valid = new FakeSink();
+    const expired = new FakeSink();
+    const wrongPerson = new FakeSink();
+    const admin = new FakeSink();
+    for (const [entrySessionRef, token, sink] of [
+      ["entry-session:valid", "valid-token", valid],
+      ["entry-session:expired", "expired-token", expired],
+      ["entry-session:wrong-person", "wrong-person-token", wrongPerson],
+      ["entry-session:admin", "admin-token", admin]
+    ] as const) {
+      hub.register({
+        personRef: "person:test",
+        cursor: 0,
+        entrySessionRef,
+        token,
+        sink
+      });
+    }
+
+    await hub.heartbeatAll();
+    await valid.waitForFrame((frame) => frame.startsWith(": heartbeat "));
+
+    expect(valid.frames.at(-1)).toBe(": heartbeat 2026-07-24T12:15:00.000Z\n\n");
+    expect(valid.destroyed).toBe(false);
+    expect(expired.destroyed).toBe(true);
+    expect(wrongPerson.destroyed).toBe(true);
+    expect(admin.destroyed).toBe(true);
+    expect(authenticator.calls).toEqual([
+      ["entry-session:valid", "valid-token"],
+      ["entry-session:expired", "expired-token"],
+      ["entry-session:wrong-person", "wrong-person-token"],
+      ["entry-session:admin", "admin-token"]
+    ]);
+    expect(hub.subscriberCount()).toBe(1);
+    await hub.close();
+  });
+
+  it("cleans every Subscriber and stops reading after Hub close", async () => {
+    const source = new FakeEventSource([event(1)]);
+    const hub = new PersonEventStreamHub(source, validAuthenticator, { autoStart: false });
+    const sink = new FakeSink();
+    hub.register({
+      personRef: "person:test",
+      cursor: 0,
+      entrySessionRef: "entry-session:close",
+      token: "close-token",
+      sink
+    });
+
+    await hub.close();
+    const callsBefore = source.calls.length;
+    await hub.pumpAll();
+
+    expect(hub.subscriberCount()).toBe(0);
+    expect(sink.ended).toBe(true);
+    expect(source.calls).toHaveLength(callsBefore);
   });
 });
