@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { DomainEvent, DomainEventPage } from "./domainEvents.js";
+import {
+  requireEntryRequest,
+  type EntrySessionAuthenticator
+} from "./entrySessionAuth.js";
 import { GatewayDomainError } from "./service.js";
 
 const eventStreamQuerySchema = z
@@ -19,11 +24,38 @@ function invalidCursor(): GatewayDomainError {
   );
 }
 
+function invalidEntrySession(): GatewayDomainError {
+  return new GatewayDomainError(
+    "ENTRY_SESSION_INVALID",
+    401,
+    "permission",
+    false,
+    "入口会话无效。"
+  );
+}
+
 function parseDecimalCursor(value: string): number {
   if (!/^\d+$/.test(value)) throw invalidCursor();
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw invalidCursor();
   return parsed;
+}
+
+function authenticatedCredentials(request: FastifyRequest): {
+  entrySessionRef: string;
+  token: string;
+} {
+  const entrySessionRef = request.headers["x-entry-session-ref"];
+  const authorization = request.headers.authorization;
+  if (
+    typeof entrySessionRef !== "string" ||
+    !authorization?.startsWith("Bearer ")
+  ) {
+    throw invalidEntrySession();
+  }
+  const token = authorization.slice("Bearer ".length).trim();
+  if (!token) throw invalidEntrySession();
+  return { entrySessionRef, token };
 }
 
 export function parseEventStreamCursor(
@@ -407,4 +439,53 @@ export class PersonEventStreamHub {
       // The connection is already unusable; cleanup is still complete.
     }
   }
+}
+
+export function registerEventStreamRoutes(
+  app: FastifyInstance,
+  input: {
+    hub: PersonEventStreamHub;
+    entryAuthenticator: EntrySessionAuthenticator;
+  }
+): void {
+  app.get("/api/v1/events/stream", async (request, reply) => {
+    const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
+    const cursor = parseEventStreamCursor(
+      request.query,
+      request.headers["last-event-id"]
+    );
+    const credentials = authenticatedCredentials(request);
+
+    reply.raw.statusCode = 200;
+    reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("X-Accel-Buffering", "no");
+    reply.hijack();
+    reply.raw.flushHeaders();
+
+    let unregister: (() => void) | null = null;
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      unregister?.();
+    };
+    request.raw.once("aborted", cleanup);
+    reply.raw.once("close", cleanup);
+    reply.raw.once("error", cleanup);
+
+    try {
+      unregister = input.hub.register({
+        personRef: context.person.personRef,
+        cursor,
+        entrySessionRef: credentials.entrySessionRef,
+        token: credentials.token,
+        sink: reply.raw
+      });
+      if (cleaned) unregister();
+    } catch (error) {
+      reply.raw.destroy(error instanceof Error ? error : undefined);
+    }
+  });
 }
