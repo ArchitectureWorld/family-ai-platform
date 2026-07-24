@@ -267,10 +267,16 @@ export class PersonEventStreamHub {
     for (const channel of [...this.channels.values()]) {
       for (const subscriber of [...channel.subscribers]) {
         if (subscriber.closed) continue;
-        const authentication = this.authenticator.authenticate(
-          subscriber.entrySessionRef,
-          subscriber.token
-        );
+        let authentication: EventStreamAuthentication;
+        try {
+          authentication = this.authenticator.authenticate(
+            subscriber.entrySessionRef,
+            subscriber.token
+          );
+        } catch {
+          this.unregister(subscriber, false);
+          continue;
+        }
         if (
           authentication.status !== "authenticated" ||
           authentication.context.audience !== "personal" ||
