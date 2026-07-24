@@ -117,6 +117,7 @@ interface Subscriber {
   tail: Promise<void>;
   queuedFrames: number;
   queuedBytes: number;
+  releaseDrain: (() => void) | null;
 }
 
 interface PersonChannel {
@@ -130,6 +131,8 @@ export class PersonEventStreamHub {
   private readonly reconnectMs: number;
   private readonly pollIntervalMs: number;
   private readonly heartbeatIntervalMs: number;
+  private readonly maxQueuedFrames: number;
+  private readonly maxQueuedBytes: number;
   private readonly now: () => Date;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -143,6 +146,8 @@ export class PersonEventStreamHub {
     this.reconnectMs = options.reconnectMs ?? 3000;
     this.pollIntervalMs = options.pollIntervalMs ?? 500;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15000;
+    this.maxQueuedFrames = options.maxQueuedFrames ?? 256;
+    this.maxQueuedBytes = options.maxQueuedBytes ?? 1024 * 1024;
     this.now = options.now ?? (() => new Date());
     if (options.autoStart !== false) this.start();
   }
@@ -161,7 +166,8 @@ export class PersonEventStreamHub {
       closed: false,
       tail: Promise.resolve(),
       queuedFrames: 0,
-      queuedBytes: 0
+      queuedBytes: 0,
+      releaseDrain: null
     };
     let channel = this.channels.get(input.personRef);
     if (!channel) {
@@ -205,6 +211,7 @@ export class PersonEventStreamHub {
       await run;
     } finally {
       if (channel.runningPump === run) channel.runningPump = null;
+      if (channel.subscribers.size === 0) this.channels.delete(personRef);
     }
   }
 
@@ -216,11 +223,22 @@ export class PersonEventStreamHub {
   async heartbeatAll(): Promise<void> {
     if (this.closed) return;
     const timestamp = this.now().toISOString();
-    for (const channel of this.channels.values()) {
+    for (const channel of [...this.channels.values()]) {
       for (const subscriber of [...channel.subscribers]) {
-        if (!subscriber.closed) {
-          this.enqueueFrame(subscriber, formatHeartbeatFrame(timestamp));
+        if (subscriber.closed) continue;
+        const authentication = this.authenticator.authenticate(
+          subscriber.entrySessionRef,
+          subscriber.token
+        );
+        if (
+          authentication.status !== "authenticated" ||
+          authentication.context.audience !== "personal" ||
+          authentication.context.person.personRef !== subscriber.personRef
+        ) {
+          this.unregister(subscriber, false);
+          continue;
         }
+        this.enqueueFrame(subscriber, formatHeartbeatFrame(timestamp));
       }
     }
   }
@@ -297,19 +315,53 @@ export class PersonEventStreamHub {
 
   private enqueueFrame(subscriber: Subscriber, frame: string): void {
     if (subscriber.closed) return;
+    const bytes = Buffer.byteLength(frame, "utf8");
+    if (
+      subscriber.queuedFrames + 1 > this.maxQueuedFrames ||
+      subscriber.queuedBytes + bytes > this.maxQueuedBytes
+    ) {
+      this.unregister(subscriber, false);
+      return;
+    }
+
+    subscriber.queuedFrames += 1;
+    subscriber.queuedBytes += bytes;
     subscriber.tail = subscriber.tail
-      .then(() => {
+      .then(async () => {
         if (subscriber.closed) return;
-        subscriber.sink.write(frame);
+        const writable = subscriber.sink.write(frame);
+        if (!writable) await this.waitForDrain(subscriber);
       })
       .catch(() => {
         this.unregister(subscriber, false);
+      })
+      .finally(() => {
+        subscriber.queuedFrames = Math.max(0, subscriber.queuedFrames - 1);
+        subscriber.queuedBytes = Math.max(0, subscriber.queuedBytes - bytes);
       });
+  }
+
+  private async waitForDrain(subscriber: Subscriber): Promise<void> {
+    if (subscriber.closed) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const release = () => {
+        if (settled) return;
+        settled = true;
+        if (subscriber.releaseDrain === release) subscriber.releaseDrain = null;
+        resolve();
+      };
+      subscriber.releaseDrain = release;
+      subscriber.sink.once("drain", release);
+      if (subscriber.closed) release();
+    });
   }
 
   private unregister(subscriber: Subscriber, end: boolean): void {
     if (subscriber.closed) return;
     subscriber.closed = true;
+    subscriber.releaseDrain?.();
+    subscriber.releaseDrain = null;
     subscriber.entrySessionRef = "";
     subscriber.token = "";
     const channel = this.channels.get(subscriber.personRef);
