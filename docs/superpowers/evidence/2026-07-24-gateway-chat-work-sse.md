@@ -6,8 +6,7 @@
 - 分支：`feat/gateway-chat-work-sse`
 - 基线：`main` @ `4bba487ce675f3b338c343185514915a25a6bb2d`
 - 功能实现 Head：`c6a3a174789e3c315e91259d92932c8c0fd7a5cd`
-- 已验证设计完成 Head：`8b616881c84bf29c8712513ddc9adf9163d77e86`
-- 最新证据完成 Head：`40bf908e5366853439f3c3fe106cd90d1b4b4e9c`
+- 设计完成 Head：`8b616881c84bf29c8712513ddc9adf9163d77e86`
 - PR：#20 `feat(gateway): stream Chat Work events over SSE`
 
 ## 1. 完成范围
@@ -185,9 +184,10 @@ published_at = NULL
 | 跨 Person 端到端隔离 | CI #309 | GREEN | 两个 Personal Entry 流完全隔离 |
 | 证据文档完成 | CI #310 | GREEN | 全 Workspace 质量门禁 |
 | 最终设计状态同步 | CI #311 | GREEN | 设计完成 Head 全 Workspace 质量门禁 |
-| 最终证据同步 | CI #312 | GREEN | 最新证据 Head 全 Workspace 质量门禁 |
+| 证据状态同步 | CI #312 | GREEN | 证据 Head 全 Workspace 质量门禁 |
+| 最终证据收口 | CI #313 | GREEN | 最终证据前一 Head 全 Workspace 质量门禁 |
 
-每个阶段对应的 Secret Scan 均成功。最新证据 Head 的 Secret Scan #198 成功。
+每个阶段对应的 Secret Scan 均成功；CI #313 对应 Secret Scan #199 成功。
 
 ## 9. 设计审查结论
 
@@ -235,22 +235,11 @@ apps/gateway/public/**
 
 PR #14 继续保持独立 Draft，等待真实 Mac、iPhone 与部署 Gateway 的真机验收。
 
-## 11. 最终验证
+## 11. 验证说明
 
-最新证据完成 Head：
+功能与设计已在 Head `8b616881c84bf29c8712513ddc9adf9163d77e86` 通过 CI #311 / Secret Scan #197。随后仅同步本证据文档；文档同步提交继续由 CI #312 / #313 和 Secret Scan #198 / #199 验证。
 
-```text
-40bf908e5366853439f3c3fe106cd90d1b4b4e9c
-```
-
-结果：
-
-- CI #312：成功；
-- Secret Scan #198：成功；
-- GitHub merged-tree 质量门禁包含所有 Workspace 测试、静态检查、TypeScript 类型检查和构建；
-- PR #20 与 PR #14 changed-path 交集为零；
-- PR #14 仍为 Open、Draft、mergeable，Head 未变化；
-- PR #20 没有评论或未解决 Review Thread。
+PR 转为 Ready 前，以 GitHub 上最新 Head 的完整 CI 与 Secret Scan 结果为最终门禁，具体编号记录在 PR 正文中，避免为了追写自身提交 SHA 而产生无限文档提交链。
 
 ## 12. 延后范围
 
