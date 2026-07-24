@@ -1,0 +1,18 @@
+{
+  "eventRef": "event:alice-message-0001",
+  "personRef": "person:alice",
+  "eventSequence": 3,
+  "eventType": "thread.message.created",
+  "aggregateType": "thread_message",
+  "aggregateRef": "message:alice-0001",
+  "threadRef": "thread:alice-home-chat",
+  "payload": {
+    "messageRef": "message:alice-0001",
+    "threadRef": "thread:alice-home-chat",
+    "threadSequence": 1,
+    "actorType": "person",
+    "clientMessageId": "web-alice-0001"
+  },
+  "occurredAt": "2026-07-24T08:02:00.000Z",
+  "createdAt": "2026-07-24T08:02:00.000Z"
+}

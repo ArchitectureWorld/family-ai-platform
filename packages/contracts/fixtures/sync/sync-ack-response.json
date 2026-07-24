@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "sync": {
+    "deviceRef": "device:web-alice",
+    "personRef": "person:alice",
+    "previousSequence": 6,
+    "acknowledgedSequence": 7,
+    "advanced": true,
+    "updatedAt": "2026-07-24T08:08:00.000Z"
+  }
+}

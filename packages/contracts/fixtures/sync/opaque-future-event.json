@@ -1,0 +1,23 @@
+{
+  "eventRef": "event:alice-notification-0001",
+  "personRef": "person:alice",
+  "eventSequence": 8,
+  "eventType": "notification.created",
+  "aggregateType": "notification",
+  "aggregateRef": "notification:alice-0001",
+  "threadRef": null,
+  "payload": {
+    "notificationRef": "notification:alice-0001",
+    "priority": 2,
+    "channels": [
+      "web",
+      "mobile"
+    ],
+    "metadata": {
+      "dismissible": true
+    },
+    "optional": null
+  },
+  "occurredAt": "2026-07-24T08:07:00.000Z",
+  "createdAt": "2026-07-24T08:07:00.000Z"
+}

@@ -1,0 +1,16 @@
+{
+  "eventRef": "event:alice-progress-0001",
+  "personRef": "person:alice",
+  "eventSequence": 5,
+  "eventType": "work.progress.updated",
+  "aggregateType": "work_progress",
+  "aggregateRef": "work:family-ai-platform",
+  "threadRef": "thread:work-family-ai-platform",
+  "payload": {
+    "workConversationRef": "work:family-ai-platform",
+    "status": "waiting_confirmation",
+    "updatedAt": "2026-07-24T08:04:00.000Z"
+  },
+  "occurredAt": "2026-07-24T08:04:00.000Z",
+  "createdAt": "2026-07-24T08:04:01.000Z"
+}

@@ -1,0 +1,16 @@
+{
+  "eventRef": "event:alice-chat-home-0001",
+  "personRef": "person:alice",
+  "eventSequence": 1,
+  "eventType": "chat.home.created",
+  "aggregateType": "home_chat",
+  "aggregateRef": "home-chat:alice",
+  "threadRef": "thread:alice-home-chat",
+  "payload": {
+    "homeChatStreamRef": "home-chat:alice",
+    "dailyEpisodeRef": "daily-episode:alice-20260724",
+    "threadRef": "thread:alice-home-chat"
+  },
+  "occurredAt": "2026-07-24T08:00:00.000Z",
+  "createdAt": "2026-07-24T08:00:00.000Z"
+}

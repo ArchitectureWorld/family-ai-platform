@@ -1,0 +1,21 @@
+{
+  "eventRef": "event:alice-provider-failed-0001",
+  "personRef": "person:alice",
+  "eventSequence": 6,
+  "eventType": "thread.provider_turn.failed",
+  "aggregateType": "provider_turn",
+  "aggregateRef": "message:alice-0001",
+  "threadRef": "thread:alice-home-chat",
+  "payload": {
+    "userMessageRef": "message:alice-0001",
+    "threadRef": "thread:alice-home-chat",
+    "attemptCount": 1,
+    "error": {
+      "code": "PROVIDER_UNAVAILABLE",
+      "category": "availability",
+      "retryable": true
+    }
+  },
+  "occurredAt": "2026-07-24T08:05:00.000Z",
+  "createdAt": "2026-07-24T08:05:00.000Z"
+}

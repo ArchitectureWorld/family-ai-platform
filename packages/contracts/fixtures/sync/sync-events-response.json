@@ -1,0 +1,136 @@
+{
+  "protocolVersion": 1,
+  "sync": {
+    "deviceRef": "device:web-alice",
+    "personRef": "person:alice",
+    "acknowledgedSequence": 0,
+    "requestedAfterSequence": 0,
+    "latestSequence": 7
+  },
+  "events": [
+    {
+      "eventRef": "event:alice-chat-home-0001",
+      "personRef": "person:alice",
+      "eventSequence": 1,
+      "eventType": "chat.home.created",
+      "aggregateType": "home_chat",
+      "aggregateRef": "home-chat:alice",
+      "threadRef": "thread:alice-home-chat",
+      "payload": {
+        "homeChatStreamRef": "home-chat:alice",
+        "dailyEpisodeRef": "daily-episode:alice-20260724",
+        "threadRef": "thread:alice-home-chat"
+      },
+      "occurredAt": "2026-07-24T08:00:00.000Z",
+      "createdAt": "2026-07-24T08:00:00.000Z"
+    },
+    {
+      "eventRef": "event:alice-work-0001",
+      "personRef": "person:alice",
+      "eventSequence": 2,
+      "eventType": "work.created",
+      "aggregateType": "work",
+      "aggregateRef": "work:family-ai-platform",
+      "threadRef": "thread:work-family-ai-platform",
+      "payload": {
+        "workConversationRef": "work:family-ai-platform",
+        "threadRef": "thread:work-family-ai-platform",
+        "status": "active"
+      },
+      "occurredAt": "2026-07-24T08:01:00.000Z",
+      "createdAt": "2026-07-24T08:01:00.000Z"
+    },
+    {
+      "eventRef": "event:alice-message-0001",
+      "personRef": "person:alice",
+      "eventSequence": 3,
+      "eventType": "thread.message.created",
+      "aggregateType": "thread_message",
+      "aggregateRef": "message:alice-0001",
+      "threadRef": "thread:alice-home-chat",
+      "payload": {
+        "messageRef": "message:alice-0001",
+        "threadRef": "thread:alice-home-chat",
+        "threadSequence": 1,
+        "actorType": "person",
+        "clientMessageId": "web-alice-0001"
+      },
+      "occurredAt": "2026-07-24T08:02:00.000Z",
+      "createdAt": "2026-07-24T08:02:00.000Z"
+    },
+    {
+      "eventRef": "event:alice-conversion-0001",
+      "personRef": "person:alice",
+      "eventSequence": 4,
+      "eventType": "chat.work.created",
+      "aggregateType": "chat_work_conversion",
+      "aggregateRef": "chat-work-conversion:alice-0001",
+      "threadRef": "thread:work-family-ai-platform",
+      "payload": {
+        "conversionRef": "chat-work-conversion:alice-0001",
+        "homeChatStreamRef": "home-chat:alice",
+        "workConversationRef": "work:family-ai-platform",
+        "sourceMessageRefs": [
+          "message:alice-0001"
+        ]
+      },
+      "occurredAt": "2026-07-24T08:03:00.000Z",
+      "createdAt": "2026-07-24T08:03:00.000Z"
+    },
+    {
+      "eventRef": "event:alice-progress-0001",
+      "personRef": "person:alice",
+      "eventSequence": 5,
+      "eventType": "work.progress.updated",
+      "aggregateType": "work_progress",
+      "aggregateRef": "work:family-ai-platform",
+      "threadRef": "thread:work-family-ai-platform",
+      "payload": {
+        "workConversationRef": "work:family-ai-platform",
+        "status": "waiting_confirmation",
+        "updatedAt": "2026-07-24T08:04:00.000Z"
+      },
+      "occurredAt": "2026-07-24T08:04:00.000Z",
+      "createdAt": "2026-07-24T08:04:01.000Z"
+    },
+    {
+      "eventRef": "event:alice-provider-failed-0001",
+      "personRef": "person:alice",
+      "eventSequence": 6,
+      "eventType": "thread.provider_turn.failed",
+      "aggregateType": "provider_turn",
+      "aggregateRef": "message:alice-0001",
+      "threadRef": "thread:alice-home-chat",
+      "payload": {
+        "userMessageRef": "message:alice-0001",
+        "threadRef": "thread:alice-home-chat",
+        "attemptCount": 1,
+        "error": {
+          "code": "PROVIDER_UNAVAILABLE",
+          "category": "availability",
+          "retryable": true
+        }
+      },
+      "occurredAt": "2026-07-24T08:05:00.000Z",
+      "createdAt": "2026-07-24T08:05:00.000Z"
+    },
+    {
+      "eventRef": "event:alice-provider-succeeded-0001",
+      "personRef": "person:alice",
+      "eventSequence": 7,
+      "eventType": "thread.provider_turn.succeeded",
+      "aggregateType": "provider_turn",
+      "aggregateRef": "message:alice-0001",
+      "threadRef": "thread:alice-home-chat",
+      "payload": {
+        "userMessageRef": "message:alice-0001",
+        "assistantMessageRef": "message:alice-0002",
+        "threadRef": "thread:alice-home-chat",
+        "attemptCount": 1
+      },
+      "occurredAt": "2026-07-24T08:06:00.000Z",
+      "createdAt": "2026-07-24T08:06:00.000Z"
+    }
+  ],
+  "nextAfterSequence": null
+}
