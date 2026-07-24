@@ -256,7 +256,9 @@ export class PersonEventStreamHub {
 
   async pumpAll(): Promise<void> {
     if (this.closed) return;
-    await Promise.all([...this.channels.keys()].map((personRef) => this.pumpPerson(personRef)));
+    await Promise.allSettled(
+      [...this.channels.keys()].map((personRef) => this.pumpPerson(personRef))
+    );
   }
 
   async heartbeatAll(): Promise<void> {
