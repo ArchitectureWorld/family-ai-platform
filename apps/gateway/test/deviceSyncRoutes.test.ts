@@ -154,6 +154,7 @@ describe("Device Sync HTTP routes", () => {
       nextAfterSequence: null
     });
     expect(firstBody.events.map((event) => event.eventSequence)).toEqual([1]);
+    expect(JSON.stringify(firstBody)).not.toContain(onboarding.entries.personal.token);
 
     const db = openGatewayDatabase(databasePath);
     try {
@@ -346,6 +347,48 @@ describe("Device Sync HTTP routes", () => {
         retryable: false
       });
     }
+
+    const member = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/members",
+      headers: entryHeaders(onboarding.entries.admin),
+      payload: { displayName: "另一位成人", familyRole: "adult" }
+    });
+    expect(member.statusCode).toBe(201);
+    const adultPersonRef = String(member.json().member.personRef);
+    const db = openGatewayDatabase(databasePath);
+    let adultEvent: DomainEvent;
+    try {
+      adultEvent = new DomainEventStore(
+        db,
+        () => new Date("2026-07-24T17:02:00.000Z")
+      ).append({
+        personRef: adultPersonRef,
+        eventType: "test.sync.cross-person",
+        aggregateType: "work",
+        aggregateRef: "work:sync-cross-person",
+        payload: {},
+        occurredAt: "2026-07-24T17:02:00.000Z"
+      });
+    } finally {
+      db.close();
+    }
+    const crossPerson = await app.inject({
+      method: "POST",
+      url: "/api/v1/sync/ack",
+      headers: entryHeaders(onboarding.entries.personal),
+      payload: {
+        protocolVersion: 1,
+        eventSequence: adultEvent.eventSequence,
+        eventRef: adultEvent.eventRef
+      }
+    });
+    expect(crossPerson.statusCode).toBe(404);
+    expectPublicError(crossPerson, {
+      code: "SYNC_EVENT_NOT_FOUND",
+      category: "permission",
+      retryable: false
+    });
 
     const deviceHeader = await app.inject({
       method: "GET",
