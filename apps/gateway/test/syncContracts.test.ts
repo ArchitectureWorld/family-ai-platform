@@ -5,15 +5,18 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   SYNC_PROTOCOL_VERSION,
+  SYNC_SSE_EVENT_NAME,
   syncAckRequestSchema,
   syncAckResponseSchema,
-  syncEventsResponseSchema
+  syncEventsResponseSchema,
+  syncSseDataSchema
 } from "@family-ai/contracts";
 import { buildGatewayApp } from "../src/app.js";
 import type { DeviceSyncRepository } from "../src/deviceSync.js";
 import { registerDeviceSyncRoutes } from "../src/deviceSyncRoutes.js";
-import type { DomainEventStore } from "../src/domainEvents.js";
+import type { DomainEvent, DomainEventStore } from "../src/domainEvents.js";
 import type { EntrySessionAuthenticator } from "../src/entrySessionAuth.js";
+import { formatDomainEventFrame } from "../src/eventStream.js";
 
 const deviceToken = "sync-contract-bootstrap-device-token-with-enough-length";
 const bootstrapHeaders = {
@@ -164,5 +167,47 @@ describe("Gateway Event Sync REST contract integration", () => {
     } finally {
       await testApp.close();
     }
+  });
+});
+
+describe("Gateway Event Sync SSE contract integration", () => {
+  const event = {
+    eventRef: "event:alice-message-0001",
+    personRef: "person:alice",
+    eventSequence: 3,
+    eventType: "thread.message.created",
+    aggregateType: "thread_message",
+    aggregateRef: "message:alice-0001",
+    threadRef: "thread:alice-home-chat",
+    payload: {
+      messageRef: "message:alice-0001",
+      threadRef: "thread:alice-home-chat",
+      threadSequence: 1,
+      actorType: "person",
+      clientMessageId: "web-alice-0001"
+    },
+    occurredAt: "2026-07-24T18:01:00.000Z",
+    createdAt: "2026-07-24T18:01:00.000Z"
+  } as const;
+
+  it("uses the public SSE event name, id and data schema", () => {
+    const parsed = syncSseDataSchema.parse(event);
+    const frame = formatDomainEventFrame(parsed);
+    const lines = frame.trim().split("\n");
+    const id = lines.find((line) => line.startsWith("id: "))?.slice(4);
+    const name = lines.find((line) => line.startsWith("event: "))?.slice(7);
+    const data = lines.find((line) => line.startsWith("data: "))?.slice(6);
+
+    expect(name).toBe(SYNC_SSE_EVENT_NAME);
+    expect(Number(id)).toBe(parsed.eventSequence);
+    expect(syncSseDataSchema.parse(JSON.parse(data ?? "null"))).toEqual(parsed);
+  });
+
+  it("refuses to serialize a malformed known event", () => {
+    const malformed = {
+      ...event,
+      payload: { workConversationRef: "work:wrong-payload" }
+    } as unknown as DomainEvent;
+    expect(() => formatDomainEventFrame(malformed)).toThrow();
   });
 });
