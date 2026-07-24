@@ -83,44 +83,45 @@ ArchitectureWorld/family-ai-platform-legacy
 
 ## 当前开发阶段
 
-Gateway Foundation 已保留以下可靠技术内核：
+Family / Person、双入口和正式 Chat / Work 实时后端已经进入 `main`。当前完整链路为：
 
 ```text
-设备认证
-→ 固定路由
-→ Conversation / Message
-→ Fake Provider 多轮连续性
-→ 幂等重放与冲突
-→ SQLite 持久化
-→ 容器重启恢复
+Personal Entry Session
+→ HomeChatStream / WorkConversation
+→ Person ThreadMessage
+→ 同 Thread Provider Lane
+→ Assistant ThreadMessage
+→ domain_events + outbox_events
+→ SSE 实时通知与 Last-Event-ID 恢复
 ```
 
-本阶段正在建立正式 Family / Person 领域底座：
+已经完成：
+
+- Family、Person、Device、EntryBinding 和双 Entry Session；
+- Chat / Work Contracts v1；
+- Home Chat、DailyEpisode、WorkConversation 和 ThreadMessage 持久化；
+- Personal Entry Session 认证的 Chat / Work HTTP API；
+- Provider Context Session、Assistant 回复、失败重试和重启恢复；
+- Person 级领域事件与 Transactional Outbox；
+- `GET /api/v1/events/stream` SSE 实时推送；
+- `afterSequence` 与 `Last-Event-ID` 断线补发；
+- 心跳授权复核、慢连接背压、Person 隔离和 Gateway 关闭清理。
+
+当前开发顺序：
 
 ```text
-创建一个 Family
-→ 创建首位 owner Person
-→ 绑定当前 Device
-→ 创建 FamilyManagerAssignment
-→ 创建 AssistantAssignment
-→ 在同一设备建立两套独立 Entry Session
+Device Sync Cursor
+→ 显式缺失事件补拉 API
+→ 正式 Member Web Chat / Work
+→ Push 唤醒
+→ iOS 接入统一 Chat / Work 与同步协议
 ```
 
-双入口关系：
+iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、iPhone 与部署 Gateway 的真机验收。浏览器验收台仍只承担初始化、配对和“小白一键验收”，不会作为正式 Member Web 继续堆叠业务功能。
 
-```text
-同一个 Person / Device
-├── 家庭管理
-│   ├── audience: family_admin
-│   └── 默认 Agent: 家庭管家
-└── 个人空间
-    ├── audience: personal
-    └── 默认 Agent: 个人助理
-```
+详细阶段记录：
 
-管理员可以创建其他家庭成员并为其分配个人助理，但不会自动获得这些成员的私人入口。
-
-本阶段不包含 Chat、Work、手机号、密码、多家庭切换和真实 Provider。
+- [`docs/development/2026-07-24-chat-work-realtime-foundation.md`](docs/development/2026-07-24-chat-work-realtime-foundation.md)
 
 ## 一条命令完成自动测试与小白验收
 
@@ -180,6 +181,8 @@ bash ./scripts/acceptance-onboarding.sh
 - Conversation 同时校验成员和 Agent；
 - 授权先于幂等缓存查询；
 - Provider Session 不跨 Agent 或 Provider Profile 复用；
+- SSE 不发送消息正文、Token、Credential 或 Provider External Session；
+- SSE 消费不会把 Transactional Outbox 错误标记为已发布；
 - 验收台只在 development 模式提供；
 - production 不运行测试 bootstrap，也不默认创建 Fake Provider；
 - 自动测试只使用 Fake Provider。
@@ -203,3 +206,6 @@ bash ./scripts/acceptance-onboarding.sh
 - `docs/acceptance/2026-07-21-family-onboarding-foundation.md`
 - `docs/development/2026-07-21-gateway-foundation-verification.md`
 - `docs/development/2026-07-21-gateway-foundation-target-host-acceptance.md`
+- `docs/development/2026-07-24-chat-work-realtime-foundation.md`
+- `docs/superpowers/specs/2026-07-24-gateway-chat-work-sse-design.md`
+- `docs/superpowers/evidence/2026-07-24-gateway-chat-work-sse.md`
