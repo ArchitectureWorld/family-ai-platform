@@ -6,6 +6,7 @@
 - 分支：`feat/gateway-chat-work-sse`
 - 基线：`main` @ `4bba487ce675f3b338c343185514915a25a6bb2d`
 - 功能实现 Head：`c6a3a174789e3c315e91259d92932c8c0fd7a5cd`
+- 已验证设计完成 Head：`8b616881c84bf29c8712513ddc9adf9163d77e86`
 - PR：#20 `feat(gateway): stream Chat Work events over SSE`
 
 ## 1. 完成范围
@@ -181,8 +182,10 @@ published_at = NULL
 | 心跳异常传播 | CI #307 | RED | 单连接认证异常中止心跳循环 |
 | 心跳异常隔离 | CI #308 | GREEN | 异常连接单独关闭，健康连接继续 |
 | 跨 Person 端到端隔离 | CI #309 | GREEN | 两个 Personal Entry 流完全隔离 |
+| 证据文档完成 | CI #310 | GREEN | 全 Workspace 质量门禁 |
+| 最终设计状态同步 | CI #311 | GREEN | 最终已验证 Head 全 Workspace 质量门禁 |
 
-每个阶段对应的 Secret Scan 均成功；功能实现 Head 的最终检查为 Secret Scan #195 成功。
+每个阶段对应的 Secret Scan 均成功。最终已验证 Head 的 Secret Scan #197 成功。
 
 ## 9. 设计审查结论
 
@@ -230,7 +233,25 @@ apps/gateway/public/**
 
 PR #14 继续保持独立 Draft，等待真实 Mac、iPhone 与部署 Gateway 的真机验收。
 
-## 11. 延后范围
+## 11. 最终验证
+
+已验证 Head：
+
+```text
+8b616881c84bf29c8712513ddc9adf9163d77e86
+```
+
+结果：
+
+- CI #311：成功；
+- Secret Scan #197：成功；
+- GitHub merged-tree 质量门禁包含所有 Workspace 测试、静态检查、TypeScript 类型检查和构建；
+- 相对基线 ahead 22 / behind 0；
+- PR #20 与 PR #14 changed-path 交集为零；
+- PR #14 仍为 Open、Draft、mergeable，Head 未变化；
+- PR #20 没有评论或未解决 Review Thread。
+
+## 12. 延后范围
 
 以下内容继续放在独立 PR：
 
