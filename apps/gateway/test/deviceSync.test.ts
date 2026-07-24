@@ -41,7 +41,7 @@ describe("Device Sync event schema foundation", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it.skip("installs Domain Event migrations V1 and V2 and creates the Device Cursor table", () => {
+  it("installs Domain Event migrations V1 and V2 and creates the Device Cursor table", () => {
     expect(db.prepare(
       "SELECT version FROM domain_event_schema_migrations ORDER BY version"
     ).all()).toEqual([{ version: 1 }, { version: 2 }]);
@@ -51,7 +51,7 @@ describe("Device Sync event schema foundation", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
-  it.skip("returns latest Person sequence and resolves only an exact Person event identity", () => {
+  it("returns latest Person sequence and resolves only an exact Person event identity", () => {
     const first = events.append({
       personRef: ownerPersonRef,
       eventType: "test.sync.first",
@@ -92,7 +92,7 @@ describe("Device Sync event schema foundation", () => {
     expect(first.eventSequence).toBe(1);
   });
 
-  it.skip("upgrades an existing Event Schema V1 database without rewriting events", () => {
+  it("upgrades an existing Event Schema V1 database without rewriting events", () => {
     const existing = events.append({
       personRef: ownerPersonRef,
       eventType: "test.sync.upgrade",
