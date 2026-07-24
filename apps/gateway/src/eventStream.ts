@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { SYNC_SSE_EVENT_NAME, syncSseDataSchema } from "@family-ai/contracts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { DomainEvent, DomainEventPage } from "./domainEvents.js";
@@ -84,7 +85,8 @@ export function formatConnectedFrame(reconnectMs: number): string {
 }
 
 export function formatDomainEventFrame(event: DomainEvent): string {
-  return `id: ${event.eventSequence}\nevent: domain-event\ndata: ${JSON.stringify(event)}\n\n`;
+  const data = syncSseDataSchema.parse(event);
+  return `id: ${data.eventSequence}\nevent: ${SYNC_SSE_EVENT_NAME}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
 export function formatHeartbeatFrame(timestamp: string): string {
