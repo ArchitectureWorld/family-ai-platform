@@ -181,7 +181,7 @@ published_at = NULL
 | 心跳异常隔离 | CI #308 | GREEN | 异常连接单独关闭，健康连接继续 |
 | 跨 Person 端到端隔离 | CI #309 | GREEN | 两个 Personal Entry 流完全隔离 |
 
-后续设计与证据文档提交继续由完整 CI 和 Secret Scan 验证。PR 转为 Ready 前，以 GitHub 上最新 Head 的结果作为最终门禁；具体编号记录在 PR 正文中。
+后续文档提交继续由完整 CI 与 Secret Scan 验证。PR 转为 Ready 前，以 GitHub 上最新 Head 的结果作为最终门禁；具体编号记录在 PR 正文中。
 
 ## 9. 设计审查结论
 
@@ -240,7 +240,7 @@ PR 转为 Ready 前必须同时满足：
 - PR #14 仍为 Open、Draft，Head 不变；
 - PR #20 没有未解决 Review Thread。
 
-最终 Head 和检查编号以 PR 正文为准。此文件不再追写自身提交 SHA，以避免文档提交形成自引用链。
+最终 Head 和检查编号以 PR 正文为准。本文件冻结，不再追写自身提交 SHA 或检查编号。
 
 ## 12. 延后范围
 
