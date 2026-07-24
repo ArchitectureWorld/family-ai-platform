@@ -16,7 +16,12 @@ import type { DeviceSyncRepository } from "../src/deviceSync.js";
 import { registerDeviceSyncRoutes } from "../src/deviceSyncRoutes.js";
 import type { DomainEvent, DomainEventStore } from "../src/domainEvents.js";
 import type { EntrySessionAuthenticator } from "../src/entrySessionAuth.js";
-import { formatDomainEventFrame } from "../src/eventStream.js";
+import {
+  PersonEventStreamHub,
+  formatDomainEventFrame,
+  type EventStreamSink,
+  type PersonEventSource
+} from "../src/eventStream.js";
 
 const deviceToken = "sync-contract-bootstrap-device-token-with-enough-length";
 const bootstrapHeaders = {
@@ -39,6 +44,38 @@ function entryHeaders(entry: EntryCredential) {
     "x-entry-session-ref": entry.entrySessionRef
   };
 }
+
+function personalAuthenticator(): EntrySessionAuthenticator {
+  return {
+    authenticate: () => ({
+      status: "authenticated",
+      context: {
+        audience: "personal",
+        person: { personRef: "person:alice" },
+        device: { deviceRef: "device:web-alice" }
+      }
+    })
+  } as unknown as EntrySessionAuthenticator;
+}
+
+const canonicalMessageEvent = {
+  eventRef: "event:alice-message-0001",
+  personRef: "person:alice",
+  eventSequence: 3,
+  eventType: "thread.message.created",
+  aggregateType: "thread_message",
+  aggregateRef: "message:alice-0001",
+  threadRef: "thread:alice-home-chat",
+  payload: {
+    messageRef: "message:alice-0001",
+    threadRef: "thread:alice-home-chat",
+    threadSequence: 1,
+    actorType: "person",
+    clientMessageId: "web-alice-0001"
+  },
+  occurredAt: "2026-07-24T18:01:00.000Z",
+  createdAt: "2026-07-24T18:01:00.000Z"
+} as const;
 
 describe("Gateway Event Sync REST contract integration", () => {
   let directory = "";
@@ -139,18 +176,10 @@ describe("Gateway Event Sync REST contract integration", () => {
             createdAt: "2026-07-24T18:00:00.000Z"
           }],
           nextAfterSequence: null
-        })
+        }),
+        getLatestPersonSequence: () => 1
       } as unknown as DomainEventStore,
-      entryAuthenticator: {
-        authenticate: () => ({
-          status: "authenticated",
-          context: {
-            audience: "personal",
-            person: { personRef: "person:alice" },
-            device: { deviceRef: "device:web-alice" }
-          }
-        })
-      } as unknown as EntrySessionAuthenticator
+      entryAuthenticator: personalAuthenticator()
     });
 
     try {
@@ -168,30 +197,84 @@ describe("Gateway Event Sync REST contract integration", () => {
       await testApp.close();
     }
   });
+
+  it("refreshes latestSequence after reading a catch-up page", async () => {
+    const testApp = Fastify({ logger: false });
+    testApp.setErrorHandler((_error, _request, reply) => reply.code(500).send({
+      code: "TEST_OUTBOUND_CONTRACT_INVALID"
+    }));
+
+    const concurrentEvent = {
+      ...canonicalMessageEvent,
+      eventRef: "event:alice-message-0002",
+      eventSequence: 2,
+      aggregateRef: "message:alice-0002",
+      payload: {
+        ...canonicalMessageEvent.payload,
+        messageRef: "message:alice-0002",
+        threadSequence: 2,
+        clientMessageId: "web-alice-0002"
+      }
+    } as DomainEvent;
+
+    registerDeviceSyncRoutes(testApp, {
+      repository: {
+        readCursor: () => ({
+          deviceRef: "device:web-alice",
+          personRef: "person:alice",
+          acknowledgedSequence: 0,
+          latestSequence: 1,
+          createdAt: null,
+          updatedAt: null
+        }),
+        acknowledge: () => null
+      } as unknown as DeviceSyncRepository,
+      events: {
+        listPersonEvents: () => ({
+          events: [concurrentEvent],
+          nextAfterSequence: null
+        }),
+        getLatestPersonSequence: () => 2
+      } as unknown as DomainEventStore,
+      entryAuthenticator: personalAuthenticator()
+    });
+
+    try {
+      const response = await testApp.inject({
+        method: "GET",
+        url: "/api/v1/sync/events",
+        headers: {
+          authorization: "Bearer test-entry-token",
+          "x-entry-session-ref": "entry-session:test"
+        }
+      });
+      expect(response.statusCode).toBe(200);
+      expect(syncEventsResponseSchema.parse(response.json()).sync.latestSequence).toBe(2);
+    } finally {
+      await testApp.close();
+    }
+  });
 });
 
-describe("Gateway Event Sync SSE contract integration", () => {
-  const event = {
-    eventRef: "event:alice-message-0001",
-    personRef: "person:alice",
-    eventSequence: 3,
-    eventType: "thread.message.created",
-    aggregateType: "thread_message",
-    aggregateRef: "message:alice-0001",
-    threadRef: "thread:alice-home-chat",
-    payload: {
-      messageRef: "message:alice-0001",
-      threadRef: "thread:alice-home-chat",
-      threadSequence: 1,
-      actorType: "person",
-      clientMessageId: "web-alice-0001"
-    },
-    occurredAt: "2026-07-24T18:01:00.000Z",
-    createdAt: "2026-07-24T18:01:00.000Z"
-  } as const;
+class RecordingSink implements EventStreamSink {
+  readonly frames: string[] = [];
 
+  write(chunk: string): boolean {
+    this.frames.push(chunk);
+    return true;
+  }
+
+  once(_event: "drain", _listener: () => void): this {
+    return this;
+  }
+
+  end(): void {}
+  destroy(): void {}
+}
+
+describe("Gateway Event Sync SSE contract integration", () => {
   it("uses the public SSE event name, id and data schema", () => {
-    const parsed = syncSseDataSchema.parse(event);
+    const parsed = syncSseDataSchema.parse(canonicalMessageEvent);
     const frame = formatDomainEventFrame(parsed);
     const lines = frame.trim().split("\n");
     const id = lines.find((line) => line.startsWith("id: "))?.slice(4);
@@ -205,9 +288,60 @@ describe("Gateway Event Sync SSE contract integration", () => {
 
   it("refuses to serialize a malformed known event", () => {
     const malformed = {
-      ...event,
+      ...canonicalMessageEvent,
       payload: { workConversationRef: "work:wrong-payload" }
     } as unknown as DomainEvent;
     expect(() => formatDomainEventFrame(malformed)).toThrow();
+  });
+
+  it("does not advance a Subscriber cursor when event validation fails", async () => {
+    let sourceEvent: DomainEvent = {
+      ...canonicalMessageEvent,
+      payload: { workConversationRef: "work:wrong-payload" }
+    } as unknown as DomainEvent;
+    const calls: number[] = [];
+    const source: PersonEventSource = {
+      listPersonEvents: (input) => {
+        const afterSequence = input.afterSequence ?? 0;
+        calls.push(afterSequence);
+        return {
+          events: afterSequence < sourceEvent.eventSequence ? [sourceEvent] : [],
+          nextAfterSequence: null
+        };
+      }
+    };
+    const hub = new PersonEventStreamHub(
+      source,
+      {
+        authenticate: () => ({
+          status: "authenticated",
+          context: {
+            audience: "personal",
+            person: { personRef: "person:alice" }
+          }
+        })
+      },
+      { autoStart: false }
+    );
+    const sink = new RecordingSink();
+    hub.register({
+      personRef: "person:alice",
+      cursor: 0,
+      entrySessionRef: "entry-session:alice",
+      token: "entry-token-alice",
+      sink
+    });
+
+    try {
+      await expect(hub.pumpPerson("person:alice")).rejects.toThrow();
+      sourceEvent = canonicalMessageEvent as DomainEvent;
+      await hub.pumpPerson("person:alice");
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(calls).toEqual([0, 0]);
+      expect(sink.frames.join("\n")).toContain("id: 3");
+    } finally {
+      await hub.close();
+    }
   });
 });
