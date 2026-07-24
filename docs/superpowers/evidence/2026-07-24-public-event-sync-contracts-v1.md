@@ -6,11 +6,11 @@
 - 基线：`main` @ `58f2ccae76902b77790cecb05483a062259b7083`
 - 设计：`docs/superpowers/specs/2026-07-24-public-event-sync-contracts-v1-design.md`
 - 计划：`docs/superpowers/plans/2026-07-24-public-event-sync-contracts-v1.md`
-- 实现审查 Head：`c267f369bd2a2f664fa7dbe4cf87aed75dbe83d6`
+- 最终生产代码审查 Head：`6827aaede66256a155d412545dc55771f11ac47a`
 
 ## 1. 阶段结论
 
-本阶段将 Gateway 已运行的事件、显式补拉、累计 ACK 与 SSE 数据形状提升为所有终端可共同消费的版本化协议：
+本阶段将 Gateway 已运行的事件、显式补拉、累计 ACK 与 SSE 数据提升为所有终端共同消费的版本化协议：
 
 ```text
 Gateway internal DomainEvent
@@ -21,7 +21,7 @@ Gateway internal DomainEvent
 → Web / iOS / HarmonyOS / DIY
 ```
 
-公共协议独立版本：
+公共常量：
 
 ```ts
 SYNC_PROTOCOL_VERSION = 1
@@ -37,20 +37,7 @@ SYNC_SSE_EVENT_NAME = "domain-event"
 + 受控 Opaque Future Event
 ```
 
-### Known Event
-
-当前七种正式事件必须匹配固定的：
-
-```text
-eventType
-aggregateType
-aggregateRef
-threadRef
-Payload
-跨字段不变量
-```
-
-正式类型：
+当前 Known Event：
 
 ```text
 chat.home.created
@@ -62,17 +49,9 @@ thread.provider_turn.failed
 thread.provider_turn.succeeded
 ```
 
-错误的 Known Event 不能退化为 Opaque Event。测试使用错误的 `thread.message.created` Payload，同时确认：
+Known Event 必须匹配固定 `eventType`、`aggregateType`、Payload 和跨字段不变量。错误 Known Event 同时被 Known、Opaque 和组合 Schema 拒绝，不能降级绕过。
 
-```text
-knownSyncEventSchema → fail
-opaqueSyncEventSchema → fail
-syncEventSchema → fail
-```
-
-### Opaque Future Event
-
-未知未来事件只要满足严格 Envelope、合法 Event / Aggregate 标识和 JSON-only Payload，就可以被 v1 客户端接收、记录序号并安全忽略业务内容。
+未来未知事件可以作为 JSON-only Opaque Event 接收；旧客户端能够记录序号、忽略未知业务内容并继续同步。
 
 Opaque Payload 拒绝：
 
@@ -93,15 +72,17 @@ Symbol
 
 ```text
 packages/contracts/src/sync.ts
+packages/contracts/fixtures/sync/**
+packages/contracts/test/sync.test.ts
 ```
 
-根入口导出：
+根入口新增：
 
 ```ts
 export * from "./sync.js";
 ```
 
-主要公共 Schema：
+主要 Schema：
 
 ```text
 knownSyncEventSchema
@@ -114,100 +95,58 @@ syncAckRequestSchema
 syncAckResponseSchema
 ```
 
-并导出对应的 TypeScript 类型。
-
-## 4. Canonical Fixtures
-
-新增合成 Fixtures：
+## 4. Known Event 不变量
 
 ```text
-chat-home-created.json
-work-created.json
-thread-message-created.json
-chat-work-created.json
-work-progress-updated.json
-provider-turn-failed.json
-provider-turn-succeeded.json
-opaque-future-event.json
-sync-events-response.json
-sync-ack-request.json
-sync-ack-response.json
+chat.home.created
+  aggregateRef == payload.homeChatStreamRef
+  threadRef == payload.threadRef
+
+work.created
+  aggregateRef == payload.workConversationRef
+  threadRef == payload.threadRef
+
+thread.message.created
+  aggregateRef == payload.messageRef
+  threadRef == payload.threadRef
+  threadSequence > 0
+  clientMessageId 长度 8–128 且无空白
+
+chat.work.created
+  aggregateRef == payload.conversionRef
+  sourceMessageRefs 长度 1–100 且唯一
+
+work.progress.updated
+  aggregateRef == payload.workConversationRef
+  occurredAt == payload.updatedAt
+
+thread.provider_turn.failed
+  aggregateRef == payload.userMessageRef
+  threadRef == payload.threadRef
+  attemptCount > 0
+  error 只含 code / category / retryable
+
+thread.provider_turn.succeeded
+  aggregateRef == payload.userMessageRef
+  threadRef == payload.threadRef
+  assistantMessageRef != userMessageRef
 ```
 
-Fixtures 不包含真实用户数据、Host、Token、Credential、Authorization 或 Provider Session。
+## 5. SQLite 布尔值公开规范化
 
-## 5. Known Event 不变量
-
-### `chat.home.created`
-
-```text
-aggregateRef == payload.homeChatStreamRef
-threadRef == payload.threadRef
-```
-
-### `work.created`
-
-```text
-aggregateRef == payload.workConversationRef
-threadRef == payload.threadRef
-```
-
-### `thread.message.created`
-
-```text
-aggregateRef == payload.messageRef
-threadRef == payload.threadRef
-threadSequence > 0
-clientMessageId 非空白且长度 8–128
-```
-
-### `chat.work.created`
-
-```text
-aggregateRef == payload.conversionRef
-sourceMessageRefs 长度 1–100
-sourceMessageRefs 唯一且保持顺序
-```
-
-### `work.progress.updated`
-
-```text
-aggregateRef == payload.workConversationRef
-occurredAt == payload.updatedAt
-```
-
-### `thread.provider_turn.failed`
-
-```text
-aggregateRef == payload.userMessageRef
-threadRef == payload.threadRef
-attemptCount > 0
-error 只包含 code / category / retryable
-```
-
-### `thread.provider_turn.succeeded`
-
-```text
-aggregateRef == payload.userMessageRef
-threadRef == payload.threadRef
-assistantMessageRef != userMessageRef
-```
-
-## 6. SQLite 布尔值规范化
-
-实际 Gateway 失败事件由 SQLite JSON Trigger 生成，内部读取时 `retryable` 表现为：
+SQLite JSON Trigger 生成的失败事件在内部读取时，`retryable` 为：
 
 ```text
 0 / 1
 ```
 
-公共协议要求：
+公共协议输出要求：
 
 ```text
 false / true
 ```
 
-因此 Known Event Schema 只在公共 REST / SSE 边界接受内部 `0 | 1 | boolean`，并规范化为真正的布尔值：
+公共 Schema 在 REST / SSE 边界接受内部 `0 | 1 | boolean`，并规范化：
 
 ```text
 0 → false
@@ -224,9 +163,9 @@ Device Sync Cursor
 内部 DomainEvent 类型
 ```
 
-七种实际 Gateway 事件集成测试确认，失败事件公开输出为 `retryable: true`。
+实际七种事件测试确认公开失败事件为 `retryable: true`。
 
-## 7. GET 补拉协议
+## 6. GET 补拉协议
 
 共享 Query Schema 输入：
 
@@ -237,7 +176,7 @@ Device Sync Cursor
 }
 ```
 
-输出规范化为：
+规范化输出：
 
 ```ts
 {
@@ -246,7 +185,7 @@ Device Sync Cursor
 }
 ```
 
-保持当前 Gateway 兼容：
+保持现有兼容：
 
 ```text
 "0"   → 0
@@ -254,21 +193,9 @@ Device Sync Cursor
 "020" → 20
 ```
 
-拒绝：
+拒绝负数、小数、指数形式、空白、超出安全整数、非法 limit、数组和未知参数。
 
-```text
-负数
-小数
-指数形式
-前后空白
-超过 Number.MAX_SAFE_INTEGER
-limit < 1
-limit > 200
-数组参数
-未知参数
-```
-
-Response Schema 强制：
+Response 强制：
 
 ```text
 acknowledgedSequence <= latestSequence
@@ -276,11 +203,25 @@ acknowledgedSequence <= latestSequence
 所有事件序号 > requestedAfterSequence
 所有事件序号 <= latestSequence
 事件严格升序
-空页时 nextAfterSequence == null
+空页 nextAfterSequence == null
 非空 nextAfterSequence == 本页最后事件序号
 ```
 
-## 8. 累计 ACK 协议
+### 读页并发修复
+
+完成前审查发现：原路由先读取 Cursor 状态中的 `latestSequence`，再查询事件页；若期间新增事件，本页可能包含大于旧 `latestSequence` 的事件，导致公共 Response Schema 产生瞬时 500。
+
+失败测试 CI #372 复现：
+
+```text
+readCursor.latestSequence = 1
+listPersonEvents returns sequence 2
+getLatestPersonSequence = 2
+```
+
+修复后路由在读页完成后重新读取 Person 最新序号，再组装响应。CI #374 通过。
+
+## 7. 累计 ACK 协议
 
 Request 只接受：
 
@@ -290,7 +231,7 @@ eventSequence
 eventRef
 ```
 
-严格拒绝客户端提交：
+严格拒绝可信身份和服务端状态字段：
 
 ```text
 deviceRef
@@ -302,7 +243,7 @@ updatedAt
 其他未知字段
 ```
 
-Response Schema 强制：
+Response 强制：
 
 ```text
 acknowledgedSequence >= previousSequence
@@ -310,33 +251,24 @@ advanced == true  → acknowledgedSequence > previousSequence
 advanced == false → acknowledgedSequence == previousSequence
 ```
 
-## 9. Gateway REST 接入
+## 8. Gateway REST 接入
 
-`apps/gateway/src/deviceSyncRoutes.ts` 已删除本地重复定义：
+`apps/gateway/src/deviceSyncRoutes.ts` 已删除本地重复 Query / ACK Schema 和数字解析器，改用公共 Contracts。
 
-```text
-decimalSchema
-本地 Query Schema
-本地 ACK Schema
-本地 Event Ref Schema
-safeInteger()
-```
-
-改为使用：
+入站与出站均校验：
 
 ```text
 syncEventsQuerySchema
 syncEventsResponseSchema
 syncAckRequestSchema
 syncAckResponseSchema
-SYNC_PROTOCOL_VERSION
 ```
 
-出站响应也通过公共 Schema。专门的失败测试让 Event Store 返回其他 Person 的事件；未接入共享 Response Schema 时路由返回 200，接入后在出站边界被拒绝。
+专门的 RED 测试让 Event Store 返回其他 Person 的事件：未接公共 Response Schema 时返回 200；接入后被出站边界拒绝。
 
-## 10. Gateway SSE 接入
+## 9. Gateway SSE 接入
 
-`formatDomainEventFrame()` 现在执行：
+`formatDomainEventFrame()`：
 
 ```text
 internal DomainEvent
@@ -345,7 +277,7 @@ internal DomainEvent
 → SSE frame
 ```
 
-业务帧固定：
+业务帧：
 
 ```text
 id: <eventSequence>
@@ -353,7 +285,7 @@ event: domain-event
 data: <public SyncEvent>
 ```
 
-测试确认：
+验证：
 
 ```text
 SSE id == data.eventSequence
@@ -361,65 +293,75 @@ SSE event == SYNC_SSE_EVENT_NAME
 SSE data 通过 syncSseDataSchema
 ```
 
-错误 Known Event 在写入 Socket 前被拒绝。
+### 校验失败时的 Cursor 修复
 
-未修改：
+完成前审查发现：Hub 原先先推进 `scheduledCursor`，再格式化事件。若严格 Schema 拒绝坏事件，下一轮轮询会从已推进的位置开始，导致该事件被跳过。
+
+失败测试 CI #372 复现：
 
 ```text
-SSE Cursor
-Last-Event-ID
-心跳
-Person Hub
-轮询
-队列
-背压
-关闭顺序
+第一次轮询 afterSequence = 0
+坏 Known Event 校验失败
+替换为同序号合法事件
+第二次轮询错误地从已推进 Cursor 开始
 ```
 
-## 11. 旧 SSE 测试数据修正
-
-公共 Schema 接入后，CI 暴露出旧测试夹具并不代表合法正式事件：
-
-- `thread.message.created` 缺少 `threadRef`、`threadSequence`、`clientMessageId`；
-- 205 条分页测试使用了超过 59 秒的非法 ISO 时间；
-- `work.created` 缺少 `threadRef` 与 `status`；
-- 大帧测试通过破坏 Known Payload 添加任意字段。
-
-正确修复：
-
-- 补齐 Known Event 必填字段；
-- 使用真实可解析的 ISO 时间；
-- 大帧测试改用合法 Opaque Future Event。
-
-没有放宽公共 Schema，也没有削弱生产验证。
-
-## 12. 七种实际 Gateway 事件
-
-新增 `apps/gateway/test/syncKnownEvents.test.ts`，使用真实 Repository、Provider Turn、Chat→Work 和 Work Progress 流程生成全部七种事件：
+修复后：
 
 ```text
-Home Chat 创建
+先格式化并完成公共 Schema 校验
+→ 再入队
+→ 入队成功且连接仍有效后推进 scheduledCursor
+```
+
+测试确认两次查询均从 `afterSequence = 0` 开始，合法同序号事件最终送达。CI #374 通过。
+
+未改变正常 SSE Cursor、Last-Event-ID、心跳、Person Hub、轮询、背压与关闭语义。
+
+## 10. 旧 SSE 测试夹具修正
+
+严格公共协议接入后，旧合成测试数据暴露以下问题：
+
+- `thread.message.created` 缺少 `threadRef`、`threadSequence`、`clientMessageId`；
+- 205 条分页事件使用非法秒数构造时间戳；
+- `work.created` 缺少 `threadRef` 和 `status`；
+- 大帧测试通过破坏 Known Payload 添加任意字段。
+
+修复仅针对测试数据：
+
+- 补齐 Known Event；
+- 使用合法 ISO 时间；
+- 大帧测试改用合法 Opaque Event。
+
+没有放宽公共 Schema。
+
+## 11. 七种实际 Gateway 事件
+
+`apps/gateway/test/syncKnownEvents.test.ts` 使用真实 Repository、Provider Turn、Chat→Work 和 Work Progress 流程生成全部七种事件：
+
+```text
+Home Chat
 → Person 消息
 → Provider 失败
 → 同一消息重试成功
 → Assistant 消息
 → Provider 成功
 → Chat 转 Work
-→ Work Progress 更新
+→ Work Progress
 ```
 
 验证：
 
 ```text
 实际 eventType 集合 == KNOWN_SYNC_EVENT_TYPES
-每条内部事件都能转成 KnownSyncEvent
-同一事件的 REST DTO 与 SSE data 相同
+每条内部事件转成 KnownSyncEvent
+同一事件 REST DTO == SSE data
 失败事件公开 retryable 为 boolean
 ```
 
-## 13. 隐私检查
+## 12. 隐私与 Mobile Entry 回归
 
-Contracts Fixtures 和 Gateway 实际事件均扫描以下内容：
+Contracts Fixtures 和实际 Gateway 事件扫描：
 
 ```text
 Authorization
@@ -427,53 +369,42 @@ Entry Session Token
 Device Credential
 Provider External Session
 Bearer Token
-用户消息正文
+用户正文
 Assistant 回复正文
 ```
 
-扫描结果：未发现上述内容。
+未发现上述内容。
 
-Known Payload 仅保留：
-
-```text
-引用
-序号
-状态
-时间
-错误分类
-重试标记
-```
-
-## 14. Mobile Entry v1 冻结
-
-本 PR 没有修改：
+本 PR 未修改：
 
 ```text
 packages/contracts/src/mobileEntry.ts
 packages/contracts/fixtures/mobile-entry/**
 ```
 
-全仓 CI 会继续运行既有 Mobile Entry fixture、严格验证和 Gateway Mobile 回归测试；实现审查 Head 全部通过。
+全仓门禁继续运行 Mobile Entry Fixtures、严格验证、Gateway Mobile 和 Chat / Work 回归测试。
 
-## 15. TDD 与调试记录
+## 13. TDD 与调试记录
 
 | 阶段 | CI | 结果 | 证明内容 |
 |---|---:|---|---|
-| Spec 基线 | #344 | GREEN | PR #22 合并后的仓库基线正常 |
-| Known / Opaque Schema 缺失 | #354 | RED | 公共事件导出尚不存在 |
-| Known / Opaque 实现 | #356 | GREEN | 七种 Known、Opaque 和防降级通过 |
-| 补拉与 ACK Schema 缺失 | #360 | RED | Query / Response / ACK 尚不存在 |
-| 补拉与 ACK 实现 | #361 | GREEN | 规范化和跨字段不变量通过 |
-| REST 出站未校验 | #362 | RED | 跨 Person 假事件被直接返回 |
-| REST 共享 Schema | #363 | GREEN | 入站、出站均使用公共协议 |
-| SSE 未校验 Known Event | #364 | RED | 错误 Known Event 仍被序列化 |
-| 首次 SSE 接入 | #365 | RED | 旧测试夹具不满足正式协议 |
-| SSE 测试夹具修正 | #367 | GREEN | 严格 Schema 与原 Hub 行为同时通过 |
-| 七种实际事件兼容 | #368 | RED | SQLite `retryable` 为 0/1 |
-| 公开布尔值规范化 | #369 | GREEN | 七种实际 REST / SSE 事件通过 |
-| 隐私与规范化回归 | #370 | GREEN | Contracts / Gateway / 全仓门禁通过 |
+| Spec 基线 | #344 | GREEN | PR #22 后仓库基线正常 |
+| Known / Opaque 缺失 | #354 | RED | 公共事件导出不存在 |
+| Known / Opaque 实现 | #356 | GREEN | 七种 Known、Opaque、防降级通过 |
+| 补拉 / ACK 缺失 | #360 | RED | Query、Response、ACK 不存在 |
+| 补拉 / ACK 实现 | #361 | GREEN | 规范化和不变量通过 |
+| REST 出站未校验 | #362 | RED | 跨 Person 假事件被返回 |
+| REST 公共 Schema | #363 | GREEN | 入站、出站共享协议 |
+| SSE 未校验 | #364 | RED | 错误 Known Event 被序列化 |
+| 首次 SSE 接入 | #365 | RED | 旧测试夹具不合法 |
+| SSE 夹具修正 | #367 | GREEN | 严格 Schema 与 Hub 回归通过 |
+| 七种实际事件 | #368 | RED | SQLite retryable 为 0/1 |
+| 公开布尔规范化 | #369 | GREEN | 七种 REST / SSE 事件通过 |
+| 隐私与合同回归 | #370 | GREEN | 全仓门禁通过 |
+| 并发 / Cursor 审查 | #372 | RED | latestSequence 竞态与 SSE 先推进 Cursor |
+| 并发 / Cursor 修复 | #374 | GREEN | 两项恢复边界均通过 |
 
-## 16. 实现范围
+## 14. 变更范围
 
 生产代码：
 
@@ -503,9 +434,9 @@ docs/superpowers/plans/2026-07-24-public-event-sync-contracts-v1.md
 docs/superpowers/evidence/2026-07-24-public-event-sync-contracts-v1.md
 ```
 
-## 17. PR #14 隔离
+## 15. PR #14 隔离
 
-PR #23 没有修改：
+本 PR 没有修改：
 
 ```text
 clients/ios/**
@@ -521,7 +452,7 @@ apps/gateway/src/domainEvents.ts
 apps/gateway/public/**
 ```
 
-PR #14 在实现审查时保持：
+审查时 PR #14：
 
 ```text
 Open
@@ -530,9 +461,9 @@ Mergeable
 Head = e075f114e3f3fcdb728f6bff75797d415c4a5315
 ```
 
-PR #23 与 PR #14 changed-path 集合交集为 0。
+PR #23 与 PR #14 changed-path 交集为 0。
 
-PR #14 当前 Head 原有检查仍成功：
+PR #14 Head 原有检查仍成功：
 
 ```text
 Repository CI #225
@@ -540,32 +471,24 @@ Secret Scan #111
 iOS CI #16
 ```
 
-本 PR 没有向 PR #14 分支写入、重基、关闭、合并或转换状态。
+## 16. 生产代码审查门禁
 
-## 18. 实现审查门禁
-
-实现审查 Head：
+Head：
 
 ```text
-c267f369bd2a2f664fa7dbe4cf87aed75dbe83d6
+6827aaede66256a155d412545dc55771f11ac47a
 ```
 
 结果：
 
 ```text
-Repository CI #370  success
-Secret Scan #256    success
-PR #23 mergeable    true
-PR comments          none
-Review Threads       none
-PR #14 path overlap  0
+Repository CI #374  success
+Secret Scan #260    success
 ```
 
-本证据文件提交后，仍需对新的文档 Head 运行完整 Repository CI 与 Secret Scan；最终 Head 和最终检查编号记录在 PR 正文，避免证据文件形成自引用提交循环。
+该证据文件提交后仍需对新文档 Head 执行一次完整 Repository CI 与 Secret Scan。最终 Head 和最终检查编号记录在 PR 正文，避免文档自引用循环。
 
-## 19. 延后范围
-
-后续独立 PR：
+## 17. 延后范围
 
 ```text
 正式 Member Web 壳与 Personal Entry
