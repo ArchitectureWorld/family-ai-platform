@@ -106,6 +106,11 @@ export interface PersonEventStreamHubOptions {
   now?: () => Date;
 }
 
+interface QueuedFrame {
+  frame: string;
+  bytes: number;
+}
+
 interface Subscriber {
   id: string;
   personRef: string;
@@ -114,9 +119,10 @@ interface Subscriber {
   token: string;
   sink: EventStreamSink;
   closed: boolean;
-  tail: Promise<void>;
+  queue: QueuedFrame[];
   queuedFrames: number;
   queuedBytes: number;
+  writer: Promise<void> | null;
   releaseDrain: (() => void) | null;
 }
 
@@ -164,9 +170,10 @@ export class PersonEventStreamHub {
       token: input.token,
       sink: input.sink,
       closed: false,
-      tail: Promise.resolve(),
+      queue: [],
       queuedFrames: 0,
       queuedBytes: 0,
+      writer: null,
       releaseDrain: null
     };
     let channel = this.channels.get(input.personRef);
@@ -263,7 +270,9 @@ export class PersonEventStreamHub {
     const subscribers = [...this.channels.values()]
       .flatMap((channel) => [...channel.subscribers]);
     for (const subscriber of subscribers) this.unregister(subscriber, true);
-    await Promise.allSettled(subscribers.map((subscriber) => subscriber.tail));
+    await Promise.allSettled(
+      subscribers.flatMap((subscriber) => subscriber.writer ? [subscriber.writer] : [])
+    );
     this.channels.clear();
   }
 
@@ -324,21 +333,40 @@ export class PersonEventStreamHub {
       return;
     }
 
+    subscriber.queue.push({ frame, bytes });
     subscriber.queuedFrames += 1;
     subscriber.queuedBytes += bytes;
-    subscriber.tail = subscriber.tail
-      .then(async () => {
-        if (subscriber.closed) return;
-        const writable = subscriber.sink.write(frame);
+    this.ensureWriter(subscriber);
+  }
+
+  private ensureWriter(subscriber: Subscriber): void {
+    if (subscriber.closed || subscriber.writer || subscriber.queue.length === 0) return;
+    const writer = this.drainQueue(subscriber);
+    subscriber.writer = writer;
+    void writer.finally(() => {
+      if (subscriber.writer === writer) subscriber.writer = null;
+      if (!subscriber.closed && subscriber.queue.length > 0) {
+        this.ensureWriter(subscriber);
+      }
+    });
+  }
+
+  private async drainQueue(subscriber: Subscriber): Promise<void> {
+    while (!subscriber.closed && subscriber.queue.length > 0) {
+      const item = subscriber.queue[0]!;
+      try {
+        const writable = subscriber.sink.write(item.frame);
         if (!writable) await this.waitForDrain(subscriber);
-      })
-      .catch(() => {
+      } catch {
         this.unregister(subscriber, false);
-      })
-      .finally(() => {
-        subscriber.queuedFrames = Math.max(0, subscriber.queuedFrames - 1);
-        subscriber.queuedBytes = Math.max(0, subscriber.queuedBytes - bytes);
-      });
+      } finally {
+        if (subscriber.queue[0] === item) {
+          subscriber.queue.shift();
+          subscriber.queuedFrames = Math.max(0, subscriber.queuedFrames - 1);
+          subscriber.queuedBytes = Math.max(0, subscriber.queuedBytes - item.bytes);
+        }
+      }
+    }
   }
 
   private async waitForDrain(subscriber: Subscriber): Promise<void> {
@@ -364,6 +392,9 @@ export class PersonEventStreamHub {
     subscriber.releaseDrain = null;
     subscriber.entrySessionRef = "";
     subscriber.token = "";
+    subscriber.queue.length = 0;
+    subscriber.queuedFrames = 0;
+    subscriber.queuedBytes = 0;
     const channel = this.channels.get(subscriber.personRef);
     channel?.subscribers.delete(subscriber);
     if (channel && channel.subscribers.size === 0 && !channel.runningPump) {
