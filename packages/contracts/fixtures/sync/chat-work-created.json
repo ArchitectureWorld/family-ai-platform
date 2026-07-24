@@ -1,0 +1,19 @@
+{
+  "eventRef": "event:alice-conversion-0001",
+  "personRef": "person:alice",
+  "eventSequence": 4,
+  "eventType": "chat.work.created",
+  "aggregateType": "chat_work_conversion",
+  "aggregateRef": "chat-work-conversion:alice-0001",
+  "threadRef": "thread:work-family-ai-platform",
+  "payload": {
+    "conversionRef": "chat-work-conversion:alice-0001",
+    "homeChatStreamRef": "home-chat:alice",
+    "workConversationRef": "work:family-ai-platform",
+    "sourceMessageRefs": [
+      "message:alice-0001"
+    ]
+  },
+  "occurredAt": "2026-07-24T08:03:00.000Z",
+  "createdAt": "2026-07-24T08:03:00.000Z"
+}
