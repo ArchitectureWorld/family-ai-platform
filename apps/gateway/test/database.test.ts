@@ -212,7 +212,7 @@ describe("gateway database", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
-  it("installs the versioned Person event and transactional outbox subsystem", () => {
+  it("installs the versioned Person event, Device Sync and transactional outbox subsystem", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-domain-event-schema-"));
     const databasePath = join(directory, "gateway.sqlite");
     db = openGatewayDatabase(databasePath);
@@ -220,15 +220,21 @@ describe("gateway database", () => {
 
     expect(db.prepare(
       "SELECT version FROM domain_event_schema_migrations ORDER BY version"
-    ).all()).toEqual([{ version: 1 }]);
+    ).all()).toEqual([{ version: 1 }, { version: 2 }]);
 
     const tables = db.prepare(
       `SELECT name FROM sqlite_master
        WHERE type = 'table'
-         AND name IN ('person_event_sequences', 'domain_events', 'outbox_events')
+         AND name IN (
+           'person_event_sequences',
+           'domain_events',
+           'outbox_events',
+           'device_sync_cursors'
+         )
        ORDER BY name`
     ).all();
     expect(tables).toEqual([
+      { name: "device_sync_cursors" },
       { name: "domain_events" },
       { name: "outbox_events" },
       { name: "person_event_sequences" }
@@ -265,13 +271,29 @@ describe("gateway database", () => {
       "updated_at"
     ]);
 
+    const cursorColumns = db.prepare("PRAGMA table_info(device_sync_cursors)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(cursorColumns).toEqual([
+      "device_ref",
+      "person_ref",
+      "acknowledged_sequence",
+      "created_at",
+      "updated_at"
+    ]);
+
     const indexes = db.prepare(
       `SELECT name FROM sqlite_master
        WHERE type = 'index'
-         AND name IN ('domain_events_person_sequence_idx', 'outbox_events_dispatch_idx')
+         AND name IN (
+           'domain_events_person_sequence_idx',
+           'outbox_events_dispatch_idx',
+           'device_sync_cursors_person_sequence_idx'
+         )
        ORDER BY name`
     ).all();
     expect(indexes).toEqual([
+      { name: "device_sync_cursors_person_sequence_idx" },
       { name: "domain_events_person_sequence_idx" },
       { name: "outbox_events_dispatch_idx" }
     ]);
@@ -282,7 +304,7 @@ describe("gateway database", () => {
     new DomainEventStore(db, () => new Date("2026-07-23T18:01:00.000Z"));
     expect(db.prepare(
       "SELECT version FROM domain_event_schema_migrations ORDER BY version"
-    ).all()).toEqual([{ version: 1 }]);
+    ).all()).toEqual([{ version: 1 }, { version: 2 }]);
   });
 
   it("bootstraps missing development records without overwriting operational state", () => {

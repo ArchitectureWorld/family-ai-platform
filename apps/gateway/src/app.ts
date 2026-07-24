@@ -25,6 +25,8 @@ import {
   type DevelopmentBootstrapInput
 } from "./database.js";
 import { registerDevelopmentConsole } from "./developmentConsole.js";
+import { DeviceSyncRepository } from "./deviceSync.js";
+import { registerDeviceSyncRoutes } from "./deviceSyncRoutes.js";
 import { DomainEventStore } from "./domainEvents.js";
 import { EntrySessionAuthenticator } from "./entrySessionAuth.js";
 import {
@@ -76,7 +78,8 @@ function mobileErrorRoute(request: FastifyRequest): boolean {
     path === "/api/v1/work-conversations" ||
     path.startsWith("/api/v1/work-conversations/") ||
     path.startsWith("/api/v1/threads/") ||
-    path === "/api/v1/events/stream";
+    path === "/api/v1/events/stream" ||
+    path.startsWith("/api/v1/sync/");
   const deviceAuthorization = request.headers.authorization?.startsWith("Device ") ?? false;
   return (!chatWorkPath && deviceAuthorization) ||
     path.startsWith("/api/v1/mobile/") ||
@@ -163,6 +166,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   const repository = new GatewayRepository(db);
   const familyRepository = new FamilyDomainRepository(db);
   const entryAuthenticator = new EntrySessionAuthenticator(db, familyRepository, now);
+  const deviceSyncRepository = new DeviceSyncRepository(db, domainEventStore, now);
   const eventStreamHub = new PersonEventStreamHub(
     domainEventStore,
     entryAuthenticator,
@@ -222,6 +226,11 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   });
   registerEventStreamRoutes(app, {
     hub: eventStreamHub,
+    entryAuthenticator
+  });
+  registerDeviceSyncRoutes(app, {
+    repository: deviceSyncRepository,
+    events: domainEventStore,
     entryAuthenticator
   });
 
