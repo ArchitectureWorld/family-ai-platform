@@ -52,6 +52,9 @@ export const syncPublicErrorCategorySchema = z.enum([
   "conflict",
   "internal"
 ]);
+const syncStoredBooleanSchema = z
+  .union([z.boolean(), z.literal(0), z.literal(1)])
+  .transform((value) => value === true || value === 1);
 
 export type SyncJsonValue =
   | null
@@ -225,7 +228,7 @@ const providerTurnFailedEventShape = syncEventEnvelopeSchema
           .object({
             code: syncPublicErrorCodeSchema,
             category: syncPublicErrorCategorySchema,
-            retryable: z.boolean()
+            retryable: syncStoredBooleanSchema
           })
           .strict()
       })
