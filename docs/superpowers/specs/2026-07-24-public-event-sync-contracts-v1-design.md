@@ -1,7 +1,7 @@
 # Public Event / Sync Contracts v1 设计
 
 - 日期：2026-07-24
-- 状态：待书面审阅
+- 状态：已实现，等待 PR 评审
 - 目标分支：`feat/contracts-event-sync-v1`
 - 基线：`main` @ `58f2ccae76902b77790cecb05483a062259b7083`
 - 前置：PR #15–#22 已合并
@@ -142,7 +142,7 @@ MOBILE_ENTRY_PROTOCOL_VERSION
 PROTOCOL_VERSION
 ```
 
-当前 wire value 仍为数字 `1`，因此不会改变已部署 JSON 值。
+当前 wire value 仍为数字 `1`。
 
 ## 6. 公共基础 Schema
 
@@ -219,14 +219,6 @@ syncAggregateTypeSchema
 
 长度：1–64。
 
-这些规则覆盖当前：
-
-```text
-thread.provider_turn.failed
-thread_message
-provider_turn
-```
-
 ### 6.3 序号与 Cursor
 
 ```ts
@@ -253,7 +245,7 @@ syncPublicErrorCategorySchema
 → validation | permission | availability | timeout | conflict | internal
 ```
 
-Work 状态直接复用 `workConversationStatusSchema`，避免 Sync 与 Chat / Work 对状态集合产生两套定义。
+Work 状态复用 `workConversationStatusSchema`。
 
 ## 7. 公共事件 Envelope
 
@@ -317,13 +309,9 @@ Symbol
 非 plain object 实例
 ```
 
-已知事件不使用通用 Payload，而使用各自 `.strict()` 的固定对象 Schema。
-
-公共 Schema 可以结构性保证已知事件没有秘密字段，但无法判断 Opaque 字符串的语义。Gateway 事件生产端仍负责数据最小化；集成测试扫描当前正式事件，确认不含 Token、Credential、Authorization 或 External Session 字段。
+已知事件使用各自 `.strict()` 的固定对象 Schema。
 
 ## 9. 已知事件类型
-
-导出：
 
 ```ts
 export const KNOWN_SYNC_EVENT_TYPES = [
@@ -335,32 +323,11 @@ export const KNOWN_SYNC_EVENT_TYPES = [
   "thread.provider_turn.failed",
   "thread.provider_turn.succeeded"
 ] as const;
-
-knownSyncEventTypeSchema
-KnownSyncEventType
 ```
 
 ## 10. 已知事件定义
 
-所有 Payload 都必须 `.strict()`。
-
 ### 10.1 `chat.home.created`
-
-```ts
-{
-  eventType: "chat.home.created";
-  aggregateType: "home_chat";
-  aggregateRef: HomeChatStreamRef;
-  threadRef: ThreadRef;
-  payload: {
-    homeChatStreamRef: HomeChatStreamRef;
-    dailyEpisodeRef: DailyEpisodeRef;
-    threadRef: ThreadRef;
-  };
-}
-```
-
-不变量：
 
 ```text
 aggregateRef == payload.homeChatStreamRef
@@ -369,22 +336,6 @@ threadRef == payload.threadRef
 
 ### 10.2 `work.created`
 
-```ts
-{
-  eventType: "work.created";
-  aggregateType: "work";
-  aggregateRef: WorkConversationRef;
-  threadRef: ThreadRef;
-  payload: {
-    workConversationRef: WorkConversationRef;
-    threadRef: ThreadRef;
-    status: WorkConversationStatus;
-  };
-}
-```
-
-不变量：
-
 ```text
 aggregateRef == payload.workConversationRef
 threadRef == payload.threadRef
@@ -392,131 +343,40 @@ threadRef == payload.threadRef
 
 ### 10.3 `thread.message.created`
 
-```ts
-{
-  eventType: "thread.message.created";
-  aggregateType: "thread_message";
-  aggregateRef: MessageRef;
-  threadRef: ThreadRef;
-  payload: {
-    messageRef: MessageRef;
-    threadRef: ThreadRef;
-    threadSequence: positive safe integer;
-    actorType: "person" | "assistant" | "agent" | "system";
-    clientMessageId: SyncClientMessageId;
-  };
-}
-```
-
-不变量：
-
 ```text
 aggregateRef == payload.messageRef
 threadRef == payload.threadRef
+threadSequence > 0
+clientMessageId 长度 8–128 且无空白
 ```
-
-事件不携带正文。`clientMessageId` 用于把客户端乐观消息与 Gateway 持久化消息对齐。
 
 ### 10.4 `chat.work.created`
-
-```ts
-{
-  eventType: "chat.work.created";
-  aggregateType: "chat_work_conversion";
-  aggregateRef: ChatWorkConversionRef;
-  threadRef: ThreadRef;
-  payload: {
-    conversionRef: ChatWorkConversionRef;
-    homeChatStreamRef: HomeChatStreamRef;
-    workConversationRef: WorkConversationRef;
-    sourceMessageRefs: MessageRef[];
-  };
-}
-```
-
-不变量：
 
 ```text
 aggregateRef == payload.conversionRef
 sourceMessageRefs 长度 1–100
-sourceMessageRefs 唯一并保持转换顺序
+sourceMessageRefs 唯一并保持顺序
 ```
-
-`threadRef` 表示目标 Work Thread。事件不复制消息正文。
 
 ### 10.5 `work.progress.updated`
-
-```ts
-{
-  eventType: "work.progress.updated";
-  aggregateType: "work_progress";
-  aggregateRef: WorkConversationRef;
-  threadRef: ThreadRef;
-  payload: {
-    workConversationRef: WorkConversationRef;
-    status: WorkConversationStatus;
-    updatedAt: Timestamp;
-  };
-}
-```
-
-不变量：
 
 ```text
 aggregateRef == payload.workConversationRef
 occurredAt == payload.updatedAt
 ```
 
-不要求 `createdAt == updatedAt`，保留未来写入延迟的表达空间。
-
 ### 10.6 `thread.provider_turn.failed`
-
-```ts
-{
-  eventType: "thread.provider_turn.failed";
-  aggregateType: "provider_turn";
-  aggregateRef: MessageRef;
-  threadRef: ThreadRef;
-  payload: {
-    userMessageRef: MessageRef;
-    threadRef: ThreadRef;
-    attemptCount: positive safe integer;
-    error: {
-      code: PublicErrorCode;
-      category: PublicErrorCategory;
-      retryable: boolean;
-    };
-  };
-}
-```
-
-不变量：
 
 ```text
 aggregateRef == payload.userMessageRef
 threadRef == payload.threadRef
+attemptCount > 0
+error 只包含 code / category / retryable
 ```
 
-错误 Payload 不包含 message、stack、原始 Provider 响应或 External Session。
+SQLite JSON 内部的 `retryable` 可能表现为 `0/1`。公共 Schema 在 REST / SSE 边界接受内部 `0 | 1 | boolean`，并规范化为真正的 `false/true`。不修改 Event Trigger 或内部 DomainEvent。
 
 ### 10.7 `thread.provider_turn.succeeded`
-
-```ts
-{
-  eventType: "thread.provider_turn.succeeded";
-  aggregateType: "provider_turn";
-  aggregateRef: MessageRef;
-  threadRef: ThreadRef;
-  payload: {
-    userMessageRef: MessageRef;
-    assistantMessageRef: MessageRef;
-    threadRef: ThreadRef;
-    attemptCount: positive safe integer;
-  };
-}
-```
-
-不变量：
 
 ```text
 aggregateRef == payload.userMessageRef
@@ -526,33 +386,7 @@ assistantMessageRef != userMessageRef
 
 ## 11. Opaque Future Event
 
-导出：
-
-```ts
-opaqueSyncEventSchema
-OpaqueSyncEvent
-```
-
-结构：
-
-```ts
-{
-  eventRef: EventRef;
-  personRef: PersonRef;
-  eventSequence: positive safe integer;
-  eventType: future event type;
-  aggregateType: future aggregate type;
-  aggregateRef: GenericRef;
-  threadRef: ThreadRef | null;
-  payload: SyncJsonObject;
-  occurredAt: Timestamp;
-  createdAt: Timestamp;
-}
-```
-
-`eventType` 必须通过 `syncEventTypeSchema`，并且不属于 `KNOWN_SYNC_EVENT_TYPES`。
-
-因此：
+未知 `eventType` 必须通过公共标识规则，并且不属于 `KNOWN_SYNC_EVENT_TYPES`。
 
 ```text
 未来 eventType + 合法 JSON Payload
@@ -563,62 +397,9 @@ OpaqueSyncEvent
 → Opaque Event 也失败
 ```
 
-客户端处理未知事件时：
+客户端可以记录序号、忽略业务内容、继续后续事件并在可靠落盘后累计 ACK。
 
-- 按 `eventSequence` 幂等记录；
-- 不根据未知 Payload 修改已知领域状态；
-- 可以忽略业务内容；
-- 不能中断后续事件；
-- 可靠落盘后仍可累计 ACK。
-
-## 12. 事件组合 Schema
-
-导出：
-
-```ts
-knownSyncEventSchema
-opaqueSyncEventSchema
-syncEventSchema
-
-KnownSyncEvent
-OpaqueSyncEvent
-SyncEvent
-```
-
-组合：
-
-```ts
-knownSyncEventSchema = z.discriminatedUnion("eventType", [
-  chatHomeCreatedEventSchema,
-  workCreatedEventSchema,
-  threadMessageCreatedEventSchema,
-  chatWorkCreatedEventSchema,
-  workProgressUpdatedEventSchema,
-  providerTurnFailedEventSchema,
-  providerTurnSucceededEventSchema
-]);
-
-opaqueSyncEventSchema = strictEnvelope.extend({
-  eventType: futureEventTypeSchema
-});
-
-syncEventSchema = z.union([
-  knownSyncEventSchema,
-  opaqueSyncEventSchema
-]);
-```
-
-`futureEventTypeSchema` 排除七种已知类型，这是防止降级绕过的关键门禁。
-
-## 13. GET 补拉 Query
-
-导出：
-
-```ts
-syncEventsQuerySchema
-SyncEventsQueryInput
-SyncEventsQuery
-```
+## 12. GET 补拉 Query
 
 HTTP 输入：
 
@@ -641,41 +422,14 @@ Schema 输出：
 规则：
 
 - `.strict()`；
-- 未知参数和数组形式拒绝；
-- `afterSequence` 是非负安全整数的十进制数字字符串；
-- `limit` 是 1–200 的十进制数字字符串；
-- `limit` 缺失时输出 100；
+- 未知参数和数组拒绝；
+- `afterSequence` 为非负安全整数十进制字符串；
+- `limit` 为 1–200；
+- 默认 `limit = 100`；
 - 不接受符号、指数、小数、空白或十六进制；
-- 为保持当前 Gateway wire 兼容，前导零继续接受并规范化为数字。
+- 为保持当前 Gateway 兼容，前导零接受并规范化。
 
-示例：
-
-```text
-"0"    → 0
-"001"  → 1
-"200"  → 200
-```
-
-拒绝：
-
-```text
--1
-1.5
-1e3
- 1
-9007199254740992
-```
-
-## 14. GET 补拉 Response
-
-导出：
-
-```ts
-syncEventsResponseSchema
-SyncEventsResponse
-```
-
-结构：
+## 13. GET 补拉 Response
 
 ```ts
 {
@@ -683,12 +437,12 @@ SyncEventsResponse
   sync: {
     deviceRef: DeviceRef;
     personRef: PersonRef;
-    acknowledgedSequence: nonnegative safe integer;
-    requestedAfterSequence: nonnegative safe integer;
-    latestSequence: nonnegative safe integer;
+    acknowledgedSequence: number;
+    requestedAfterSequence: number;
+    latestSequence: number;
   };
-  events: SyncEvent[]; // max 200
-  nextAfterSequence: positive safe integer | null;
+  events: SyncEvent[];
+  nextAfterSequence: number | null;
 }
 ```
 
@@ -699,100 +453,40 @@ acknowledgedSequence <= latestSequence
 所有 event.personRef == sync.personRef
 所有 event.eventSequence > requestedAfterSequence
 所有 event.eventSequence <= latestSequence
-events 按 eventSequence 严格递增
+events 严格递增
+空页 nextAfterSequence == null
+非空 nextAfterSequence == 最后一条序号
 ```
 
-分页不变量：
+实现中，Gateway 在读取事件页后重新读取 `latestSequence`，避免读页期间新增事件导致过期快照和瞬时 500。
 
-```text
-events 为空
-→ nextAfterSequence == null
+## 14. ACK Request / Response
 
-nextAfterSequence 非空
-→ events 非空
-→ nextAfterSequence == 本页最后事件序号
-```
-
-允许显式查询位置高于 `latestSequence`，此时返回空数组和 `null`；GET 不推进持久 Cursor。
-
-## 15. 累计 ACK Request / Response
-
-### 15.1 Request
-
-导出：
-
-```ts
-syncAckRequestSchema
-SyncAckRequest
-```
-
-结构：
+Request：
 
 ```ts
 {
   protocolVersion: 1;
-  eventSequence: positive safe integer;
-  eventRef: EventRef;
+  eventSequence: number;
+  eventRef: string;
 }
 ```
 
-Body `.strict()`，拒绝：
+拒绝客户端提交可信身份和服务端状态字段。
 
-```text
-deviceRef
-personRef
-entryBindingRef
-entrySessionRef
-acknowledgedSequence
-updatedAt
-其他未知字段
-```
-
-### 15.2 Response
-
-导出：
-
-```ts
-syncAckResponseSchema
-SyncAckResponse
-```
-
-结构：
-
-```ts
-{
-  protocolVersion: 1;
-  sync: {
-    deviceRef: DeviceRef;
-    personRef: PersonRef;
-    previousSequence: nonnegative safe integer;
-    acknowledgedSequence: nonnegative safe integer;
-    advanced: boolean;
-    updatedAt: Timestamp;
-  };
-}
-```
-
-不变量：
+Response 不变量：
 
 ```text
 acknowledgedSequence >= previousSequence
-
-advanced == true
-→ acknowledgedSequence > previousSequence
-
-advanced == false
-→ acknowledgedSequence == previousSequence
+advanced true  → acknowledgedSequence > previousSequence
+advanced false → acknowledgedSequence == previousSequence
 ```
 
-## 16. SSE 公共协议
-
-导出：
+## 15. SSE 公共协议
 
 ```ts
-export const SYNC_SSE_EVENT_NAME = "domain-event" as const;
-export const syncSseDataSchema = syncEventSchema;
-export type SyncSseData = SyncEvent;
+SYNC_SSE_EVENT_NAME = "domain-event"
+syncSseDataSchema = syncEventSchema
 ```
 
 业务帧：
@@ -803,30 +497,24 @@ event: domain-event
 data: <SyncEvent JSON>
 ```
 
-不变量：
+`formatDomainEventFrame()` 在序列化前执行 `syncSseDataSchema.parse(event)`。
 
-```text
-SSE id == data.eventSequence
-```
+Hub 必须先完成公共 Schema 校验，再入队并推进 `scheduledCursor`。校验失败不得推进 Cursor，否则同序号修复事件会被永久跳过。
 
-`formatDomainEventFrame()` 在序列化前先执行 `syncSseDataSchema.parse(event)`。
-
-以下注释帧不建立 JSON Schema：
+注释帧不属于业务协议：
 
 ```text
 : connected
 : heartbeat <timestamp>
 ```
 
-它们不承载业务事实，也不推进 Device Sync Cursor。
+## 16. Gateway 接入
 
-## 17. Gateway 接入
+### 16.1 Device Sync Routes
 
-### 17.1 Device Sync Routes
+改用：
 
-`apps/gateway/src/deviceSyncRoutes.ts` 改用：
-
-```ts
+```text
 syncEventsQuerySchema
 syncEventsResponseSchema
 syncAckRequestSchema
@@ -834,51 +522,22 @@ syncAckResponseSchema
 SYNC_PROTOCOL_VERSION
 ```
 
-删除 Gateway 内重复的：
+删除 Gateway 内重复 Schema 与解析器。
+
+### 16.2 SSE
+
+改用：
 
 ```text
-decimalSchema
-本地 syncEventsQuerySchema
-本地 syncAckSchema
-本地 eventRefSchema
-safeInteger()
-```
-
-路由继续负责认证、可信 Device / Person 解析、Repository 调用和错误映射。
-
-### 17.2 SSE
-
-`apps/gateway/src/eventStream.ts` 改用：
-
-```ts
 SYNC_SSE_EVENT_NAME
 syncSseDataSchema
 ```
 
-流程：
+### 16.3 内部事件模型
 
-```text
-内部 DomainEvent
-→ syncSseDataSchema.parse
-→ JSON.stringify
-→ SSE Frame
-```
+`DomainEventStore` 继续使用内部 `DomainEvent` / `DomainEventPage`。公共协议只在 REST Response 和 SSE Data 边界执行。
 
-SSE Cursor、心跳、共享 Hub、背压和关闭顺序保持不变。
-
-### 17.3 内部事件模型
-
-`DomainEventStore` 继续使用内部 `DomainEvent` / `DomainEventPage`。公共协议只在 REST Response 和 SSE Data 边界执行，避免把 SQLite Repository 类型直接变成公共权威。
-
-## 18. Canonical Fixtures
-
-新增：
-
-```text
-packages/contracts/fixtures/sync/
-```
-
-至少包含：
+## 17. Canonical Fixtures
 
 ```text
 chat-home-created.json
@@ -894,86 +553,36 @@ sync-ack-request.json
 sync-ack-response.json
 ```
 
-Fixtures 只使用合成引用，不包含真实 Token、Credential、Host 或用户内容。
+Fixtures 只使用合成引用。
 
-## 19. 测试策略
+## 18. 测试策略
 
-### 19.1 Contracts
+Contracts 覆盖：
 
-新增：
+- 七种 Known Fixtures；
+- Known / Opaque 防降级；
+- 跨字段不变量；
+- JSON-only Opaque；
+- Query 规范化；
+- 补拉 Person、顺序、分页；
+- ACK 状态；
+- SQLite 布尔值规范化；
+- 隐私扫描；
+- Mobile Entry 与 Chat / Work 回归。
 
-```text
-packages/contracts/test/sync.test.ts
-```
+Gateway 覆盖：
 
-覆盖：
+- REST 入站和出站公共 Schema；
+- 跨 Person 假事件拒绝；
+- 读页期间新增事件的 `latestSequence` 刷新；
+- SSE event name / id / data；
+- 错误 Known Event 序列化拒绝；
+- 校验失败不推进 Subscriber Cursor；
+- 七种实际 Gateway 事件；
+- REST 与 SSE 同形；
+- 隐私回归。
 
-1. 七种已知事件 Fixtures 全部通过；
-2. 已知事件的 `eventType`、`aggregateType` 和 Payload 固定；
-3. aggregateRef / threadRef 跨字段不一致时失败；
-4. `chat.work.created` 来源引用必须非空且唯一；
-5. Known Event 错误 Payload 不能退化为 Opaque；
-6. Future Event 作为 Opaque 通过；
-7. Opaque 顶层未知字段与非 JSON Payload 失败；
-8. Query 合法值、非法值、数组、默认 limit 和前导零兼容；
-9. 补拉响应 Person、序号与分页不变量；
-10. ACK `advanced` 与序号关系一致；
-11. 请求拒绝可信身份字段；
-12. Fixtures 不含 Token、Credential、Authorization 或 External Session；
-13. 现有 Mobile Entry 和 Chat / Work Contracts 测试继续通过。
-
-### 19.2 Gateway
-
-覆盖：
-
-1. GET 响应通过 `syncEventsResponseSchema`；
-2. POST ACK 请求与响应使用公共 Schema；
-3. Gateway Query 行为与共享 Transform 一致；
-4. 客户端 Device / Person 字段仍被拒绝；
-5. SSE event name 等于 `SYNC_SSE_EVENT_NAME`；
-6. SSE data 通过 `syncSseDataSchema`；
-7. SSE id 等于事件序号；
-8. REST 与 SSE 对同一事件产生相同 JSON；
-9. 当前七种 Gateway 事件全部通过 Known Schema；
-10. Device Sync Cursor、SSE、Outbox、Chat / Work 与 Mobile 回归不变。
-
-## 20. 兼容性与版本演进
-
-### 20.1 新事件
-
-新增 `eventType` 时：
-
-- Gateway 可以先生产 Opaque-compatible Event；
-- v1 旧客户端继续同步并忽略；
-- 新 Contracts 版本可将其提升为 Known Event；
-- 事件序列和 ACK 协议不必升级。
-
-### 20.2 已知事件变更
-
-以下属于破坏性变更：
-
-```text
-删除字段
-改变字段类型
-改变 aggregateType
-改变 aggregateRef / threadRef 语义
-改变必填结构
-```
-
-必须新增 `eventType` 或升级 `SYNC_PROTOCOL_VERSION`，不能静默修改。
-
-Known Payload 使用 `.strict()`；即使只增加可选字段，旧 v1 客户端也会拒绝。因此扩展已知事件时优先新增事件类型。
-
-## 21. 安全与隐私
-
-- 公共请求永远不接受可信 Device、Person、EntryBinding、EntrySession、Agent 或 Provider Profile；
-- Gateway 仍从认证上下文解析 Device 与 Person；
-- Response Schema 的 Person 一致性校验不能替代服务端授权查询；
-- Known Payload 只包含引用、序号、状态、时间和错误分类；
-- Opaque Event 是兼容机制，不是绕过数据治理的机制；
-- 新 Opaque Event 进入公开流前仍需设计 Review、数据最小化、Fixture、集成测试和 Secret Scan。
-
-## 22. 文件边界
+## 19. 文件边界
 
 允许修改：
 
@@ -984,12 +593,11 @@ packages/contracts/test/sync.test.ts
 packages/contracts/fixtures/sync/**
 apps/gateway/src/deviceSyncRoutes.ts
 apps/gateway/src/eventStream.ts
-apps/gateway/test/deviceSyncRoutes.test.ts
-apps/gateway/test/eventStream*.test.ts
-同主题 Gateway syncContracts*.test.ts
-docs/superpowers/specs/2026-07-24-public-event-sync-contracts-v1-design.md
-docs/superpowers/plans/2026-07-24-public-event-sync-contracts-v1.md
-docs/superpowers/evidence/2026-07-24-public-event-sync-contracts-v1.md
+apps/gateway/test/syncContracts.test.ts
+apps/gateway/test/syncKnownEvents.test.ts
+apps/gateway/test/eventStream.test.ts
+apps/gateway/test/eventStreamResilience.test.ts
+docs/superpowers/**
 ```
 
 明确不修改：
@@ -1008,83 +616,22 @@ apps/gateway/src/domainEvents.ts
 apps/gateway/public/**
 ```
 
-不修改数据库、事件生产触发器或 Cursor 事务。
-
-## 23. PR #14 隔离
-
-PR #14 只修改：
+## 20. 成功标准
 
 ```text
-.github/workflows/ios-ci.yml
-clients/ios/**
-```
-
-本阶段与其 changed paths 交集保持为零。
-
-PR #14 的 iOS CI 路径过滤包含 `packages/contracts/**`。本 PR 合并后，GitHub 可能重新计算 PR #14 merged tree 或重新触发 iOS 检查。因此完成前必须复核：
-
-- PR #14 仍为 Open；
-- PR #14 仍为 Draft；
-- Head 保持 `e075f114e3f3fcdb728f6bff75797d415c4a5315`；
-- GitHub 重新计算后仍可合并；
-- 若 iOS CI 重新运行，必须成功；
-- Mobile Entry v1 Fixtures 与导出保持不变。
-
-## 24. TDD 顺序
-
-```text
-Contracts Fixtures 与失败测试
-→ Known Event Schemas
-→ Opaque Event 与防降级门禁
-→ Query / Response / ACK Schemas
-→ Gateway REST 接入
-→ Gateway SSE 接入
-→ 七种事件集成验证
-→ 隐私与兼容性审查
-→ 全仓门禁
-```
-
-每个行为阶段先提交可观察 RED，再提交最小 GREEN 实现。
-
-## 25. 全仓门禁
-
-```bash
-npm run test -w @family-ai/contracts
-npm run typecheck -w @family-ai/contracts
-npm run build -w @family-ai/contracts
-npm run test -w @family-ai/gateway
-npm run typecheck -w @family-ai/gateway
-npm run build -w @family-ai/gateway
-npm run check
-```
-
-最终 Head 还要求：
-
-- Repository CI 成功；
-- Secret Scan 成功；
-- PR 可合并；
-- 无未解决 Review Thread；
-- PR #14 changed-path 交集为零；
-- PR #14 状态和 Head 不变。
-
-## 26. 成功标准
-
-```text
-所有当前正式事件拥有公共严格 Schema
+所有正式事件拥有公共严格 Schema
 错误 Known Event 不能退化为 Opaque
-Future Event 不阻断旧客户端同步
+Future Event 不阻断旧客户端
 REST 与 SSE 使用同一 SyncEvent Schema
-GET Query 和 ACK 不再由 Gateway 重复定义
-补拉响应拥有跨字段一致性检查
-SSE id、event name 与 data 一致
-当前 Gateway wire 行为不发生破坏性变化
+补拉与 ACK 不再由 Gateway 重复定义
+补拉响应拥有跨字段一致性和并发安全
+SSE 校验失败不推进 Cursor
+当前 Gateway 正常行为保持兼容
 Mobile Entry v1 保持冻结
-PR #14 的 iOS 与 workflow 路径保持零交集
+PR #14 changed-path 交集为 0
 ```
 
-## 27. 后续顺序
-
-本 PR 合并并同步开发记录后：
+## 21. 后续顺序
 
 ```text
 正式 Member Web 壳与 Personal Entry
@@ -1094,5 +641,3 @@ PR #14 的 iOS 与 workflow 路径保持零交集
 → Push Notification
 → iOS 接入统一 Chat / Work 与 Sync Contracts
 ```
-
-在 PR #14 真机验收完成前，后续独立 PR 继续不修改 `clients/ios/**` 和 `.github/workflows/ios-ci.yml`。
