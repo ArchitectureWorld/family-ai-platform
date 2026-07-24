@@ -348,11 +348,14 @@ export class PersonEventStreamHub {
         ) {
           throw new Error("EVENT_STREAM_SOURCE_ORDER_INVALID");
         }
+        const frame = formatDomainEventFrame(domainEvent);
         previousSequence = domainEvent.eventSequence;
         for (const subscriber of [...channel.subscribers]) {
           if (!subscriber.closed && subscriber.scheduledCursor < domainEvent.eventSequence) {
-            subscriber.scheduledCursor = domainEvent.eventSequence;
-            this.enqueueFrame(subscriber, formatDomainEventFrame(domainEvent));
+            this.enqueueFrame(subscriber, frame);
+            if (!subscriber.closed) {
+              subscriber.scheduledCursor = domainEvent.eventSequence;
+            }
           }
         }
       }
