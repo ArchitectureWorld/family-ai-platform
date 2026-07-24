@@ -77,9 +77,21 @@ class FakeSink implements EventStreamSink {
   readonly frames: string[] = [];
   ended = false;
   destroyed = false;
+  private readonly waiters: Array<{
+    count: number;
+    resolve: () => void;
+  }> = [];
 
   write(chunk: string): boolean {
     this.frames.push(chunk);
+    const count = this.domainEventIds().length;
+    for (let index = this.waiters.length - 1; index >= 0; index -= 1) {
+      const waiter = this.waiters[index];
+      if (waiter && count >= waiter.count) {
+        this.waiters.splice(index, 1);
+        waiter.resolve();
+      }
+    }
     return true;
   }
 
@@ -99,6 +111,13 @@ class FakeSink implements EventStreamSink {
     return this.frames.flatMap((frame) => {
       const match = /^id: (\d+)$/m.exec(frame);
       return match?.[1] ? [Number(match[1])] : [];
+    });
+  }
+
+  async waitForDomainEvents(count: number): Promise<void> {
+    if (this.domainEventIds().length >= count) return;
+    await new Promise<void>((resolve) => {
+      this.waiters.push({ count, resolve });
     });
   }
 }
@@ -179,6 +198,10 @@ describe("PersonEventStreamHub shared pump", () => {
       sink: second
     });
     await hub.pumpPerson("person:test");
+    await Promise.all([
+      first.waitForDomainEvents(3),
+      second.waitForDomainEvents(1)
+    ]);
 
     expect(source.calls).toEqual([{
       personRef: "person:test",
@@ -215,6 +238,10 @@ describe("PersonEventStreamHub shared pump", () => {
       sink: other
     });
     await hub.pumpAll();
+    await Promise.all([
+      owner.waitForDomainEvents(2),
+      other.waitForDomainEvents(1)
+    ]);
     await hub.pumpAll();
 
     expect(owner.domainEventIds()).toEqual([1, 2]);
@@ -239,6 +266,7 @@ describe("PersonEventStreamHub shared pump", () => {
     });
 
     await hub.pumpPerson("person:test");
+    await sink.waitForDomainEvents(205);
 
     expect(sink.domainEventIds()).toEqual(Array.from({ length: 205 }, (_, index) => index + 1));
     expect(source.calls).toEqual([
