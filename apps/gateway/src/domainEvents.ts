@@ -60,7 +60,6 @@ export class DomainEventStore extends CoreDomainEventStore {
     super(db, now);
     this.eventDb = db;
     this.eventNow = now;
-    this.installDeviceSyncSchema();
   }
 
   getLatestPersonSequence(personRef: string): number {
@@ -85,7 +84,7 @@ export class DomainEventStore extends CoreDomainEventStore {
     return row ? mapEvent(row) : null;
   }
 
-  private installDeviceSyncSchema(): void {
+  installDeviceSyncSchemaForTesting(): void {
     this.eventDb.transaction(() => {
       let latest = (this.eventDb.prepare(
         "SELECT version FROM domain_event_schema_migrations ORDER BY version DESC LIMIT 1"
