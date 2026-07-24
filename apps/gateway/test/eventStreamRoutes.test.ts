@@ -100,6 +100,7 @@ describe("Chat Work SSE HTTP route", () => {
   const controllers: AbortController[] = [];
 
   beforeEach(async () => {
+    origin = "";
     directory = mkdtempSync(join(tmpdir(), "family-ai-event-stream-routes-"));
     app = await buildGatewayApp({
       databasePath: join(directory, "gateway.sqlite"),
