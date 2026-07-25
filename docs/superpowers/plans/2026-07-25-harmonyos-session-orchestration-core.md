@@ -30,7 +30,7 @@
 - Consumes: existing `GatewayRequest`, `MOBILE_ENDPOINTS`, strict response parsers.
 - Produces expected API for `GatewayTransport`, `MobileGatewayClient`, `GatewayClientError`, `GatewayTransportError`.
 
-- [ ] **Step 1: Write tests for exact request semantics**
+- [x] **Step 1: Write tests for exact request semantics**
 
 Require:
 
@@ -43,13 +43,13 @@ client.unbind(profile, device)
 
 and assert exact method, path and Header isolation.
 
-- [ ] **Step 2: Write tests for response/error mapping**
+- [x] **Step 2: Write tests for response/error mapping**
 
 Cover strict success parsing, stable server code, malformed success/error, timeout, unreachable and insecure Gateway.
 
-- [ ] **Step 3: Push tests and observe `ERR_MODULE_NOT_FOUND` for `gatewayClient.ts`**
+- [x] **Step 3: Push tests and observe `ERR_MODULE_NOT_FOUND` for `gatewayClient.ts`**
 
-Expected: HarmonyOS Core CI RED for missing production module, while Secret Scan remains green.
+Observed: HarmonyOS Core CI #4 failed before the production module existed.
 
 ### Task 2: Minimal Gateway Client
 
@@ -71,12 +71,12 @@ class GatewayClientError extends Error
 class MobileGatewayClient
 ```
 
-- [ ] **Step 1: Implement request dispatch through injected Transport**
-- [ ] **Step 2: Validate base URL before calling Transport**
-- [ ] **Step 3: Parse 2xx response with endpoint-specific parser**
-- [ ] **Step 4: Parse non-2xx response with `parseMobileGatewayError`**
-- [ ] **Step 5: Map Transport error kinds without leaking raw errors**
-- [ ] **Step 6: Run GatewayClient tests and strict typecheck; require GREEN**
+- [x] **Step 1: Implement request dispatch through injected Transport**
+- [x] **Step 2: Validate base URL before calling Transport**
+- [x] **Step 3: Parse 2xx response with endpoint-specific parser**
+- [x] **Step 4: Parse non-2xx response with `parseMobileGatewayError`**
+- [x] **Step 5: Map Transport error kinds without leaking raw errors**
+- [x] **Step 6: Run GatewayClient tests and strict typecheck; require GREEN**
 
 ### Task 3: Credential Store Port and SessionManager RED Tests
 
@@ -93,11 +93,13 @@ interface SessionGateway
 class SessionManager
 ```
 
-- [ ] **Step 1: Define only the CredentialStore interface**
-- [ ] **Step 2: Write tests for restore decision table**
-- [ ] **Step 3: Write tests for serialized renewal**
-- [ ] **Step 4: Write tests for logout and unbind lifecycle**
-- [ ] **Step 5: Push tests and observe `ERR_MODULE_NOT_FOUND` for `sessionManager.ts`**
+- [x] **Step 1: Define only the CredentialStore interface**
+- [x] **Step 2: Write tests for restore decision table**
+- [x] **Step 3: Write tests for serialized renewal**
+- [x] **Step 4: Write tests for logout and unbind lifecycle**
+- [x] **Step 5: Push tests and observe `ERR_MODULE_NOT_FOUND` for `sessionManager.ts`**
+
+Observed: HarmonyOS Core CI #11 failed before the production module existed.
 
 ### Task 4: Minimal SessionManager
 
@@ -123,13 +125,13 @@ class SessionManager {
 }
 ```
 
-- [ ] **Step 1: Implement no-device and valid-session paths**
-- [ ] **Step 2: Implement missing/expired Session renewal**
-- [ ] **Step 3: Implement one retry after Entry Session invalid/expired**
-- [ ] **Step 4: Serialize concurrent renewals**
-- [ ] **Step 5: Implement offline/revoked mapping**
-- [ ] **Step 6: Implement Device-authenticated logout and unbind**
-- [ ] **Step 7: Run SessionManager tests and strict typecheck; require GREEN**
+- [x] **Step 1: Implement no-device and valid-session paths**
+- [x] **Step 2: Implement missing/expired Session renewal**
+- [x] **Step 3: Implement one retry after Entry Session invalid/expired**
+- [x] **Step 4: Serialize concurrent renewals**
+- [x] **Step 5: Implement offline/revoked mapping**
+- [x] **Step 6: Implement Device-authenticated logout and unbind**
+- [x] **Step 7: Run SessionManager tests and strict typecheck; require GREEN**
 
 ### Task 5: Full Verification and Documentation
 
@@ -138,8 +140,8 @@ class SessionManager {
 - Modify: `clients/harmonyos/README.md`
 - Create: `docs/superpowers/evidence/2026-07-25-harmonyos-session-orchestration-core.md`
 
-- [ ] **Step 1: Run `bash ./scripts/verify-harmonyos-core.sh`**
-- [ ] **Step 2: Verify Repository CI, HarmonyOS Core CI and Secret Scan**
-- [ ] **Step 3: Verify final PR path intersection against PR #14, #25 and #27 is zero**
-- [ ] **Step 4: Update PR #26 description with exact evidence**
-- [ ] **Step 5: Keep PR Draft and do not merge**
+- [x] **Step 1: Run `bash ./scripts/verify-harmonyos-core.sh`**
+- [x] **Step 2: Verify Repository CI, HarmonyOS Core CI and Secret Scan**
+- [x] **Step 3: Verify final PR path intersection against PR #14, #25 and #27 is zero**
+- [x] **Step 4: Update PR #26 description with exact evidence**
+- [x] **Step 5: Keep PR Draft and do not merge**
