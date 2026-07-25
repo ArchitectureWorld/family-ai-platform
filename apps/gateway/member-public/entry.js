@@ -13,13 +13,14 @@ const state = {
 };
 
 const installationKey = "family-ai-web-installation-id";
-const installationId = (() => {
+
+function installationId() {
   const existing = localStorage.getItem(installationKey);
   if (existing) return existing;
   const created = crypto.randomUUID();
   localStorage.setItem(installationKey, created);
   return created;
-})();
+}
 
 function setConnection(kind, label) {
   const node = $("connectionStatus");
@@ -124,7 +125,7 @@ async function claimPairing(code, pairingRef = null) {
         protocolVersion: 1,
         ...(pairingRef ? { pairingRef } : {}),
         code,
-        installationId,
+        installationId: installationId(),
         device: browserDescriptor()
       }
     });
