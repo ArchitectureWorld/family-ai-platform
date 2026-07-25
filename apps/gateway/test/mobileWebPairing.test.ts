@@ -1,11 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
 
-const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
 const bootstrapToken = "mobile-web-bootstrap-token-with-enough-length";
 const bootstrapHeaders = {
   authorization: `Bearer ${bootstrapToken}`,
@@ -42,7 +40,7 @@ afterEach(() => {
   }
 });
 
-describe("mobile pairing Web member controls", () => {
+describe("mobile pairing and product Web boundaries", () => {
   it("reports claimed state and the active personal mobile-device count", async () => {
     const app = await buildGatewayApp({
       databasePath: databasePath(),
@@ -139,35 +137,25 @@ describe("mobile pairing Web member controls", () => {
     await app.close();
   });
 
-  it("ships a local, memory-only pairing dialog with no third-party QR dependency", async () => {
-    const html = readFileSync(join(publicDirectory, "index.html"), "utf8");
-    const javascript = readFileSync(join(publicDirectory, "acceptance.js"), "utf8");
-    const stylesheet = readFileSync(join(publicDirectory, "acceptance.css"), "utf8");
-    const qrModule = readFileSync(join(publicDirectory, "qr.js"), "utf8");
-
-    expect(html).toContain('id="pairingDialog"');
-    expect(html).toContain('id="pairingQr"');
-    expect(html).toContain('id="pairingCode"');
-    expect(html).toContain('id="pairingCountdown"');
-    expect(html).toContain('id="revokePairing"');
-    expect(javascript).toContain('from "/qr.js"');
-    expect(javascript).toContain("clearPairingState");
-    expect(javascript).toContain("activePersonalDeviceCount");
-    expect(javascript).not.toContain("localStorage");
-    expect(javascript).not.toMatch(/sessionStorage\.setItem\([^\n]*(pairing|code|qr)/i);
-    expect(javascript).not.toMatch(/console\.(log|info|warn|error)/);
-    expect(qrModule).toContain("export function qrSvg");
-    expect(stylesheet).toContain(".pairing-dialog");
-
+  it("does not expose the historical acceptance-only browser assets", async () => {
     const app = await buildGatewayApp({
       databasePath: databasePath(),
       deviceToken: bootstrapToken,
       mode: "development"
     });
-    const qrResponse = await app.inject({ method: "GET", url: "/qr.js" });
-    expect(qrResponse.statusCode).toBe(200);
-    expect(qrResponse.headers["cache-control"]).toBe("no-store");
-    expect(qrResponse.body).not.toContain("https://cdn");
-    await app.close();
+    try {
+      for (const path of [
+        "/qr.js",
+        "/qr-v10.mjs",
+        "/acceptance.js",
+        "/mobileAcceptance.js",
+        "/acceptance.css",
+        "/mobile-acceptance.css"
+      ]) {
+        expect((await app.inject({ method: "GET", url: path })).statusCode).toBe(404);
+      }
+    } finally {
+      await app.close();
+    }
   });
 });
