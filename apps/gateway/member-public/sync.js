@@ -80,6 +80,10 @@ export function createSyncController(input) {
   let reconnectAttempt = 0;
   let lane = Promise.resolve();
 
+  function reportError(error) {
+    input.onError?.(error);
+  }
+
   function updateSync(patch) {
     store.setState((current) => ({
       ...current,
@@ -136,6 +140,7 @@ export function createSyncController(input) {
       return localAppliedSequence;
     } catch (error) {
       updateSync({ status: "degraded", error: errorProjection(error) });
+      reportError(error);
       throw error;
     }
   }
@@ -165,6 +170,7 @@ export function createSyncController(input) {
       .then(() => applyRealtimeEvent(target))
       .catch((error) => {
         updateSync({ status: "degraded", error: errorProjection(error) });
+        reportError(error);
         scheduleReconnect();
       });
     return lane;
@@ -194,6 +200,7 @@ export function createSyncController(input) {
         void enqueueRealtime(target);
       } catch (error) {
         updateSync({ status: "degraded", error: errorProjection(error) });
+        reportError(error);
         scheduleReconnect();
       }
     });
