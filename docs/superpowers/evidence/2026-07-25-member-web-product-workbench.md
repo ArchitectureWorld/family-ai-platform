@@ -20,19 +20,22 @@ Web Entry recovery, logout and device revocation
 
 No acceptance console, acceptance-only endpoint, debug panel or test-only business state is part of the product.
 
-## Final automated gate before documentation-only commits
+## Automated gates
 
-Code head:
+Final implementation head before development-record commits:
 
 ```text
 5d19782d2b20bf0278db0b24e9831561c383dbec
-```
-
-GitHub Actions:
-
-```text
 Repository CI #505       success
 Secret Scan #391         success
+```
+
+Implementation plus development-record head:
+
+```text
+848db9dacaf0d25d7524db7d548be78334828b79
+Repository CI #507       success
+Secret Scan #393         success
 ```
 
 Repository CI completed:
@@ -41,8 +44,6 @@ Repository CI completed:
 - script and public-repository checks;
 - TypeScript type checking;
 - all workspace builds.
-
-The final documentation head is required to pass the same gates again before PR #25 is marked Ready.
 
 ## TDD evidence
 
@@ -165,7 +166,7 @@ no user HTML concatenation
 no Provider External Session in browser cache
 ```
 
-Secret Scan #391 passed on the final code head.
+Secret Scan #393 passed with the implementation and committed development records.
 
 ## One-command product experience
 
