@@ -1,3 +1,9 @@
+import {
+  clearProductWorkbenchCache,
+  startProductWorkbench,
+  stopProductWorkbench
+} from "./product.js";
+
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -32,7 +38,19 @@ function showEntry() {
   $("entryView").classList.remove("hidden");
 }
 
-function showWorkspace(context) {
+async function handleProductEntryInvalid(error) {
+  await stopProductWorkbench();
+  state.context = null;
+  if (error?.code === "DEVICE_REVOKED") {
+    await clearProductWorkbenchCache().catch(() => undefined);
+    localStorage.removeItem(installationKey);
+    pairingPrompt("此浏览器的授权已被撤销，请使用新的配对码重新建立入口。");
+    return;
+  }
+  void restore();
+}
+
+async function showWorkspace(context) {
   state.context = context;
   $("entryView").classList.add("hidden");
   $("workspaceView").classList.remove("hidden");
@@ -41,6 +59,7 @@ function showWorkspace(context) {
   $("personAvatar").textContent = context.person.displayName.trim().slice(0, 1) || "F";
   $("deviceName").textContent = context.device.displayName;
   setConnection("online", "工作台已连接");
+  await startProductWorkbench(context, { onEntryInvalid: handleProductEntryInvalid });
 }
 
 function clearPairingLocation() {
@@ -69,10 +88,11 @@ async function api(path, options = {}) {
     ? null
     : await response.json().catch(() => null);
   if (!response.ok) {
-    const error = new Error(body?.message ?? `HTTP ${response.status}`);
+    const publicError = body?.error ?? body;
+    const error = new Error(publicError?.message ?? `HTTP ${response.status}`);
     error.status = response.status;
-    error.code = body?.code ?? "GATEWAY_UNAVAILABLE";
-    error.retryable = Boolean(body?.retryable);
+    error.code = publicError?.code ?? "GATEWAY_UNAVAILABLE";
+    error.retryable = Boolean(publicError?.retryable);
     throw error;
   }
   return body;
@@ -109,7 +129,7 @@ async function claimPairing(code, pairingRef = null) {
       }
     });
     clearPairingLocation();
-    showWorkspace(result.context);
+    await showWorkspace(result.context);
   } finally {
     state.busy = false;
   }
@@ -124,6 +144,7 @@ function pairingPrompt(message = "输入管理员提供的一次性配对码。"
 }
 
 function showError(error) {
+  void stopProductWorkbench();
   showEntry();
   showOnly("errorState");
   $("errorMessage").textContent = error?.message || "请检查网络后重新尝试。";
@@ -139,6 +160,7 @@ async function renewSession() {
 }
 
 async function restore() {
+  await stopProductWorkbench();
   showEntry();
   showOnly("loadingState");
   const url = new URL(location.href);
@@ -164,7 +186,7 @@ async function restore() {
 
   try {
     const context = await loadContext();
-    showWorkspace(context.context);
+    await showWorkspace(context.context);
     return;
   } catch (error) {
     if (error.status !== 401) {
@@ -175,7 +197,7 @@ async function restore() {
 
   try {
     const renewed = await renewSession();
-    showWorkspace(renewed.context);
+    await showWorkspace(renewed.context);
   } catch (error) {
     if ([401, 403].includes(error.status)) {
       pairingPrompt();
@@ -217,6 +239,7 @@ $("logoutButton").addEventListener("click", async () => {
   state.busy = true;
   try {
     await api("/api/v1/web-entry/logout", { method: "POST" });
+    await stopProductWorkbench();
     state.context = null;
     pairingPrompt("已退出当前会话。再次进入时会使用这台浏览器恢复个人入口。");
   } catch (error) {
@@ -233,6 +256,8 @@ $("revokeButton").addEventListener("click", async () => {
   state.busy = true;
   try {
     await api("/api/v1/web-entry/device", { method: "DELETE" });
+    await stopProductWorkbench();
+    await clearProductWorkbenchCache();
     state.context = null;
     localStorage.removeItem(installationKey);
     pairingPrompt("此浏览器已从 Family AI 移除，请使用新的配对码重新建立入口。");
@@ -243,25 +268,11 @@ $("revokeButton").addEventListener("click", async () => {
   }
 });
 
-document.querySelectorAll("[data-section]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const section = button.dataset.section;
-    document.querySelectorAll("[data-section]").forEach((item) => {
-      item.classList.toggle("active", item === button);
-    });
-    $("chatPreview").classList.toggle("hidden", section !== "chat");
-    $("workPreview").classList.toggle("hidden", section !== "work");
-    $("workspaceKicker").textContent = section === "chat" ? "PERSONAL CHAT" : "WORK CONVERSATIONS";
-    $("workspaceTitle").textContent = section === "chat"
-      ? "和个人助理继续聊"
-      : "持续推进重要事项";
-  });
-});
-
 window.addEventListener("online", () => {
-  if (state.context) setConnection("online", "工作台已连接");
-  else void restore();
+  if (!state.context) void restore();
 });
-window.addEventListener("offline", () => setConnection("offline", "当前离线"));
+window.addEventListener("offline", () => {
+  if (!state.context) setConnection("offline", "当前离线");
+});
 
 void restore();
