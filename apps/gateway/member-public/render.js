@@ -74,7 +74,7 @@ function outgoingNode(outgoing, onRetry) {
   if (failed && outgoing.error?.retryable) {
     const retry = element("button", "retry-message", "重试");
     retry.type = "button";
-    retry.addEventListener("click", () => onRetry(outgoing.clientMessageId));
+    retry.addEventListener("click", () => void onRetry(outgoing.clientMessageId));
     meta.append(retry);
   }
   bubble.append(meta);
@@ -83,6 +83,9 @@ function outgoingNode(outgoing, onRetry) {
 }
 
 function renderThread(input) {
+  const distanceFromBottom = input.container.scrollHeight -
+    input.container.scrollTop - input.container.clientHeight;
+  const shouldStickToBottom = distanceFromBottom < 120;
   clear(input.container);
   const authoritative = input.messages ?? [];
   const outgoing = (input.outgoing ?? []).filter((item) => item.threadRef === input.threadRef);
@@ -97,9 +100,26 @@ function renderThread(input) {
   for (const item of outgoing) input.container.append(outgoingNode(item, input.onRetry));
   input.empty.classList.toggle("hidden", authoritative.length + outgoing.length > 0);
   input.loadEarlier.classList.toggle("hidden", input.nextBeforeSequence == null);
-  queueMicrotask(() => {
-    input.container.scrollTop = input.container.scrollHeight;
+  if (shouldStickToBottom) {
+    queueMicrotask(() => {
+      input.container.scrollTop = input.container.scrollHeight;
+    });
+  }
+}
+
+function ensureMobileWorkSelect(actions) {
+  let select = $("mobileWorkSelect");
+  if (!select) {
+    select = document.createElement("select");
+    select.id = "mobileWorkSelect";
+    select.className = "mobile-work-select";
+    select.setAttribute("aria-label", "选择 Work");
+    $("workListToggle").before(select);
+  }
+  select.addEventListener("change", (event) => {
+    if (event.target.value) void actions.openWork(event.target.value);
   });
+  return select;
 }
 
 function renderWorkList(state, actions) {
@@ -122,7 +142,7 @@ function renderWorkList(state, actions) {
     button.type = "button";
     button.append(element("strong", "", work.title));
     button.append(element("span", "", `${workStatusLabel(work.status)} · ${work.goal}`));
-    button.addEventListener("click", () => actions.openWork(work.workConversationRef));
+    button.addEventListener("click", () => void actions.openWork(work.workConversationRef));
     list.append(button);
     if (select) {
       const option = document.createElement("option");
@@ -165,6 +185,7 @@ function setDialogBusy(dialog, busy) {
 export function createRenderer(input) {
   const { store, actions } = input;
   let toastTimer = null;
+  ensureMobileWorkSelect(actions);
 
   function showToast(message, kind = "info") {
     const toast = $("productToast");
@@ -172,6 +193,17 @@ export function createRenderer(input) {
     toast.className = `toast${kind === "error" ? " error" : ""}`;
     if (toastTimer !== null) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => toast.classList.add("hidden"), 4200);
+  }
+
+  async function retryOutgoing(clientMessageId) {
+    try {
+      const result = await actions.retry(clientMessageId);
+      if (result?.status === "failed") {
+        showToast(result.error?.message ?? "重试失败。", "error");
+      }
+    } catch (error) {
+      showToast(error.message ?? "重试失败。", "error");
+    }
   }
 
   function navigate(section) {
@@ -188,15 +220,16 @@ export function createRenderer(input) {
     if (select && select.options.length > 1) select.focus();
     else $("createWorkDialog").showModal();
   });
-  $("mobileWorkSelect")?.addEventListener("change", (event) => {
-    if (event.target.value) actions.openWork(event.target.value);
-  });
   $("convertSelectionButton").addEventListener("click", () => $("chatToWorkDialog").showModal());
   document.querySelectorAll("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => $(button.dataset.closeDialog).close());
   });
-  $("loadEarlierButton").addEventListener("click", () => actions.loadEarlier("chat"));
-  $("workLoadEarlierButton").addEventListener("click", () => actions.loadEarlier("work"));
+  $("loadEarlierButton").addEventListener("click", () => {
+    void actions.loadEarlier("chat").catch((error) => showToast(error.message, "error"));
+  });
+  $("workLoadEarlierButton").addEventListener("click", () => {
+    void actions.loadEarlier("work").catch((error) => showToast(error.message, "error"));
+  });
 
   for (const [formId, inputId, target] of [
     ["messageComposer", "messageInput", "chat"],
@@ -210,14 +243,25 @@ export function createRenderer(input) {
         form.requestSubmit();
       }
     });
-    textarea.addEventListener("input", () => actions.saveDraft(target, textarea.value));
+    textarea.addEventListener("input", () => {
+      void actions.saveDraft(target, textarea.value)
+        .catch((error) => showToast(error.message ?? "草稿保存失败。", "error"));
+    });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const text = textarea.value;
       if (!text.trim()) return;
-      const result = await actions.send(target, text);
-      if (result?.status === "draft") showToast("当前离线，内容已保存为草稿。", "error");
-      else if (result?.status === "failed") showToast(result.error?.message ?? "消息发送失败。", "error");
+      try {
+        const result = await actions.send(target, text);
+        if (result?.status === "succeeded") textarea.value = "";
+        else if (result?.status === "draft") {
+          showToast("当前离线，内容已保存为草稿。", "error");
+        } else if (result?.status === "failed") {
+          showToast(result.error?.message ?? "消息发送失败。", "error");
+        }
+      } catch (error) {
+        showToast(error.message ?? "消息发送失败。", "error");
+      }
     });
   }
 
@@ -232,7 +276,7 @@ export function createRenderer(input) {
       });
       event.target.reset();
       dialog.close();
-      showToast("Work 已创建。")
+      showToast("Work 已创建。");
     } catch (error) {
       showToast(error.message ?? "创建 Work 失败。", "error");
     } finally {
@@ -251,7 +295,7 @@ export function createRenderer(input) {
       });
       event.target.reset();
       dialog.close();
-      showToast("已从 Chat 创建 Work。")
+      showToast("已从 Chat 创建 Work。");
     } catch (error) {
       showToast(error.message ?? "Chat 转 Work 失败。", "error");
     } finally {
@@ -282,6 +326,18 @@ export function createRenderer(input) {
       degraded: "同步需重试"
     })[syncStatus] ?? syncStatus;
 
+    const connection = $("connectionStatus");
+    if (state.network?.online === false || syncStatus === "offline") {
+      connection.className = "connection offline";
+      connection.lastElementChild.textContent = "当前离线";
+    } else if (syncStatus === "degraded") {
+      connection.className = "connection degraded";
+      connection.lastElementChild.textContent = "连接需恢复";
+    } else {
+      connection.className = "connection online";
+      connection.lastElementChild.textContent = syncStatus === "syncing" ? "正在同步" : "工作台已连接";
+    }
+
     renderWorkList(state, actions);
 
     const chatThreadRef = state.chat?.threadRef ?? null;
@@ -300,7 +356,7 @@ export function createRenderer(input) {
       selectable: true,
       selectedRefs: selected,
       onSelect: actions.toggleMessageSelection,
-      onRetry: actions.retry
+      onRetry: retryOutgoing
     });
     const chatDraft = chatThreadRef ? state.drafts?.[chatThreadRef] ?? "" : "";
     if (document.activeElement !== $("messageInput") && $("messageInput").value !== chatDraft) {
@@ -330,7 +386,7 @@ export function createRenderer(input) {
       selectable: false,
       selectedRefs: [],
       onSelect: () => undefined,
-      onRetry: actions.retry
+      onRetry: retryOutgoing
     });
     $("workMessageInput").disabled = !work;
     $("workSendMessageButton").disabled = !work;
