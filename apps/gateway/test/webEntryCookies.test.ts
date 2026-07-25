@@ -103,6 +103,17 @@ describe("Web Entry Cookie helpers", () => {
     });
     expect(() => assertWebCookieRequestAllowed(safe)).not.toThrow();
 
+    const proxied = request({
+      method: "POST",
+      protocol: "http",
+      headers: {
+        "x-family-ai-web-request": "1",
+        "sec-fetch-site": "same-origin",
+        origin: "https://family.example"
+      }
+    });
+    expect(() => assertWebCookieRequestAllowed(proxied)).not.toThrow();
+
     for (const candidate of [
       request({ method: "POST" }),
       request({ method: "POST", headers: { "x-family-ai-web-request": "1", "sec-fetch-site": "cross-site" } }),
