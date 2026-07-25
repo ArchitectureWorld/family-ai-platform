@@ -97,7 +97,7 @@ describe("Member Web product modules", () => {
     expect(entry).toContain('from "./product.js"');
     expect(entry).toContain("startProductWorkbench");
     expect(entry).toContain("stopProductWorkbench");
-    expect(entry).toContain("clearMemberCache");
+    expect(entry).toContain("clearProductWorkbenchCache");
     expect(entry).not.toContain("chatPreview");
     expect(entry).not.toContain("workPreview");
   });
