@@ -104,4 +104,19 @@ describe("Member Web thread model", () => {
       "web:message-0002"
     ]);
   });
+
+  it("keeps a failed outgoing marker after the Person message is persisted", () => {
+    const failed = {
+      ...createOutgoingMessage({
+        threadRef: "thread:chat-0001",
+        clientMessageId: "web:message-0001",
+        occurredAt: "2026-07-25T10:00:00.000Z",
+        content: personMessage.content
+      }),
+      status: "failed",
+      error: { code: "PROVIDER_FAILED", message: "回复失败", retryable: true }
+    };
+
+    expect(reconcileOutgoing([failed], [personMessage])).toEqual([failed]);
+  });
 });
