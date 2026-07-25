@@ -54,6 +54,24 @@ export function reconcileOutgoing(outgoing = [], authoritativeMessages = []) {
   );
 }
 
+export function outgoingPresentation(outgoing, authoritativeMessages = []) {
+  const accepted = authoritativeMessages.some(
+    (message) => message?.clientMessageId === outgoing.clientMessageId
+  );
+  if (outgoing.status === "failed" && accepted) {
+    return {
+      kind: "reply_failure",
+      text: outgoing.error?.message || "个人助理回复失败，可以重试。",
+      accepted: true
+    };
+  }
+  return {
+    kind: outgoing.status === "failed" ? "send_failure" : "sending",
+    text: outgoing.content?.text ?? "",
+    accepted
+  };
+}
+
 function errorProjection(error) {
   return {
     status: Number(error?.status ?? 0),
