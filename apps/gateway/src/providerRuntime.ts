@@ -103,19 +103,20 @@ function readRuntimeConfig(
 }
 
 export function loadRuntimeProviderAdapter(options: RuntimeProviderOptions): ProviderAdapter {
+  const fakeOptions = options.clock ? { clock: options.clock } : {};
   if (!options.providerConfigPath) {
     if (options.mode === "production") {
       throw new Error("production requires GATEWAY_PROVIDER_CONFIG_PATH");
     }
-    return new FakeProviderAdapter({ clock: options.clock });
+    return new FakeProviderAdapter(fakeOptions);
   }
 
   const readFile = options.readFile ?? ((path: string) => readFileSync(path, "utf8"));
   const config = readRuntimeConfig(options.providerConfigPath, readFile);
   const hermes = new HermesProviderAdapter({
     profiles: config.profiles.map(({ kind: _kind, ...profile }) => profile),
-    fetchImpl: options.fetchImpl,
-    clock: options.clock
+    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(options.clock ? { clock: options.clock } : {})
   });
   const hermesRefs = config.profiles.map((profile) => profile.providerProfileRef);
 
@@ -125,7 +126,7 @@ export function loadRuntimeProviderAdapter(options: RuntimeProviderOptions): Pro
     ], options.clock);
   }
 
-  const fake = new FakeProviderAdapter({ clock: options.clock });
+  const fake = new FakeProviderAdapter(fakeOptions);
   return new ProviderAdapterRouter([
     { providerProfileRefs: ["provider-profile:fake-local"], adapter: fake },
     { providerProfileRefs: hermesRefs, adapter: hermes }
