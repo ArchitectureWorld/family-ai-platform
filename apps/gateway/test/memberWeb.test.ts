@@ -54,22 +54,36 @@ describe("Member Web product entry", () => {
     }
   });
 
-  it("serves external product assets and no longer exposes acceptance-console routes", async () => {
+  it("serves every focused product module with strict no-store protections", async () => {
     const app = await buildGatewayApp({
-      databasePath: databasePathFor("development-assets"),
+      databasePath: databasePathFor("product-assets"),
       deviceToken: token,
       mode: "development"
     });
     try {
-      const script = await app.inject({
-        method: "GET",
-        url: "/member/assets/entry.js"
-      });
-      expect(script.statusCode).toBe(200);
-      expect(script.headers["content-type"]).toContain("text/javascript");
-      expect(script.body).toContain("/api/v1/web-entry/context");
-      expect(script.body).toContain("history.replaceState");
-      expect(script.body).not.toContain("document.cookie");
+      for (const name of [
+        "entry.js",
+        "api.js",
+        "store.js",
+        "cache.js",
+        "thread.js",
+        "sync.js",
+        "chat.js",
+        "work.js",
+        "render.js",
+        "product.js"
+      ]) {
+        const response = await app.inject({
+          method: "GET",
+          url: `/member/assets/${name}`
+        });
+        expect(response.statusCode, name).toBe(200);
+        expect(response.headers["content-type"], name).toContain("text/javascript");
+        expect(response.headers["cache-control"], name).toBe("no-store");
+        expect(response.headers["content-security-policy"], name).toContain("default-src 'self'");
+        expect(response.headers["x-content-type-options"], name).toBe("nosniff");
+        expect(response.body, name).not.toContain("document.cookie");
+      }
 
       const style = await app.inject({
         method: "GET",
@@ -77,13 +91,16 @@ describe("Member Web product entry", () => {
       });
       expect(style.statusCode).toBe(200);
       expect(style.headers["content-type"]).toContain("text/css");
-      expect(style.body).toContain("@media");
+      expect(style.headers["cache-control"]).toBe("no-store");
+      expect(style.body).toContain("prefers-reduced-motion");
 
       for (const path of [
         "/acceptance.js",
         "/mobileAcceptance.js",
         "/acceptance.css",
-        "/mobile-acceptance.css"
+        "/mobile-acceptance.css",
+        "/qr.js",
+        "/qr-v10.mjs"
       ]) {
         expect((await app.inject({ method: "GET", url: path })).statusCode).toBe(404);
       }

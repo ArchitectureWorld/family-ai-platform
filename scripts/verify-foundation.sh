@@ -62,14 +62,22 @@ Family AI automated verification: PASS
 - 管理员新增成员；
 - Personal 入口无法访问 Admin API；
 - Gateway 重启后入口状态继续有效；
-- 真实浏览器 Device / EntryBinding / EntrySession 的产品配对路径。
+- 真实浏览器 Device / EntryBinding / EntrySession 的产品配对路径；
+- Chat、Work、显式补拉、累计 ACK 与 SSE 所使用的正式产品接口。
 
 Gateway 保留刚刚通过验证的真实 Family 状态并继续运行。
 打开下面的地址，直接进入真实个人工作台：
 
 $MEMBER_WEB_URL
 
-这不是专用验证页面。浏览器会通过正式配对建立个人设备，随后使用与普通用户完全相同的 Chat、Work 和同步接口。
+浏览器会通过正式配对建立个人设备，随后进入普通用户日常使用的 Chat / Work 工作台。
+请直接通过正常产品行为完成体验：
+1. 发送一条 Chat 消息，并看到个人助理回复。
+2. 创建一个 Work，在 Work 中继续对话。
+3. 刷新页面，确认 Chat、Work、草稿和消息仍然恢复。
+4. 在仓库目录执行：
+   docker compose --env-file .runtime/config/compose.env restart gateway
+5. Gateway 恢复后刷新页面，确认工作台通过补拉和实时同步恢复到相同状态。
 
 运行日志（仅保存在 Git 忽略的本机目录）：
 $LOG_DIR

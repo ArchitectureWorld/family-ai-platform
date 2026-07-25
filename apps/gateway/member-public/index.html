@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f5f4ef">
+  <meta name="theme-color" content="#f3f1ea">
   <title>Family AI · 个人工作台</title>
   <link rel="stylesheet" href="/member/assets/member.css">
   <script type="module" src="/member/assets/entry.js"></script>
@@ -21,7 +21,7 @@
           <small>个人工作台</small>
         </span>
       </a>
-      <div class="connection" id="connectionStatus" role="status">
+      <div class="connection" id="connectionStatus" role="status" aria-live="polite">
         <span class="connection-dot" aria-hidden="true"></span>
         <span>正在连接</span>
       </div>
@@ -45,13 +45,14 @@
           <div>
             <p class="panel-kicker">建立浏览器个人入口</p>
             <h2>输入一次性配对码</h2>
-            <p>配对完成后，这台浏览器会成为你的个人设备。后续直接回到这里即可继续。</p>
+            <p id="pairingMessage">配对完成后，这台浏览器会成为你的个人设备。后续直接回到这里即可继续。</p>
           </div>
           <label>
             <span>配对码</span>
             <input id="pairingCode" name="pairingCode" autocomplete="one-time-code" inputmode="text" placeholder="ABCD-EFGH" maxlength="9" required>
           </label>
           <button class="primary-button" type="submit">进入个人工作台</button>
+          <button class="secondary-button hidden" id="resumeBrowserButton" type="button">使用此浏览器恢复入口</button>
           <p class="form-note">配对码由家庭管理员在 Family AI 中生成，5 分钟内有效。</p>
         </form>
 
@@ -65,7 +66,7 @@
     </section>
 
     <section class="workspace hidden" id="workspaceView">
-      <aside class="workspace-nav">
+      <aside class="workspace-nav" id="workspaceSidebar">
         <div class="identity-card">
           <span class="avatar" id="personAvatar">F</span>
           <div>
@@ -74,11 +75,11 @@
           </div>
         </div>
 
-        <nav aria-label="个人工作台">
-          <button class="nav-item active" type="button" data-section="chat">
+        <nav id="primaryNavigation" aria-label="个人工作台">
+          <button class="nav-item active" type="button" data-section="chat" aria-current="page">
             <span class="nav-icon" aria-hidden="true">✦</span>
             <span>Chat</span>
-            <small>日常对话</small>
+            <small>持续对话</small>
           </button>
           <button class="nav-item" type="button" data-section="work">
             <span class="nav-icon" aria-hidden="true">⌁</span>
@@ -86,6 +87,14 @@
             <small>长期事项</small>
           </button>
         </nav>
+
+        <section class="work-navigation" aria-labelledby="workNavigationTitle">
+          <div class="section-heading compact">
+            <h2 id="workNavigationTitle">最近 Work</h2>
+            <button class="icon-button" id="createWorkButton" type="button" aria-label="创建 Work">＋</button>
+          </div>
+          <div class="work-list" id="workList" aria-live="polite"></div>
+        </section>
 
         <div class="nav-footer">
           <button class="text-button" id="logoutButton" type="button">退出当前会话</button>
@@ -99,36 +108,147 @@
             <p class="panel-kicker" id="workspaceKicker">PERSONAL CHAT</p>
             <h2 id="workspaceTitle">和个人助理继续聊</h2>
           </div>
-          <div class="device-pill" id="deviceName">当前浏览器</div>
+          <div class="header-actions">
+            <span class="sync-pill" id="syncStatus">正在同步</span>
+            <span class="device-pill" id="deviceName">当前浏览器</span>
+          </div>
         </header>
 
-        <div class="workspace-preview" id="chatPreview">
-          <div class="preview-symbol" aria-hidden="true">✦</div>
-          <h3>工作台已连接</h3>
-          <p>你的 Person、个人助理和浏览器设备已建立真实绑定。Chat 与 Work 的完整体验正在载入。</p>
-          <div class="preview-grid">
-            <article>
-              <span>Chat</span>
-              <strong>一个持续对话</strong>
-              <p>不同设备共享同一个 Home Chat，不需要管理会话列表。</p>
-            </article>
-            <article>
-              <span>Work</span>
-              <strong>多个独立事项</strong>
-              <p>每个项目拥有独立上下文、状态与推进节奏。</p>
-            </article>
-          </div>
-        </div>
+        <section class="product-section" id="chatSection" aria-labelledby="chatHeading">
+          <header class="section-heading">
+            <div>
+              <h2 id="chatHeading">Chat</h2>
+              <p>一个长期存在的个人助理对话。</p>
+            </div>
+            <div class="selection-actions">
+              <span id="selectionCount" class="subtle-text"></span>
+              <button class="secondary-button hidden" id="convertSelectionButton" type="button">转成 Work</button>
+            </div>
+          </header>
 
-        <div class="workspace-preview hidden" id="workPreview">
-          <div class="preview-symbol" aria-hidden="true">⌁</div>
-          <h3>Work 空间已就绪</h3>
-          <p>下一阶段会在这里呈现 Work 列表、目标、进度、待确认项和完整上下文。</p>
-        </div>
+          <div class="thread-shell">
+            <button class="load-earlier hidden" id="loadEarlierButton" type="button">加载更早消息</button>
+            <div class="message-list" id="threadMessages" role="log" aria-live="polite" aria-relevant="additions text"></div>
+            <div class="empty-thread" id="chatEmptyState">
+              <span aria-hidden="true">✦</span>
+              <h3>从一句话开始</h3>
+              <p>这里是你在所有个人设备上共享的长期 Chat。</p>
+            </div>
+          </div>
+
+          <form class="message-composer" id="messageComposer">
+            <label class="sr-only" for="messageInput">消息输入</label>
+            <textarea id="messageInput" aria-label="消息输入" rows="1" maxlength="12000" placeholder="给个人助理发消息…"></textarea>
+            <div class="composer-footer">
+              <span id="composerStatus" role="status">Enter 发送 · Shift+Enter 换行</span>
+              <button class="primary-button compact-button" id="sendMessageButton" type="submit">发送</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="product-section hidden" id="workSection" aria-labelledby="workHeading">
+          <div class="work-layout">
+            <section class="work-conversation">
+              <header class="section-heading">
+                <div>
+                  <p class="status-label" id="workStatus">尚未选择</p>
+                  <h2 id="workHeading">选择一个 Work</h2>
+                  <p id="workGoal">每个 Work 都有独立的目标和对话上下文。</p>
+                </div>
+                <button class="secondary-button" id="workListToggle" type="button">选择 Work</button>
+              </header>
+
+              <div class="thread-shell work-thread-shell">
+                <button class="load-earlier hidden" id="workLoadEarlierButton" type="button">加载更早消息</button>
+                <div class="message-list" id="workThreadMessages" role="log" aria-live="polite" aria-relevant="additions text"></div>
+                <div class="empty-thread" id="workEmptyState">
+                  <span aria-hidden="true">⌁</span>
+                  <h3>让这个事项继续推进</h3>
+                  <p>打开或创建一个 Work 后，可以在独立上下文中继续对话。</p>
+                </div>
+              </div>
+
+              <form class="message-composer" id="workMessageComposer">
+                <label class="sr-only" for="workMessageInput">Work 消息输入</label>
+                <textarea id="workMessageInput" aria-label="Work 消息输入" rows="1" maxlength="12000" placeholder="在当前 Work 中继续…" disabled></textarea>
+                <div class="composer-footer">
+                  <span id="workComposerStatus" role="status">先选择一个 Work</span>
+                  <button class="primary-button compact-button" id="workSendMessageButton" type="submit" disabled>发送</button>
+                </div>
+              </form>
+            </section>
+
+            <aside class="work-inspector" id="workDetail" aria-label="Work 详情">
+              <div class="inspector-block">
+                <span>目标</span>
+                <p id="workDetailGoal">选择 Work 后显示目标。</p>
+              </div>
+              <div class="inspector-block">
+                <span>摘要</span>
+                <p id="workSummary">尚无阶段摘要。</p>
+              </div>
+              <div class="inspector-block" id="workProgress">
+                <span>当前进度</span>
+                <p id="workPhaseSummary">尚无结构化进度。</p>
+                <div class="progress-groups" id="workProgressGroups"></div>
+              </div>
+            </aside>
+          </div>
+        </section>
       </section>
+
+      <nav class="mobile-navigation" id="mobileNavigation" aria-label="移动端工作台导航">
+        <button class="active" type="button" data-section="chat" aria-current="page">Chat</button>
+        <button type="button" data-section="work">Work</button>
+        <button type="button" id="mobileCreateWorkButton">新建</button>
+      </nav>
     </section>
   </main>
 
+  <dialog id="createWorkDialog" aria-labelledby="createWorkTitle">
+    <form method="dialog" class="dialog-form" id="createWorkForm">
+      <header>
+        <p class="panel-kicker">NEW WORK</p>
+        <h2 id="createWorkTitle">创建一个长期事项</h2>
+      </header>
+      <label>
+        <span>标题</span>
+        <input id="createWorkTitleInput" maxlength="120" required>
+      </label>
+      <label>
+        <span>目标</span>
+        <textarea id="createWorkGoalInput" rows="4" maxlength="4000" required></textarea>
+      </label>
+      <div class="dialog-actions">
+        <button class="text-button" type="button" data-close-dialog="createWorkDialog">取消</button>
+        <button class="primary-button" type="submit">创建并打开</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="chatToWorkDialog" aria-labelledby="chatToWorkTitle">
+    <form method="dialog" class="dialog-form" id="chatToWorkForm">
+      <header>
+        <p class="panel-kicker">CHAT → WORK</p>
+        <h2 id="chatToWorkTitle">把选中的对话变成 Work</h2>
+        <p id="chatToWorkSelectionSummary">已选择消息。</p>
+      </header>
+      <label>
+        <span>标题</span>
+        <input id="chatToWorkTitleInput" maxlength="120" required>
+      </label>
+      <label>
+        <span>目标</span>
+        <textarea id="chatToWorkGoalInput" rows="4" maxlength="4000" required></textarea>
+      </label>
+      <div class="dialog-actions">
+        <button class="text-button" type="button" data-close-dialog="chatToWorkDialog">取消</button>
+        <button class="primary-button" type="submit">创建 Work</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast hidden" id="productToast" role="status" aria-live="polite"></div>
   <noscript>请启用 JavaScript 以使用 Family AI 个人工作台。</noscript>
 </body>
 </html>

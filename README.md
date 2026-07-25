@@ -21,9 +21,10 @@ Web / iOS / HarmonyOS / DIY / Admin
 ```
 
 - `apps/gateway`：唯一业务后端与数据权威；
+- `apps/gateway/member-public`：同源正式 Member Web 产品工作台；
 - `packages/contracts`：版本化公共协议；
 - `packages/provider-adapter-sdk`：Hermes、Codex 等 Provider 的受控调用边界；
-- 正式 Member Web、Admin Web、iOS、HarmonyOS 和 DIY 入口在后续阶段建设。
+- iOS、HarmonyOS 和 DIY 入口使用同一 Person、Chat、Work 和同步协议。
 
 Control Center 不再作为独立业务后台演进，而是收敛为 Admin Entry。管理员入口与个人入口共用 Gateway 和 Person，但拥有不同的 Session audience、权限、默认 Agent 和页面体验。
 
@@ -83,16 +84,19 @@ ArchitectureWorld/family-ai-platform-legacy
 
 ## 当前开发阶段
 
-Family / Person、双入口和正式 Chat / Work 实时后端已经进入 `main`。当前完整链路为：
+Family / Person、双入口、正式 Chat / Work 实时后端和 Member Web 产品工作台已经形成完整闭环：
 
 ```text
-Personal Entry Session
+Web Device + HttpOnly Personal Entry
 → HomeChatStream / WorkConversation
 → Person ThreadMessage
 → 同 Thread Provider Lane
 → Assistant ThreadMessage
 → domain_events + outbox_events
-→ SSE 实时通知与 Last-Event-ID 恢复
+→ IndexedDB 设备投影
+→ 显式缺失事件补拉
+→ 本地事务成功后累计 ACK
+→ SSE 实时通知与断线恢复
 ```
 
 已经完成：
@@ -104,26 +108,33 @@ Personal Entry Session
 - Provider Context Session、Assistant 回复、失败重试和重启恢复；
 - Person 级领域事件与 Transactional Outbox；
 - `GET /api/v1/events/stream` SSE 实时推送；
-- `afterSequence` 与 `Last-Event-ID` 断线补发；
-- 心跳授权复核、慢连接背压、Person 隔离和 Gateway 关闭清理。
+- Device Sync Cursor、显式缺失事件补拉和累计 ACK；
+- 公共 Event / Sync Contracts v1；
+- 真实 Web Device、HttpOnly Cookie Personal Entry 和远程撤销；
+- Member Web Chat 消息时间线、分页、发送、失败重试和 Assistant 回复；
+- Work 列表、创建、详情、独立对话和进度展示；
+- Chat 消息选择并转成 Work；
+- IndexedDB 本地投影、离线草稿、SSE 重连和 BroadcastChannel 多标签页通知；
+- 页面刷新与 Gateway 重启后的产品状态恢复。
 
 当前开发顺序：
 
 ```text
-Device Sync Cursor
-→ 显式缺失事件补拉 API
-→ 正式 Member Web Chat / Work
-→ Push 唤醒
+Push Notification 唤醒
 → iOS 接入统一 Chat / Work 与同步协议
+→ HarmonyOS 个人入口
+→ 文件、图片、语音和复杂 Work 能力
+→ 正式 Admin Web
 ```
 
-iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、iPhone 与部署 Gateway 的真机验收。浏览器验收台仍只承担初始化、配对和“小白一键验收”，不会作为正式 Member Web 继续堆叠业务功能。
+iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、iPhone 与部署 Gateway 的真机验收。Member Web 和 iOS 共享服务端对象与协议，但保持独立交互实现。
 
 详细阶段记录：
 
 - [`docs/development/2026-07-24-chat-work-realtime-foundation.md`](docs/development/2026-07-24-chat-work-realtime-foundation.md)
+- [`docs/development/2026-07-25-member-web-product-workbench.md`](docs/development/2026-07-25-member-web-product-workbench.md)
 
-## 一条命令完成自动测试与小白验收
+## 一条命令进入真实产品状态
 
 ### 环境要求
 
@@ -142,21 +153,23 @@ iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、i
 
 1. 检查已提交的依赖锁；
 2. 在固定 Node 22.16.0 Docker 环境运行全部测试、静态检查、类型检查和构建；
-3. 验证原有消息、幂等、隔离和重启恢复；
-4. 自动验证一次性建家、双入口、Agent 路由、成员管理和权限隔离；
-5. 清空自动验收数据；
-6. 再启动一套空白 Gateway；
-7. 输出浏览器“小白测试”地址和逐步操作说明。
+3. 验证消息、幂等、权限、同步和重启恢复；
+4. 建立并验证真实 Family、Person、Admin / Personal Entry 和浏览器配对材料；
+5. 保留已经通过验证的真实 Family 状态并继续运行 Gateway；
+6. 输出正常 `/member/` 产品工作台的一次性配对链接。
 
-浏览器页面标题：
+打开脚本输出的链接后，直接在正式产品工作台中体验：
 
 ```text
-家庭 AI 初始化与入口验收台
+发送一条 Chat 消息并看到个人助理回复
+→ 创建一个 Work
+→ 在 Work 中继续对话
+→ 从 Chat 选择消息转成 Work
+→ 刷新页面确认本地投影恢复
+→ 重启 Gateway 后确认补拉与 SSE 恢复
 ```
 
-详细操作见：
-
-- [`docs/acceptance/2026-07-21-family-onboarding-foundation.md`](docs/acceptance/2026-07-21-family-onboarding-foundation.md)
+产品页面不提供专门的验证按钮、调试面板或测试业务状态。自动验证日志只保存在 Git 忽略的本机 runtime 目录。
 
 ### 分步骤运行
 
@@ -168,22 +181,26 @@ bash ./scripts/acceptance-onboarding.sh
 ./scripts/dev-reset.sh
 ```
 
-运行数据库和本机开发凭证只保存在 Git 忽略的 `.runtime/`。自动验收报告保存在 Git 忽略的 `docs/acceptance/runtime/`。
+运行数据库和本机开发凭证只保存在 Git 忽略的 `.runtime/`。自动验证日志和报告保存在 Git 忽略的 `docs/acceptance/runtime/`。
 
 ## 网络和安全边界
 
 - Compose 只发布 `127.0.0.1:8790:8790`；
 - 数据库只保存设备凭证和 Entry Session Token 的 Hash；
+- 浏览器 Device Credential 与 Entry Session Token 只存在于 `HttpOnly` Cookie；
+- production Cookie 使用 `Secure`、`SameSite=Strict` 和 `Path=/`；
+- Cookie 写请求要求同源元数据和 `X-Family-AI-Web-Request: 1`；
+- 显式 Authorization Header 始终优先于 Cookie Bridge；
+- IndexedDB 不保存 Credential、Token、Authorization 或 Provider External Session；
+- IndexedDB 事件事务成功后才允许推进 Device Sync ACK；
 - 原始 Entry Session Token 只在创建时返回一次；
 - 客户端不能声明可被信任的 Person 或 Agent；
 - Admin 与 Personal Session 的 audience 强制隔离；
 - 新成员不会继承当前管理员设备的私人入口；
-- Conversation 同时校验成员和 Agent；
-- 授权先于幂等缓存查询；
 - Provider Session 不跨 Agent 或 Provider Profile 复用；
 - SSE 不发送消息正文、Token、Credential 或 Provider External Session；
 - SSE 消费不会把 Transactional Outbox 错误标记为已发布；
-- 验收台只在 development 模式提供；
+- Member Web 使用 `textContent` 渲染用户内容，不拼接用户输入 HTML；
 - production 不运行测试 bootstrap，也不默认创建 Fake Provider；
 - 自动测试只使用 Fake Provider。
 
@@ -197,15 +214,16 @@ bash ./scripts/acceptance-onboarding.sh
 - 新开发先确认与 `docs/architecture/` 一致；
 - 未取得测试、类型检查、构建、Docker 和目标环境证据前，不宣称完成。
 
-## 设计与验收资料
+## 设计与验证资料
 
 - `docs/superpowers/specs/2026-07-21-family-ai-platform-foundation-design.md`
 - `docs/superpowers/specs/2026-07-21-family-onboarding-foundation-design.md`
 - `docs/superpowers/plans/2026-07-21-family-onboarding-foundation.md`
-- `docs/acceptance/2026-07-21-gateway-foundation.md`
-- `docs/acceptance/2026-07-21-family-onboarding-foundation.md`
 - `docs/development/2026-07-21-gateway-foundation-verification.md`
 - `docs/development/2026-07-21-gateway-foundation-target-host-acceptance.md`
 - `docs/development/2026-07-24-chat-work-realtime-foundation.md`
 - `docs/superpowers/specs/2026-07-24-gateway-chat-work-sse-design.md`
 - `docs/superpowers/evidence/2026-07-24-gateway-chat-work-sse.md`
+- `docs/superpowers/specs/2026-07-25-member-web-product-workbench-design.md`
+- `docs/superpowers/plans/2026-07-25-member-web-product-workbench.md`
+- `docs/superpowers/evidence/2026-07-25-member-web-product-workbench.md`

@@ -42,16 +42,26 @@ function registerTextAsset(
   );
 }
 
+const productModules = [
+  ["/member/assets/entry.js", "entry.js"],
+  ["/member/assets/api.js", "api.js"],
+  ["/member/assets/store.js", "store.js"],
+  ["/member/assets/cache.js", "cache.js"],
+  ["/member/assets/thread.js", "thread.js"],
+  ["/member/assets/sync.js", "sync.js"],
+  ["/member/assets/chat.js", "chat.js"],
+  ["/member/assets/work.js", "work.js"],
+  ["/member/assets/render.js", "render.js"],
+  ["/member/assets/product.js", "product.js"]
+] as const;
+
 export function registerMemberWeb(app: FastifyInstance): void {
   app.get("/", async (_request, reply) => reply.redirect("/member/"));
   app.get("/member", async (_request, reply) => reply.redirect("/member/"));
   registerTextAsset(app, "/member/", "index.html", "text/html; charset=utf-8");
-  registerTextAsset(
-    app,
-    "/member/assets/entry.js",
-    "entry.js",
-    "text/javascript; charset=utf-8"
-  );
+  for (const [path, filename] of productModules) {
+    registerTextAsset(app, path, filename, "text/javascript; charset=utf-8");
+  }
   registerTextAsset(
     app,
     "/member/assets/member.css",
