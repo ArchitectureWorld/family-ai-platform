@@ -4,14 +4,15 @@ import { loadGatewayConfig } from "../src/config.js";
 const token = "configuration-test-token-with-enough-length";
 
 describe("Gateway configuration", () => {
-  it("defaults to development loopback and no explicit Provider runtime file", () => {
+  it("defaults to development loopback with no Provider file or Agent preset", () => {
     const config = loadGatewayConfig({ GATEWAY_DEVICE_TOKEN: token });
     expect(config).toMatchObject({
       host: "127.0.0.1",
       port: 8790,
       mode: "development",
       deviceToken: token,
-      providerConfigPath: null
+      providerConfigPath: null,
+      assignmentPreset: null
     });
     expect(config.databasePath).toContain(".runtime/data/gateway.sqlite");
   });
@@ -22,6 +23,26 @@ describe("Gateway configuration", () => {
       GATEWAY_PROVIDER_CONFIG_PATH: ".runtime/config/providers.json"
     });
     expect(config.providerConfigPath).toMatch(/\.runtime\/config\/providers\.json$/);
+  });
+
+  it("accepts only the reviewed Jarvis and Yutu assignment preset", () => {
+    expect(loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      GATEWAY_AGENT_ASSIGNMENT_PRESET: "hermes-jarvis-yutu-v1"
+    }).assignmentPreset).toBe("hermes-jarvis-yutu-v1");
+
+    for (const value of [
+      "jarvis",
+      "HERMES-JARVIS-YUTU-V1",
+      "hermes-jarvis-yutu-v2",
+      "agent:yutu",
+      "hermes-jarvis-yutu-v1,other"
+    ]) {
+      expect(() => loadGatewayConfig({
+        GATEWAY_DEVICE_TOKEN: token,
+        GATEWAY_AGENT_ASSIGNMENT_PRESET: value
+      })).toThrow("GATEWAY_AGENT_ASSIGNMENT_PRESET");
+    }
   });
 
   it("rejects non-loopback binding outside the approved container profile", () => {
@@ -71,11 +92,13 @@ describe("Gateway configuration", () => {
       GATEWAY_MODE: "production",
       GATEWAY_HOST: "127.0.0.1",
       GATEWAY_DEVICE_TOKEN: token,
-      GATEWAY_PROVIDER_CONFIG_PATH: ".runtime/config/providers.json"
+      GATEWAY_PROVIDER_CONFIG_PATH: ".runtime/config/providers.json",
+      GATEWAY_AGENT_ASSIGNMENT_PRESET: "hermes-jarvis-yutu-v1"
     });
     expect(config).toMatchObject({
       mode: "production",
-      providerConfigPath: expect.stringMatching(/providers\.json$/)
+      providerConfigPath: expect.stringMatching(/providers\.json$/),
+      assignmentPreset: "hermes-jarvis-yutu-v1"
     });
   });
 });
