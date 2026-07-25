@@ -24,6 +24,7 @@ import {
   type AuthenticatedDevice,
   type DevelopmentBootstrapInput
 } from "./database.js";
+import { registerDevelopmentConsole } from "./developmentConsole.js";
 import { DeviceSyncRepository } from "./deviceSync.js";
 import { registerDeviceSyncRoutes } from "./deviceSyncRoutes.js";
 import { DomainEventStore } from "./domainEvents.js";
@@ -34,7 +35,6 @@ import {
 } from "./eventStream.js";
 import { FamilyDomainRepository } from "./familyDomain.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
-import { registerMemberWeb } from "./memberWeb.js";
 import { MobileDeviceSummaryRepository } from "./mobileDeviceSummary.js";
 import { MobilePairingRepository } from "./mobilePairing.js";
 import { registerMobileRoutes } from "./mobileRoutes.js";
@@ -214,7 +214,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   }
 
   registerWebEntryCookieBridge(app);
-  registerMemberWeb(app);
+  registerDevelopmentConsole(app, options.mode);
   registerFamilyRoutes(app, {
     familyRepository,
     gatewayRepository: repository,
