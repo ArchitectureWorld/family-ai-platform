@@ -39,7 +39,7 @@ export function retryPayload(outgoing) {
     protocolVersion: 1,
     clientMessageId: outgoing.clientMessageId,
     occurredAt: outgoing.occurredAt,
-    content: structuredClone(outgoing.content)
+    content: structuredClone(outgoing.requestContent ?? outgoing.content)
   };
 }
 
