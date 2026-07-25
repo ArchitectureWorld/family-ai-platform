@@ -45,13 +45,14 @@
           <div>
             <p class="panel-kicker">建立浏览器个人入口</p>
             <h2>输入一次性配对码</h2>
-            <p>配对完成后，这台浏览器会成为你的个人设备。后续直接回到这里即可继续。</p>
+            <p id="pairingMessage">配对完成后，这台浏览器会成为你的个人设备。后续直接回到这里即可继续。</p>
           </div>
           <label>
             <span>配对码</span>
             <input id="pairingCode" name="pairingCode" autocomplete="one-time-code" inputmode="text" placeholder="ABCD-EFGH" maxlength="9" required>
           </label>
           <button class="primary-button" type="submit">进入个人工作台</button>
+          <button class="secondary-button hidden" id="resumeBrowserButton" type="button">使用此浏览器恢复入口</button>
           <p class="form-note">配对码由家庭管理员在 Family AI 中生成，5 分钟内有效。</p>
         </form>
 
