@@ -136,7 +136,18 @@ export function assertWebCookieRequestAllowed(request: FastifyRequest): void {
   const origin = headerString(request.headers.origin);
   const host = headerString(request.headers.host);
   if (origin !== undefined) {
-    if (!host || origin !== `${request.protocol}://${host}`) {
+    if (!host) throw forbiddenWebRequest();
+    let parsed: URL;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      throw forbiddenWebRequest();
+    }
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      parsed.host !== host ||
+      parsed.origin !== origin
+    ) {
       throw forbiddenWebRequest();
     }
   }
