@@ -243,6 +243,7 @@ export class HermesProviderAdapter {
           })),
           stream: false
         }),
+        redirect: "error",
         signal: controller.signal
       });
     } catch (error) {
@@ -289,6 +290,7 @@ export class HermesProviderAdapter {
         const response = await this.fetchImpl(`${profile.baseUrl}/v1/models`, {
           method: "GET",
           headers: { authorization: `Bearer ${profile.apiKey}` },
+          redirect: "error",
           signal: controller.signal
         });
         if (!response.ok) return false;
