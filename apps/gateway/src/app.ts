@@ -180,7 +180,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   );
   const chatWorkRepository = new ChatWorkDomainRepository(db, now);
   const mobileDeviceSummaryRepository = new MobileDeviceSummaryRepository(db);
-  const mobileRepository = new MobilePairingRepository(db);
+  const mobileRepository = new MobilePairingRepository(db, { now });
   const webEntryRepository = new WebEntryRepository(db, now);
   const providerAdapter = options.providerAdapter ?? new FakeProviderAdapter();
   const messageService = new MessageService(repository, providerAdapter);
