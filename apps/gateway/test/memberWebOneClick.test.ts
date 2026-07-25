@@ -27,6 +27,22 @@ describe("one-click Member Web experience", () => {
     expect(verify).not.toContain("创建家庭并进入门户");
   });
 
+  it("describes verification only through normal Chat, Work and recovery behavior", () => {
+    const verify = read("scripts/verify-foundation.sh");
+    for (const normalProductStep of [
+      "发送一条 Chat 消息",
+      "看到个人助理回复",
+      "创建一个 Work",
+      "在 Work 中继续对话",
+      "刷新页面",
+      "restart gateway"
+    ]) {
+      expect(verify).toContain(normalProductStep);
+    }
+    expect(verify).not.toContain("点击一键验收");
+    expect(verify).not.toContain("打开验收台");
+  });
+
   it("does not execute another reset after generating the product pairing link", () => {
     const verify = read("scripts/verify-foundation.sh");
     const stepSix = verify.slice(verify.indexOf("[6/6]"));
