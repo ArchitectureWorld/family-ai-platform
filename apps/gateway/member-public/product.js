@@ -1,4 +1,4 @@
-import { createApiClient, GatewayError } from "./api.js";
+import { createApiClient } from "./api.js";
 import {
   applyEventTransaction,
   clearMemberCache,
@@ -61,11 +61,11 @@ function initialState(context, snapshot) {
 }
 
 function entryFailure(error, callback) {
-  if (!(error instanceof GatewayError)) return false;
-  if (!["ENTRY_SESSION_EXPIRED", "ENTRY_SESSION_INVALID", "DEVICE_REVOKED"].includes(error.code)) {
+  const code = error?.code;
+  if (!["ENTRY_SESSION_EXPIRED", "ENTRY_SESSION_INVALID", "DEVICE_REVOKED"].includes(code)) {
     return false;
   }
-  callback?.(error);
+  void callback?.(error);
   return true;
 }
 
@@ -127,6 +127,15 @@ export async function startProductWorkbench(context, options = {}) {
     await applyEventTransaction(cache, target.eventSequence, async () => undefined);
   }
 
+  async function guarded(action) {
+    try {
+      return await action();
+    } catch (error) {
+      entryFailure(error, options.onEntryInvalid);
+      throw error;
+    }
+  }
+
   const actions = {
     navigate(section) {
       store.setState((current) => ({ ...current, section }));
@@ -144,9 +153,11 @@ export async function startProductWorkbench(context, options = {}) {
       }
     },
     async createWork(command) {
-      const work = await workController.create(command);
-      store.setState((current) => ({ ...current, section: "work" }));
-      return work;
+      return guarded(async () => {
+        const work = await workController.create(command);
+        store.setState((current) => ({ ...current, section: "work" }));
+        return work;
+      });
     },
     async send(target, text) {
       const state = store.getState();
@@ -155,6 +166,7 @@ export async function startProductWorkbench(context, options = {}) {
         : state.works?.find((work) => work.workConversationRef === state.selectedWorkRef)?.threadRef;
       if (!threadRef) throw new Error("THREAD_NOT_SELECTED");
       const result = await threadController.send(threadRef, text, "zh-CN");
+      if (result?.status === "failed") entryFailure(result.error, options.onEntryInvalid);
       return result;
     },
     async saveDraft(target, text) {
@@ -165,23 +177,31 @@ export async function startProductWorkbench(context, options = {}) {
       if (threadRef) await threadController.saveDraft(threadRef, text);
     },
     async loadEarlier(target) {
-      const state = store.getState();
-      const threadRef = target === "chat"
-        ? state.chat?.threadRef
-        : state.works?.find((work) => work.workConversationRef === state.selectedWorkRef)?.threadRef;
-      if (threadRef) await threadController.loadEarlier(threadRef);
+      return guarded(async () => {
+        const state = store.getState();
+        const threadRef = target === "chat"
+          ? state.chat?.threadRef
+          : state.works?.find((work) => work.workConversationRef === state.selectedWorkRef)?.threadRef;
+        if (threadRef) await threadController.loadEarlier(threadRef);
+      });
     },
-    retry: (clientMessageId) => threadController.retry(clientMessageId),
+    async retry(clientMessageId) {
+      const result = await threadController.retry(clientMessageId);
+      if (result?.status === "failed") entryFailure(result.error, options.onEntryInvalid);
+      return result;
+    },
     toggleMessageSelection: (messageRef) => chatController.toggleMessageSelection(messageRef),
     async convertChatToWork(command) {
-      const result = await chatController.convertSelectionToWork({
-        ...command,
-        decisions: [],
-        openQuestions: []
+      return guarded(async () => {
+        const result = await chatController.convertSelectionToWork({
+          ...command,
+          decisions: [],
+          openQuestions: []
+        });
+        await workController.refreshList();
+        await actions.openWork(result.conversation.workConversationRef);
+        return result;
       });
-      await workController.refreshList();
-      await actions.openWork(result.conversation.workConversationRef);
-      return result;
     }
   };
 
@@ -193,6 +213,7 @@ export async function startProductWorkbench(context, options = {}) {
     applyEvent,
     EventSourceClass: options.EventSourceClass,
     BroadcastChannelClass: options.BroadcastChannelClass,
+    onError: (error) => entryFailure(error, options.onEntryInvalid),
     onCacheUpdated: () => void reloadCacheIntoStore(cache, store)
   });
 
