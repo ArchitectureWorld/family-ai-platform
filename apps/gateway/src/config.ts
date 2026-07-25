@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import type { AgentAssignmentPreset } from "./agentAssignments.js";
 import type { GatewayMode } from "./app.js";
 
 export interface GatewayConfig {
@@ -8,6 +9,7 @@ export interface GatewayConfig {
   deviceToken: string;
   mode: GatewayMode;
   providerConfigPath: string | null;
+  assignmentPreset: AgentAssignmentPreset | null;
 }
 
 function positiveInteger(raw: string | undefined, fallback: number, name: string): number {
@@ -16,6 +18,16 @@ function positiveInteger(raw: string | undefined, fallback: number, name: string
     throw new Error(`${name} must be a positive integer`);
   }
   return value;
+}
+
+function assignmentPreset(raw: string | undefined): AgentAssignmentPreset | null {
+  if (raw === undefined || raw.length === 0) return null;
+  if (raw !== "hermes-jarvis-yutu-v1") {
+    throw new Error(
+      "GATEWAY_AGENT_ASSIGNMENT_PRESET must be hermes-jarvis-yutu-v1 when provided"
+    );
+  }
+  return raw;
 }
 
 export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
@@ -49,6 +61,7 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     databasePath: resolve(env.GATEWAY_DATABASE_PATH ?? ".runtime/data/gateway.sqlite"),
     deviceToken,
     mode,
-    providerConfigPath: providerConfigRaw.length > 0 ? resolve(providerConfigRaw) : null
+    providerConfigPath: providerConfigRaw.length > 0 ? resolve(providerConfigRaw) : null,
+    assignmentPreset: assignmentPreset(env.GATEWAY_AGENT_ASSIGNMENT_PRESET)
   };
 }
