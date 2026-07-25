@@ -87,10 +87,10 @@ export function registerWebEntryRoutes(
     const parsed = webPairingClaimRequestSchema.safeParse(request.body);
     if (!parsed.success) throw invalidRequest("浏览器配对请求格式无效。");
 
-    const existingDevice = readWebDeviceCookies(request) ?? undefined;
+    const existingDevice = readWebDeviceCookies(request);
     const claimed = input.repository.claimPairing({
       ...parsed.data,
-      existingDevice
+      ...(existingDevice ? { existingDevice } : {})
     });
     const context = authenticatedContext(input.entryAuthenticator, claimed);
     setCookies(reply, setWebEntryCookieHeaders({
