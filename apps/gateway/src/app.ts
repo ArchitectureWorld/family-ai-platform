@@ -39,6 +39,11 @@ import { MobileDeviceSummaryRepository } from "./mobileDeviceSummary.js";
 import { MobilePairingRepository } from "./mobilePairing.js";
 import { registerMobileRoutes } from "./mobileRoutes.js";
 import { GatewayDomainError, MessageService } from "./service.js";
+import { WebEntryRepository } from "./webEntry.js";
+import {
+  registerWebEntryCookieBridge,
+  registerWebEntryRoutes
+} from "./webEntryRoutes.js";
 
 export type GatewayMode = "test" | "development" | "production";
 
@@ -79,7 +84,8 @@ function mobileErrorRoute(request: FastifyRequest): boolean {
     path.startsWith("/api/v1/work-conversations/") ||
     path.startsWith("/api/v1/threads/") ||
     path === "/api/v1/events/stream" ||
-    path.startsWith("/api/v1/sync/");
+    path.startsWith("/api/v1/sync/") ||
+    path.startsWith("/api/v1/web-entry/");
   const deviceAuthorization = request.headers.authorization?.startsWith("Device ") ?? false;
   return (!chatWorkPath && deviceAuthorization) ||
     path.startsWith("/api/v1/mobile/") ||
@@ -174,7 +180,8 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   );
   const chatWorkRepository = new ChatWorkDomainRepository(db, now);
   const mobileDeviceSummaryRepository = new MobileDeviceSummaryRepository(db);
-  const mobileRepository = new MobilePairingRepository(db);
+  const mobileRepository = new MobilePairingRepository(db, { now });
+  const webEntryRepository = new WebEntryRepository(db, now);
   const providerAdapter = options.providerAdapter ?? new FakeProviderAdapter();
   const messageService = new MessageService(repository, providerAdapter);
   const chatWorkProviderRepository = new ChatWorkProviderRepository(db, now);
@@ -206,6 +213,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     return device;
   }
 
+  registerWebEntryCookieBridge(app);
   registerDevelopmentConsole(app, options.mode);
   registerFamilyRoutes(app, {
     familyRepository,
@@ -215,6 +223,11 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   });
   registerMobileRoutes(app, {
     mobileRepository,
+    entryAuthenticator,
+    mode: options.mode
+  });
+  registerWebEntryRoutes(app, {
+    repository: webEntryRepository,
     entryAuthenticator,
     mode: options.mode
   });
