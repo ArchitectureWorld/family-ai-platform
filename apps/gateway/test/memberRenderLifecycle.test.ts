@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const htmlPath = fileURLToPath(new URL("../member-public/index.html", import.meta.url));
 const renderPath = fileURLToPath(new URL("../member-public/render.js", import.meta.url));
 
 describe("Member Web render lifecycle", () => {
@@ -21,8 +20,8 @@ describe("Member Web render lifecycle", () => {
   });
 
   it("lets mobile users select an existing Work without opening the desktop sidebar", () => {
-    const html = readFileSync(htmlPath, "utf8");
-    expect(html).toContain('id="mobileWorkSelect"');
-    expect(html).toContain('aria-label="选择 Work"');
+    const render = readFileSync(renderPath, "utf8");
+    expect(render).toContain('select.id = "mobileWorkSelect"');
+    expect(render).toContain('select.setAttribute("aria-label", "选择 Work")');
   });
 });
