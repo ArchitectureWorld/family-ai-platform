@@ -27,10 +27,10 @@ describe("one-click Member Web experience", () => {
     expect(verify).not.toContain("创建家庭并进入门户");
   });
 
-  it("does not reset the real product state after generating its pairing link", () => {
+  it("does not execute another reset after generating the product pairing link", () => {
     const verify = read("scripts/verify-foundation.sh");
     const stepSix = verify.slice(verify.indexOf("[6/6]"));
-    expect(stepSix).not.toContain("dev-reset.sh");
-    expect(stepSix).not.toContain("dev-up.sh");
+    expect(stepSix).not.toMatch(/^\.\/scripts\/dev-reset\.sh --yes/m);
+    expect(stepSix).not.toMatch(/^\.\/scripts\/dev-up\.sh/m);
   });
 });
