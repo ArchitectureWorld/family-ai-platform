@@ -39,9 +39,12 @@ export interface GatewayTransport {
 export type GatewayTransportErrorKind = 'timeout' | 'unreachable';
 
 export class GatewayTransportError extends Error {
-  constructor(readonly kind: GatewayTransportErrorKind) {
+  readonly kind: GatewayTransportErrorKind;
+
+  constructor(kind: GatewayTransportErrorKind) {
     super(kind);
     this.name = 'GatewayTransportError';
+    this.kind = kind;
   }
 }
 
@@ -53,19 +56,28 @@ export type GatewayClientErrorKind =
   | 'server';
 
 export class GatewayClientError extends Error {
+  readonly kind: GatewayClientErrorKind;
+  readonly serverCode: MobileGatewayErrorCode | undefined;
+
   constructor(
-    readonly kind: GatewayClientErrorKind,
-    readonly serverCode?: MobileGatewayErrorCode
+    kind: GatewayClientErrorKind,
+    serverCode?: MobileGatewayErrorCode
   ) {
     super(kind === 'server' && serverCode ? `${kind}:${serverCode}` : kind);
     this.name = 'GatewayClientError';
+    this.kind = kind;
+    this.serverCode = serverCode;
   }
 }
 
 type ResponseParser<T> = (value: unknown) => T;
 
 export class MobileGatewayClient {
-  constructor(private readonly transport: GatewayTransport) {}
+  private readonly transport: GatewayTransport;
+
+  constructor(transport: GatewayTransport) {
+    this.transport = transport;
+  }
 
   fetchPortalContext(
     profile: GatewayProfile,
