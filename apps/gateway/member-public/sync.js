@@ -8,7 +8,7 @@ function unique(values) {
   return [...new Set(values.filter((value) => typeof value === "string" && value.length > 0))];
 }
 
-export function eventRefreshPlan(event, activeThreadRef = null) {
+export function eventRefreshPlan(event, _activeThreadRef = null) {
   const plan = emptyPlan();
   switch (event?.eventType) {
     case "chat.home.created":
@@ -21,9 +21,7 @@ export function eventRefreshPlan(event, activeThreadRef = null) {
     case "thread.message.created":
     case "thread.provider_turn.failed":
     case "thread.provider_turn.succeeded":
-      if (event.threadRef && (!activeThreadRef || event.threadRef === activeThreadRef)) {
-        plan.threads = [event.threadRef];
-      }
+      if (event.threadRef) plan.threads = [event.threadRef];
       break;
     case "work.progress.updated":
       plan.works = true;
