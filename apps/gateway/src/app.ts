@@ -13,6 +13,11 @@ import {
   FakeProviderAdapter,
   type ProviderAdapter
 } from "@family-ai/provider-adapter-sdk";
+import {
+  AgentAssignmentRepository,
+  agentDefaultsForPreset,
+  type AgentAssignmentPreset
+} from "./agentAssignments.js";
 import { ChatWorkDomainRepository } from "./chatWorkDomain.js";
 import { ChatWorkMessageService } from "./chatWorkMessageService.js";
 import { ChatWorkProviderRepository } from "./chatWorkProvider.js";
@@ -52,6 +57,7 @@ export interface BuildGatewayAppOptions {
   deviceToken: string;
   mode: GatewayMode;
   providerAdapter?: ProviderAdapter;
+  assignmentPreset?: AgentAssignmentPreset | null;
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
   now?: () => Date;
 }
@@ -169,8 +175,14 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     runDevelopmentBootstrap(db, bootstrap);
   }
 
+  const assignmentPreset = options.assignmentPreset ?? null;
+  const assignmentRepository = new AgentAssignmentRepository(db, now);
+  assignmentRepository.applyPreset(assignmentPreset);
+
   const repository = new GatewayRepository(db);
-  const familyRepository = new FamilyDomainRepository(db);
+  const familyRepository = new FamilyDomainRepository(db, {
+    defaults: agentDefaultsForPreset(assignmentPreset)
+  });
   const entryAuthenticator = new EntrySessionAuthenticator(db, familyRepository, now);
   const deviceSyncRepository = new DeviceSyncRepository(db, domainEventStore, now);
   const eventStreamHub = new PersonEventStreamHub(
