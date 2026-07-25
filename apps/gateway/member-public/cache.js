@@ -194,20 +194,36 @@ export async function openMemberCache() {
 
 export async function readBootstrapSnapshot(cache) {
   return cache.transaction(MEMBER_CACHE_STORES, async (transaction) => {
-    const [contextRecord, sequenceRecord, threads, messages, works, progress, drafts, outgoing] =
-      await Promise.all([
-        transaction.get("meta", "context"),
-        transaction.get("meta", "localAppliedSequence"),
-        transaction.getAll("threads"),
-        transaction.getAll("messages"),
-        transaction.getAll("works"),
-        transaction.getAll("progress"),
-        transaction.getAll("drafts"),
-        transaction.getAll("outgoing")
-      ]);
+    const [
+      contextRecord,
+      sequenceRecord,
+      selectedSectionRecord,
+      selectedWorkRecord,
+      threads,
+      messages,
+      works,
+      progress,
+      drafts,
+      outgoing
+    ] = await Promise.all([
+      transaction.get("meta", "context"),
+      transaction.get("meta", "localAppliedSequence"),
+      transaction.get("meta", "selectedSection"),
+      transaction.get("meta", "selectedWorkRef"),
+      transaction.getAll("threads"),
+      transaction.getAll("messages"),
+      transaction.getAll("works"),
+      transaction.getAll("progress"),
+      transaction.getAll("drafts"),
+      transaction.getAll("outgoing")
+    ]);
     return {
       context: contextRecord?.value ?? null,
       localAppliedSequence: Number(sequenceRecord?.value ?? 0),
+      selectedSection: selectedSectionRecord?.value === "work" ? "work" : "chat",
+      selectedWorkRef: typeof selectedWorkRecord?.value === "string"
+        ? selectedWorkRecord.value
+        : null,
       threads,
       messages: sortMessages(messages),
       works: sortWorks(works),
