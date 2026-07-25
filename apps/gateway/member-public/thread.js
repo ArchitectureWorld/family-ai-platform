@@ -1,7 +1,6 @@
 import {
   mergeThreadPage,
   removeOutgoing,
-  replaceThreadMessages,
   saveDraft as persistDraft,
   saveOutgoing
 } from "./cache.js";
@@ -94,16 +93,20 @@ export function createThreadController(input) {
   }
 
   async function applyPage(threadRef, page, mode) {
-    if (mode === "replace") await replaceThreadMessages(cache, threadRef, page.messages);
-    else await mergeThreadPage(cache, threadRef, page.messages);
+    await mergeThreadPage(cache, threadRef, page.messages);
 
     const before = store.getState();
     const existing = before.messagesByThread?.[threadRef] ?? [];
-    const messages = mode === "replace"
-      ? mergeThreadMessages([], page.messages)
-      : mergeThreadMessages(existing, page.messages);
+    const messages = mergeThreadMessages(existing, page.messages);
     const outgoing = reconcileOutgoing(before.outgoing ?? [], messages);
     await persistReconciledOutgoing(before.outgoing ?? [], outgoing);
+
+    const pagination = before.paginationByThread ?? {};
+    const hasExistingCursor = Object.prototype.hasOwnProperty.call(pagination, threadRef);
+    const nextBeforeSequence = mode === "earlier" || !hasExistingCursor
+      ? page.nextBeforeSequence ?? null
+      : pagination[threadRef];
+
     store.setState((current) => ({
       ...current,
       messagesByThread: {
@@ -112,7 +115,7 @@ export function createThreadController(input) {
       },
       paginationByThread: {
         ...(current.paginationByThread ?? {}),
-        [threadRef]: page.nextBeforeSequence ?? null
+        [threadRef]: nextBeforeSequence
       },
       outgoing
     }));
@@ -121,14 +124,14 @@ export function createThreadController(input) {
 
   async function loadLatest(threadRef, limit = 100) {
     const page = await api.getThreadMessages(threadRef, { limit });
-    return applyPage(threadRef, page, "replace");
+    return applyPage(threadRef, page, "latest");
   }
 
   async function loadEarlier(threadRef, limit = 100) {
     const beforeSequence = store.getState().paginationByThread?.[threadRef];
     if (beforeSequence === null || beforeSequence === undefined) return null;
     const page = await api.getThreadMessages(threadRef, { beforeSequence, limit });
-    return applyPage(threadRef, page, "merge");
+    return applyPage(threadRef, page, "earlier");
   }
 
   async function saveDraft(threadRef, text) {
