@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_DIR="$ROOT_DIR/.runtime"
 TOKEN_FILE="$RUNTIME_DIR/config/device-token"
 COMPOSE_ENV="$RUNTIME_DIR/config/compose.env"
+MEMBER_WEB_URL_FILE="$RUNTIME_DIR/config/member-web-url"
 REPORT_DIR="$ROOT_DIR/docs/acceptance/runtime"
 BASE_URL="http://127.0.0.1:8790"
 DEVICE_REF="device:test"
@@ -39,6 +40,10 @@ json_get() {
       process.stdout.write(typeof value === "object" ? JSON.stringify(value) : String(value));
     });
   ' "$path"
+}
+
+urlencode() {
+  compose exec -T gateway node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$1"
 }
 
 request() {
@@ -101,7 +106,7 @@ request GET /api/v1/onboarding/status 200 "" public
 record "Empty formal Family domain" "initialized=false"
 
 request POST /api/v1/onboarding/family 201 \
-  '{"familyName":"自动验收家庭","ownerName":"自动验收管理员","deviceName":"自动验收电脑"}' bootstrap
+  '{"familyName":"自动体验家庭","ownerName":"自动体验管理员","deviceName":"自动体验电脑"}' bootstrap
 FAMILY_REF="$(json_get "$RESPONSE_BODY" family.familyRef)"
 PERSON_REF="$(json_get "$RESPONSE_BODY" owner.personRef)"
 MANAGED_DEVICE_REF="$(json_get "$RESPONSE_BODY" device.deviceRef)"
@@ -134,7 +139,7 @@ request GET /api/v1/portal/context 200 "" personal
 record "Personal route" "agent:personal-assistant"
 
 request POST /api/v1/admin/members 201 \
-  '{"displayName":"自动验收孩子","familyRole":"child"}' admin
+  '{"displayName":"自动体验孩子","familyRole":"child"}' admin
 NEW_PERSON_REF="$(json_get "$RESPONSE_BODY" member.personRef)"
 [[ "$NEW_PERSON_REF" == person:* ]] || fail "new member reference invalid"
 [[ "$(json_get "$RESPONSE_BODY" member.entryStatus)" == "unclaimed" ]] || fail "new member must not inherit current device session"
@@ -154,9 +159,19 @@ request GET /api/v1/portal/context 200 "" personal
 [[ "$(json_get "$RESPONSE_BODY" entrySessionRef)" == "$PERSONAL_SESSION_REF" ]] || fail "Personal session did not survive restart"
 record "Restart recovery" "both entry sessions restored"
 
+request POST "/api/v1/admin/members/$PERSON_REF/pairing-codes" 201 "" admin
+PAIRING_REF="$(json_get "$RESPONSE_BODY" pairing.pairingRef)"
+PAIRING_CODE="$(json_get "$RESPONSE_BODY" pairing.code)"
+PAIRING_EXPIRES_AT="$(json_get "$RESPONSE_BODY" pairing.expiresAt)"
+MEMBER_WEB_URL="$BASE_URL/member/?pairingRef=$(urlencode "$PAIRING_REF")&code=$(urlencode "$PAIRING_CODE")"
+umask 077
+printf '%s\n' "$MEMBER_WEB_URL" > "$MEMBER_WEB_URL_FILE"
+chmod 600 "$MEMBER_WEB_URL_FILE"
+record "Normal product workbench handoff" "real Web Device pairing link generated"
+
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 {
-  printf '# Family Onboarding Runtime Acceptance\n\n'
+  printf '# Family Onboarding Runtime Verification\n\n'
   printf -- '- Started: `%s`\n' "$STARTED_AT"
   printf -- '- Finished: `%s`\n' "$FINISHED_AT"
   printf -- '- Family: `%s`\n' "$FAMILY_REF"
@@ -164,8 +179,11 @@ FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf -- '- Result: **PASS**\n\n'
   printf '| Step | Result | Evidence |\n|---|---|---|\n'
   printf '%s\n' "${STEPS[@]}"
-  printf '\nThe report intentionally excludes bootstrap Tokens, entry Session Tokens, Authorization headers, SQL details, host paths, and Provider internals.\n'
+  printf '\nThe report intentionally excludes pairing codes, product deep links, bootstrap Tokens, entry Session Tokens, Authorization headers, SQL details, host paths, and Provider internals.\n'
 } > "$REPORT_FILE"
 
-unset ADMIN_TOKEN PERSONAL_TOKEN DEVICE_TOKEN
-printf '\nAll Family onboarding acceptance steps passed.\nReport: %s\n' "$REPORT_FILE"
+printf '\nVerified Family state is ready in the real Member Web product.\n'
+printf 'Product URL (expires %s):\n%s\n' "$PAIRING_EXPIRES_AT" "$MEMBER_WEB_URL"
+printf 'Runtime report: %s\n' "$REPORT_FILE"
+
+unset ADMIN_TOKEN PERSONAL_TOKEN DEVICE_TOKEN PAIRING_CODE

@@ -1,0 +1,33 @@
+{
+  "protocolVersion": 1,
+  "context": {
+    "protocolVersion": 1,
+    "audience": "personal",
+    "entrySessionRef": "entry-session:web-alice-0001",
+    "entryBindingRef": "entry-binding:web-alice-0001",
+    "family": {
+      "familyRef": "family:alice-home",
+      "displayName": "Alice 的家庭"
+    },
+    "person": {
+      "personRef": "person:alice",
+      "displayName": "Alice"
+    },
+    "membership": {
+      "familyRole": "owner"
+    },
+    "device": {
+      "deviceRef": "device:web-alice",
+      "displayName": "Alice 的浏览器",
+      "terminalType": "web",
+      "platform": "browser"
+    },
+    "agent": {
+      "assignmentRef": "assignment:alice-personal-assistant",
+      "assignmentType": "personal_assistant",
+      "agentRef": "agent:personal-assistant",
+      "displayName": "个人助理",
+      "providerProfileRef": "provider-profile:fake-local"
+    }
+  }
+}

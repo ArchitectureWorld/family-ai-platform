@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "pairingRef": "pairing:web-alice-0001",
+  "code": "ABCD-EFGH",
+  "installationId": "b53f0490-99f1-4d6c-9a95-921a3d76a8c3",
+  "device": {
+    "displayName": "Alice 的浏览器",
+    "browser": "Chrome 140",
+    "operatingSystem": "macOS 15",
+    "appVersion": "0.1.0"
+  }
+}

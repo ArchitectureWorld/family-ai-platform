@@ -129,3 +129,4 @@ export type AdapterHealth = z.infer<typeof adapterHealthSchema>;
 export * from "./mobileEntry.js";
 export * from "./chatWork.js";
 export * from "./sync.js";
+export * from "./webEntry.js";
