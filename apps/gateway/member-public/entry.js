@@ -55,6 +55,7 @@ async function showWorkspace(context) {
   state.context = context;
   $("entryView").classList.add("hidden");
   $("workspaceView").classList.remove("hidden");
+  $("resumeBrowserButton").classList.add("hidden");
   $("personName").textContent = context.person.displayName;
   $("familyName").textContent = context.family.displayName;
   $("personAvatar").textContent = context.person.displayName.trim().slice(0, 1) || "F";
@@ -67,6 +68,7 @@ function clearPairingLocation() {
   const url = new URL(location.href);
   url.searchParams.delete("pairingRef");
   url.searchParams.delete("code");
+  state.pairingRef = null;
   history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
@@ -136,10 +138,14 @@ async function claimPairing(code, pairingRef = null) {
   }
 }
 
-function pairingPrompt(message = "输入管理员提供的一次性配对码。") {
+function pairingPrompt(
+  message = "输入管理员提供的一次性配对码。",
+  allowDeviceRecovery = false
+) {
   showEntry();
   showOnly("pairForm");
-  $("pairForm").querySelector("p").textContent = message;
+  $("pairingMessage").textContent = message;
+  $("resumeBrowserButton").classList.toggle("hidden", !allowDeviceRecovery);
   setConnection("offline", "等待建立入口");
   $("pairingCode").focus();
 }
@@ -226,6 +232,7 @@ $("pairForm").addEventListener("submit", async (event) => {
     await claimPairing(code, state.pairingRef);
   } catch (error) {
     if (["PAIRING_INVALID", "PAIRING_EXPIRED", "PAIRING_CONSUMED"].includes(error.code)) {
+      clearPairingLocation();
       pairingPrompt(error.message);
       return;
     }
@@ -235,6 +242,25 @@ $("pairForm").addEventListener("submit", async (event) => {
 
 $("retryButton").addEventListener("click", () => void restore());
 
+$("resumeBrowserButton").addEventListener("click", async () => {
+  if (state.busy) return;
+  state.busy = true;
+  showOnly("loadingState");
+  setConnection("", "正在恢复个人入口");
+  try {
+    const renewed = await renewSession();
+    await showWorkspace(renewed.context);
+  } catch (error) {
+    if ([401, 403].includes(error.status)) {
+      pairingPrompt("此浏览器无法恢复入口，请使用新的配对码重新建立。");
+      return;
+    }
+    showError(error);
+  } finally {
+    state.busy = false;
+  }
+});
+
 $("logoutButton").addEventListener("click", async () => {
   if (state.busy) return;
   state.busy = true;
@@ -242,7 +268,7 @@ $("logoutButton").addEventListener("click", async () => {
     await api("/api/v1/web-entry/logout", { method: "POST" });
     await stopProductWorkbench();
     state.context = null;
-    pairingPrompt("已退出当前会话。再次进入时会使用这台浏览器恢复个人入口。");
+    pairingPrompt("已退出当前会话。可以使用这台浏览器恢复个人入口，或输入新的配对码。", true);
   } catch (error) {
     showError(error);
   } finally {
