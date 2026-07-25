@@ -1,0 +1,26 @@
+name: Temporary Mobile Source Export
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/temp-mobile-source-export.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: mobile-source-snapshot
+          path: |
+            apps/gateway/src/mobilePairing.ts
+            packages/contracts/src/mobileEntry.ts
+          if-no-files-found: error
+          retention-days: 1
