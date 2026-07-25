@@ -4,15 +4,24 @@ import { loadGatewayConfig } from "../src/config.js";
 const token = "configuration-test-token-with-enough-length";
 
 describe("Gateway configuration", () => {
-  it("defaults to development loopback and a disposable runtime database", () => {
+  it("defaults to development loopback and no explicit Provider runtime file", () => {
     const config = loadGatewayConfig({ GATEWAY_DEVICE_TOKEN: token });
     expect(config).toMatchObject({
       host: "127.0.0.1",
       port: 8790,
       mode: "development",
-      deviceToken: token
+      deviceToken: token,
+      providerConfigPath: null
     });
     expect(config.databasePath).toContain(".runtime/data/gateway.sqlite");
+  });
+
+  it("resolves an optional development Provider config path", () => {
+    const config = loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      GATEWAY_PROVIDER_CONFIG_PATH: ".runtime/config/providers.json"
+    });
+    expect(config.providerConfigPath).toMatch(/\.runtime\/config\/providers\.json$/);
   });
 
   it("rejects non-loopback binding outside the approved container profile", () => {
@@ -47,12 +56,26 @@ describe("Gateway configuration", () => {
     );
   });
 
-  it("rejects production until an explicit production runtime composition exists", () => {
+  it("requires an explicit Provider runtime file in production", () => {
     expect(() =>
       loadGatewayConfig({
         GATEWAY_MODE: "production",
-        GATEWAY_HOST: "127.0.0.1"
+        GATEWAY_HOST: "127.0.0.1",
+        GATEWAY_DEVICE_TOKEN: token
       })
-    ).toThrow("production runtime composition");
+    ).toThrow("GATEWAY_PROVIDER_CONFIG_PATH");
+  });
+
+  it("accepts production when the runtime Provider path is explicit", () => {
+    const config = loadGatewayConfig({
+      GATEWAY_MODE: "production",
+      GATEWAY_HOST: "127.0.0.1",
+      GATEWAY_DEVICE_TOKEN: token,
+      GATEWAY_PROVIDER_CONFIG_PATH: ".runtime/config/providers.json"
+    });
+    expect(config).toMatchObject({
+      mode: "production",
+      providerConfigPath: expect.stringMatching(/providers\.json$/)
+    });
   });
 });

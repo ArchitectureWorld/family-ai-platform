@@ -8,6 +8,7 @@ DATA_DIR="$RUNTIME_DIR/data"
 TOKEN_FILE="$CONFIG_DIR/device-token"
 GATEWAY_ENV="$CONFIG_DIR/gateway.env"
 COMPOSE_ENV="$CONFIG_DIR/compose.env"
+PROVIDER_CONFIG_FILE="$CONFIG_DIR/providers.json"
 DATABASE_FILE="$DATA_DIR/gateway.sqlite"
 BASE_URL="http://127.0.0.1:8790"
 SERVICE_ID="family-ai-gateway-foundation"
@@ -48,6 +49,9 @@ GATEWAY_MODE=development
 GATEWAY_PORT=8790
 GATEWAY_DEVICE_TOKEN=$DEVICE_TOKEN
 EOF
+if [[ -f "$PROVIDER_CONFIG_FILE" ]]; then
+  printf '%s\n' 'GATEWAY_PROVIDER_CONFIG_PATH=/app/.runtime/config/providers.json' >> "$GATEWAY_ENV"
+fi
 chmod 600 "$GATEWAY_ENV"
 
 cat > "$COMPOSE_ENV" <<EOF

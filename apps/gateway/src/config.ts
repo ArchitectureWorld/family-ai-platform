@@ -7,6 +7,7 @@ export interface GatewayConfig {
   databasePath: string;
   deviceToken: string;
   mode: GatewayMode;
+  providerConfigPath: string | null;
 }
 
 function positiveInteger(raw: string | undefined, fallback: number, name: string): number {
@@ -21,12 +22,6 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
   const mode = (env.GATEWAY_MODE ?? "development") as GatewayMode;
   if (!("test development production".split(" ") as GatewayMode[]).includes(mode)) {
     throw new Error("GATEWAY_MODE must be test, development, or production");
-  }
-  if (mode === "production") {
-    throw new Error(
-      "GATEWAY_MODE=production requires an explicit production runtime composition; " +
-        "the development binary must not bootstrap test identities or a Fake Provider."
-    );
   }
 
   const host = env.GATEWAY_HOST ?? "127.0.0.1";
@@ -43,11 +38,17 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     throw new Error("GATEWAY_DEVICE_TOKEN must contain at least 24 characters");
   }
 
+  const providerConfigRaw = env.GATEWAY_PROVIDER_CONFIG_PATH?.trim() ?? "";
+  if (mode === "production" && providerConfigRaw.length === 0) {
+    throw new Error("GATEWAY_PROVIDER_CONFIG_PATH is required in production");
+  }
+
   return {
     host,
     port,
     databasePath: resolve(env.GATEWAY_DATABASE_PATH ?? ".runtime/data/gateway.sqlite"),
     deviceToken,
-    mode
+    mode,
+    providerConfigPath: providerConfigRaw.length > 0 ? resolve(providerConfigRaw) : null
   };
 }

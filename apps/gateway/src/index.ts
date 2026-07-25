@@ -1,11 +1,17 @@
 import { buildGatewayApp } from "./app.js";
 import { loadGatewayConfig } from "./config.js";
+import { loadRuntimeProviderAdapter } from "./providerRuntime.js";
 
 const config = loadGatewayConfig();
+const providerAdapter = loadRuntimeProviderAdapter({
+  mode: config.mode,
+  providerConfigPath: config.providerConfigPath
+});
 const app = await buildGatewayApp({
   databasePath: config.databasePath,
   deviceToken: config.deviceToken,
-  mode: config.mode
+  mode: config.mode,
+  providerAdapter
 });
 
 const shutdown = async (signal: string) => {

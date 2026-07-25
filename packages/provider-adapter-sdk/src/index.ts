@@ -100,3 +100,6 @@ export class FakeProviderAdapter implements ProviderAdapter {
     return succeeded;
   }
 }
+
+export * from "./hermes.js";
+export * from "./router.js";
