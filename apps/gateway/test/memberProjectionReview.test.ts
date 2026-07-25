@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { eventRefreshPlan } from "../member-public/sync.js";
-import { outgoingPresentation } from "../member-public/thread.js";
+import {
+  outgoingPresentation,
+  retryPayload
+} from "../member-public/thread.js";
 
 const acceptedMessage = {
   messageRef: "message:person-0001",
@@ -41,7 +44,12 @@ describe("Member Web projection review boundaries", () => {
       threadRef: "thread:work-0001",
       clientMessageId: "web:work-message-0001",
       occurredAt: "2026-07-25T10:00:00.000Z",
-      content: acceptedMessage.content,
+      requestContent: acceptedMessage.content,
+      content: {
+        type: "text",
+        text: "个人助理回复失败，可以重试。",
+        language: "zh-CN"
+      },
       status: "failed",
       error: {
         code: "PROVIDER_FAILED",
@@ -56,11 +64,20 @@ describe("Member Web projection review boundaries", () => {
       text: "个人助理回复失败，可以重试。",
       accepted: true
     });
-    expect(outgoingPresentation({ ...failed, clientMessageId: "web:not-accepted" }, [acceptedMessage]))
-      .toEqual({
-        kind: "send_failure",
-        text: "请继续推进。",
-        accepted: false
-      });
+    expect(outgoingPresentation({
+      ...failed,
+      clientMessageId: "web:not-accepted",
+      content: acceptedMessage.content
+    }, [acceptedMessage])).toEqual({
+      kind: "send_failure",
+      text: "请继续推进。",
+      accepted: false
+    });
+    expect(retryPayload(failed)).toEqual({
+      protocolVersion: 1,
+      clientMessageId: "web:work-message-0001",
+      occurredAt: "2026-07-25T10:00:00.000Z",
+      content: acceptedMessage.content
+    });
   });
 });
