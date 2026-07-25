@@ -61,6 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           npm run test -w @family-ai/contracts -- mobileEntry.test.ts mobileEntryPlatform.test.ts
+          npm run build:adapter-sdk
           npm run test -w @family-ai/gateway -- mobileHarmonyPairing.test.ts mobileRoutes.test.ts
       - name: Remove temporary workflows and push implementation
         env:
