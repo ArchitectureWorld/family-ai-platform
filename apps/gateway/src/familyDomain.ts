@@ -1,4 +1,9 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  DEVELOPMENT_AGENT_DEFAULTS,
+  ensureAgentTarget,
+  type FamilyAgentDefaults
+} from "./agentAssignments.js";
 import type { GatewayDatabase } from "./database.js";
 import { sha256 } from "./database.js";
 import { GatewayDomainError } from "./service.js";
@@ -6,10 +11,11 @@ import { GatewayDomainError } from "./service.js";
 export type FamilyRole = "owner" | "adult" | "child" | "elder";
 export type EntryAudience = "family_admin" | "personal";
 
-const FAMILY_MANAGER_AGENT_REF = "agent:family-manager";
-const PERSONAL_ASSISTANT_AGENT_REF = "agent:personal-assistant";
-const DEVELOPMENT_PROVIDER_PROFILE_REF = "provider-profile:fake-local";
 const ENTRY_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+
+export interface FamilyDomainRepositoryOptions {
+  defaults?: FamilyAgentDefaults;
+}
 
 export interface EntryCredential {
   entryBindingRef: string;
@@ -120,7 +126,14 @@ function mapMember(row: Record<string, unknown>): FamilyMember {
 }
 
 export class FamilyDomainRepository {
-  constructor(private readonly db: GatewayDatabase) {}
+  private readonly defaults: FamilyAgentDefaults;
+
+  constructor(
+    private readonly db: GatewayDatabase,
+    options: FamilyDomainRepositoryOptions = {}
+  ) {
+    this.defaults = options.defaults ?? DEVELOPMENT_AGENT_DEFAULTS;
+  }
 
   isInitialized(): boolean {
     const row = this.db.prepare("SELECT COUNT(*) AS count FROM families").get() as {
@@ -153,8 +166,14 @@ export class FamilyDomainRepository {
     const deviceBindingRef = `device-binding:${randomUUID()}`;
     const familyManagerAssignmentRef = `assignment:${randomUUID()}`;
     const personalAssistantAssignmentRef = `assignment:${randomUUID()}`;
-    const admin = createSessionMaterial("family_admin", FAMILY_MANAGER_AGENT_REF);
-    const personal = createSessionMaterial("personal", PERSONAL_ASSISTANT_AGENT_REF);
+    const admin = createSessionMaterial(
+      "family_admin",
+      this.defaults.familyManager.agentRef
+    );
+    const personal = createSessionMaterial(
+      "personal",
+      this.defaults.ownerAssistant.agentRef
+    );
 
     this.db.transaction(() => {
       const existing = this.db.prepare("SELECT 1 FROM families LIMIT 1").get();
@@ -168,17 +187,9 @@ export class FamilyDomainRepository {
         );
       }
 
-      this.db.prepare(
-        `INSERT OR IGNORE INTO provider_profiles
-         (provider_profile_ref, provider_kind, display_name, created_at)
-         VALUES(?, 'fake', 'Local Fake Provider', ?)`
-      ).run(DEVELOPMENT_PROVIDER_PROFILE_REF, now);
-      this.db.prepare(
-        "INSERT OR IGNORE INTO agents(agent_ref, display_name, created_at) VALUES(?, ?, ?)"
-      ).run(FAMILY_MANAGER_AGENT_REF, "家庭管家", now);
-      this.db.prepare(
-        "INSERT OR IGNORE INTO agents(agent_ref, display_name, created_at) VALUES(?, ?, ?)"
-      ).run(PERSONAL_ASSISTANT_AGENT_REF, "个人助理", now);
+      ensureAgentTarget(this.db, this.defaults.familyManager, now);
+      ensureAgentTarget(this.db, this.defaults.ownerAssistant, now);
+      ensureAgentTarget(this.db, this.defaults.memberAssistant, now);
 
       this.db.prepare(
         `INSERT INTO families(family_ref, display_name, status, created_at, updated_at)
@@ -213,8 +224,8 @@ export class FamilyDomainRepository {
       ).run(
         familyManagerAssignmentRef,
         familyRef,
-        FAMILY_MANAGER_AGENT_REF,
-        DEVELOPMENT_PROVIDER_PROFILE_REF,
+        this.defaults.familyManager.agentRef,
+        this.defaults.familyManager.providerProfileRef,
         now
       );
       this.db.prepare(
@@ -225,8 +236,8 @@ export class FamilyDomainRepository {
       ).run(
         personalAssistantAssignmentRef,
         personRef,
-        PERSONAL_ASSISTANT_AGENT_REF,
-        DEVELOPMENT_PROVIDER_PROFILE_REF,
+        this.defaults.ownerAssistant.agentRef,
+        this.defaults.ownerAssistant.providerProfileRef,
         now
       );
 
@@ -395,6 +406,7 @@ export class FamilyDomainRepository {
           "没有找到这个家庭。"
         );
       }
+      ensureAgentTarget(this.db, this.defaults.memberAssistant, now);
       this.db.prepare(
         `INSERT INTO persons(person_ref, display_name, status, created_at, updated_at)
          VALUES(?, ?, 'active', ?, ?)`
@@ -412,8 +424,8 @@ export class FamilyDomainRepository {
       ).run(
         assignmentRef,
         personRef,
-        PERSONAL_ASSISTANT_AGENT_REF,
-        DEVELOPMENT_PROVIDER_PROFILE_REF,
+        this.defaults.memberAssistant.agentRef,
+        this.defaults.memberAssistant.providerProfileRef,
         now
       );
     })();
