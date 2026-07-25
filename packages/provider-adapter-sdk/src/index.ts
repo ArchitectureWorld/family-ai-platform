@@ -102,3 +102,4 @@ export class FakeProviderAdapter implements ProviderAdapter {
 }
 
 export * from "./hermes.js";
+export * from "./router.js";
