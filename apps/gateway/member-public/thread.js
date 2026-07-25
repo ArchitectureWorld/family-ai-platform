@@ -1,3 +1,11 @@
+import {
+  mergeThreadPage,
+  removeOutgoing,
+  replaceThreadMessages,
+  saveDraft as persistDraft,
+  saveOutgoing
+} from "./cache.js";
+
 function threadSequence(value) {
   const sequence = Number(value?.threadSequence);
   return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : Number.MAX_SAFE_INTEGER;
@@ -42,5 +50,163 @@ export function reconcileOutgoing(outgoing = [], authoritativeMessages = []) {
       .map((message) => message?.clientMessageId)
       .filter((value) => typeof value === "string")
   );
-  return outgoing.filter((message) => !acceptedIds.has(message.clientMessageId));
+  return outgoing.filter((message) =>
+    message.status === "failed" || !acceptedIds.has(message.clientMessageId)
+  );
+}
+
+function errorProjection(error) {
+  return {
+    status: Number(error?.status ?? 0),
+    code: typeof error?.code === "string" ? error.code : "GATEWAY_UNAVAILABLE",
+    category: typeof error?.category === "string" ? error.category : "internal",
+    message: typeof error?.message === "string" ? error.message : "消息发送失败。",
+    retryable: Boolean(error?.retryable)
+  };
+}
+
+function setOutgoing(store, outgoing) {
+  store.setState((current) => ({ ...current, outgoing: structuredClone(outgoing) }));
+}
+
+function updateDraftState(store, threadRef, text) {
+  store.setState((current) => {
+    const drafts = { ...(current.drafts ?? {}) };
+    if (text.length === 0) delete drafts[threadRef];
+    else drafts[threadRef] = text;
+    return { ...current, drafts };
+  });
+}
+
+export function createThreadController(input) {
+  const api = input.api;
+  const cache = input.cache;
+  const store = input.store;
+  const isOnline = input.isOnline ?? (() => typeof navigator === "undefined" || navigator.onLine);
+  const now = input.now ?? (() => new Date());
+  const uuid = input.uuid ?? (() => crypto.randomUUID());
+
+  async function persistReconciledOutgoing(previous, next) {
+    const nextIds = new Set(next.map((item) => item.clientMessageId));
+    for (const item of previous) {
+      if (!nextIds.has(item.clientMessageId)) await removeOutgoing(cache, item.clientMessageId);
+    }
+  }
+
+  async function applyPage(threadRef, page, mode) {
+    if (mode === "replace") await replaceThreadMessages(cache, threadRef, page.messages);
+    else await mergeThreadPage(cache, threadRef, page.messages);
+
+    const before = store.getState();
+    const existing = before.messagesByThread?.[threadRef] ?? [];
+    const messages = mode === "replace"
+      ? mergeThreadMessages([], page.messages)
+      : mergeThreadMessages(existing, page.messages);
+    const outgoing = reconcileOutgoing(before.outgoing ?? [], messages);
+    await persistReconciledOutgoing(before.outgoing ?? [], outgoing);
+    store.setState((current) => ({
+      ...current,
+      messagesByThread: {
+        ...(current.messagesByThread ?? {}),
+        [threadRef]: messages
+      },
+      paginationByThread: {
+        ...(current.paginationByThread ?? {}),
+        [threadRef]: page.nextBeforeSequence ?? null
+      },
+      outgoing
+    }));
+    return page;
+  }
+
+  async function loadLatest(threadRef, limit = 100) {
+    const page = await api.getThreadMessages(threadRef, { limit });
+    return applyPage(threadRef, page, "replace");
+  }
+
+  async function loadEarlier(threadRef, limit = 100) {
+    const beforeSequence = store.getState().paginationByThread?.[threadRef];
+    if (beforeSequence === null || beforeSequence === undefined) return null;
+    const page = await api.getThreadMessages(threadRef, { beforeSequence, limit });
+    return applyPage(threadRef, page, "merge");
+  }
+
+  async function saveDraft(threadRef, text) {
+    await persistDraft(cache, threadRef, text);
+    updateDraftState(store, threadRef, text);
+  }
+
+  async function transmit(outgoing) {
+    try {
+      await api.sendThreadMessage(outgoing.threadRef, retryPayload(outgoing));
+      await loadLatest(outgoing.threadRef);
+      await removeOutgoing(cache, outgoing.clientMessageId);
+      const remaining = (store.getState().outgoing ?? []).filter(
+        (item) => item.clientMessageId !== outgoing.clientMessageId
+      );
+      setOutgoing(store, remaining);
+      await saveDraft(outgoing.threadRef, "");
+      return { status: "succeeded" };
+    } catch (error) {
+      const failed = {
+        ...outgoing,
+        status: "failed",
+        error: errorProjection(error)
+      };
+      await saveOutgoing(cache, failed);
+      const current = store.getState().outgoing ?? [];
+      const next = [
+        ...current.filter((item) => item.clientMessageId !== failed.clientMessageId),
+        failed
+      ];
+      setOutgoing(store, next);
+      return { status: "failed", error: failed.error };
+    }
+  }
+
+  async function send(threadRef, text, language = undefined) {
+    if (typeof text !== "string" || text.trim().length === 0) {
+      throw new Error("MESSAGE_TEXT_REQUIRED");
+    }
+    if (!isOnline()) {
+      await saveDraft(threadRef, text);
+      return { status: "draft" };
+    }
+    const outgoing = createOutgoingMessage({
+      threadRef,
+      clientMessageId: `web:${uuid()}`,
+      occurredAt: now().toISOString(),
+      content: {
+        type: "text",
+        text,
+        ...(language ? { language } : {})
+      }
+    });
+    await saveOutgoing(cache, outgoing);
+    setOutgoing(store, [...(store.getState().outgoing ?? []), outgoing]);
+    return transmit(outgoing);
+  }
+
+  async function retry(clientMessageId) {
+    const existing = (store.getState().outgoing ?? []).find(
+      (item) => item.clientMessageId === clientMessageId
+    );
+    if (!existing) throw new Error("OUTGOING_MESSAGE_NOT_FOUND");
+    if (!isOnline()) return { status: "draft" };
+    const sending = { ...existing, status: "sending", error: null };
+    await saveOutgoing(cache, sending);
+    setOutgoing(store, (store.getState().outgoing ?? []).map((item) =>
+      item.clientMessageId === clientMessageId ? sending : item
+    ));
+    return transmit(sending);
+  }
+
+  return {
+    loadLatest,
+    loadEarlier,
+    refresh: loadLatest,
+    saveDraft,
+    send,
+    retry
+  };
 }
