@@ -11,7 +11,8 @@ const app = await buildGatewayApp({
   databasePath: config.databasePath,
   deviceToken: config.deviceToken,
   mode: config.mode,
-  providerAdapter
+  providerAdapter,
+  assignmentPreset: config.assignmentPreset
 });
 
 const shutdown = async (signal: string) => {
