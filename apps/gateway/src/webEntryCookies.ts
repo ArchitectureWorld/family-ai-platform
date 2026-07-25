@@ -99,7 +99,9 @@ export function parseCookieHeader(header: string | string[] | undefined): Record
 
 function bridgePath(url: string): boolean {
   const path = url.split("?", 1)[0] ?? url;
-  return path === "/api/v1/portal/context" ||
+  return path === "/api/v1/web-entry/context" ||
+    path === "/api/v1/web-entry/logout" ||
+    path === "/api/v1/portal/context" ||
     path === "/api/v1/chat" ||
     path.startsWith("/api/v1/chat/") ||
     path === "/api/v1/work-conversations" ||
