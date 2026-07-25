@@ -1,3 +1,4 @@
+export * from './credentialStore.ts';
 export * from './credentials.ts';
 export * from './device.ts';
 export * from './endpoints.ts';
@@ -5,6 +6,7 @@ export * from './gatewayClient.ts';
 export * from './gatewayUrl.ts';
 export * from './pairing.ts';
 export * from './requests.ts';
+export * from './sessionManager.ts';
 export * from './state.ts';
 export * from './types.ts';
 export * from './validation.ts';
