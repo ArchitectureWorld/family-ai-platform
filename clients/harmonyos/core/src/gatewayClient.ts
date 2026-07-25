@@ -3,6 +3,7 @@ import { validateGatewayBaseUrl } from './gatewayUrl.ts';
 import {
   buildDeviceRequest,
   buildEntryRequest,
+  type DeviceAuthorization,
   type GatewayRequest
 } from './requests.ts';
 import type {
@@ -21,11 +22,6 @@ import {
 
 export interface GatewayProfile {
   baseURL: string;
-}
-
-export interface DeviceAuthorization {
-  deviceRef: string;
-  deviceCredential: string;
 }
 
 export interface GatewayTransportResponse {
