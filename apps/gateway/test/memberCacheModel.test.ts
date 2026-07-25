@@ -4,12 +4,15 @@ import { describe, expect, it } from "vitest";
 import {
   MEMBER_CACHE_STORES,
   applyEventTransaction,
+  clearMemberCache,
   createMemoryCache,
   mergeThreadPage,
+  openMemberCache,
   readBootstrapSnapshot,
   removeOutgoing,
   replaceThreadMessages,
   saveDraft,
+  saveMeta,
   saveOutgoing,
   saveProgress,
   saveWorks
@@ -18,7 +21,7 @@ import {
 const sourcePath = fileURLToPath(new URL("../member-public/cache.js", import.meta.url));
 
 describe("Member Web cache model", () => {
-  it("defines the disposable product projection stores", () => {
+  it("defines the disposable product projection stores and browser opener", () => {
     expect(MEMBER_CACHE_STORES).toEqual([
       "meta",
       "threads",
@@ -28,6 +31,8 @@ describe("Member Web cache model", () => {
       "drafts",
       "outgoing"
     ]);
+    expect(openMemberCache).toBeTypeOf("function");
+    expect(readFileSync(sourcePath, "utf8")).toContain("indexedDB.open");
   });
 
   it("commits event writes and localAppliedSequence in one transaction", async () => {
@@ -118,9 +123,11 @@ describe("Member Web cache model", () => {
       threadRef: "thread:work-0001",
       status: "failed"
     });
+    await saveMeta(cache, "context", { person: { displayName: "Alice" } });
 
     let snapshot = await readBootstrapSnapshot(cache);
     expect(snapshot).toMatchObject({
+      context: { person: { displayName: "Alice" } },
       works: [{ workConversationRef: "work:0001" }],
       progress: [{ workConversationRef: "work:0001" }],
       drafts: [{ threadRef: "thread:work-0001", text: "离线草稿" }],
@@ -130,6 +137,17 @@ describe("Member Web cache model", () => {
     await removeOutgoing(cache, "web:outgoing-0001");
     snapshot = await readBootstrapSnapshot(cache);
     expect(snapshot.outgoing).toEqual([]);
+
+    await clearMemberCache(cache);
+    expect(await readBootstrapSnapshot(cache)).toMatchObject({
+      context: null,
+      localAppliedSequence: 0,
+      messages: [],
+      works: [],
+      progress: [],
+      drafts: [],
+      outgoing: []
+    });
   });
 
   it("never persists Web Entry credentials in the browser cache module", () => {
