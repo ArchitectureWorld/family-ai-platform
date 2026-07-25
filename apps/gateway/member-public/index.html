@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f4ef">
+  <title>Family AI · 个人工作台</title>
+  <link rel="stylesheet" href="/member/assets/member.css">
+  <script type="module" src="/member/assets/entry.js"></script>
+</head>
+<body>
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+
+  <main class="page-shell">
+    <header class="brand-bar">
+      <a class="brand" href="/member/" aria-label="Family AI 个人工作台">
+        <span class="brand-mark" aria-hidden="true">F</span>
+        <span>
+          <strong>Family AI</strong>
+          <small>个人工作台</small>
+        </span>
+      </a>
+      <div class="connection" id="connectionStatus" role="status">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span>正在连接</span>
+      </div>
+    </header>
+
+    <section class="entry-card" id="entryView">
+      <div class="entry-copy">
+        <p class="eyebrow">YOUR FAMILY, ONE CONTINUOUS INTELLIGENCE</p>
+        <h1>从一句话开始，<br>把家庭事务持续推进。</h1>
+        <p class="lead">Chat 负责日常交流，Work 负责长期事项。所有设备进入同一个 Person、同一份上下文和同一套结果。</p>
+      </div>
+
+      <div class="entry-panel">
+        <div class="entry-state" id="loadingState">
+          <div class="orbit" aria-hidden="true"><span></span></div>
+          <h2>正在恢复你的工作台</h2>
+          <p>确认浏览器设备与个人入口状态。</p>
+        </div>
+
+        <form class="pair-form hidden" id="pairForm">
+          <div>
+            <p class="panel-kicker">建立浏览器个人入口</p>
+            <h2>输入一次性配对码</h2>
+            <p>配对完成后，这台浏览器会成为你的个人设备。后续直接回到这里即可继续。</p>
+          </div>
+          <label>
+            <span>配对码</span>
+            <input id="pairingCode" name="pairingCode" autocomplete="one-time-code" inputmode="text" placeholder="ABCD-EFGH" maxlength="9" required>
+          </label>
+          <button class="primary-button" type="submit">进入个人工作台</button>
+          <p class="form-note">配对码由家庭管理员在 Family AI 中生成，5 分钟内有效。</p>
+        </form>
+
+        <div class="entry-state hidden" id="errorState">
+          <span class="state-icon" aria-hidden="true">!</span>
+          <h2>暂时无法进入工作台</h2>
+          <p id="errorMessage">请检查网络或重新获取配对码。</p>
+          <button class="secondary-button" id="retryButton" type="button">重新尝试</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="workspace hidden" id="workspaceView">
+      <aside class="workspace-nav">
+        <div class="identity-card">
+          <span class="avatar" id="personAvatar">F</span>
+          <div>
+            <strong id="personName">家庭成员</strong>
+            <small id="familyName">Family AI</small>
+          </div>
+        </div>
+
+        <nav aria-label="个人工作台">
+          <button class="nav-item active" type="button" data-section="chat">
+            <span class="nav-icon" aria-hidden="true">✦</span>
+            <span>Chat</span>
+            <small>日常对话</small>
+          </button>
+          <button class="nav-item" type="button" data-section="work">
+            <span class="nav-icon" aria-hidden="true">⌁</span>
+            <span>Work</span>
+            <small>长期事项</small>
+          </button>
+        </nav>
+
+        <div class="nav-footer">
+          <button class="text-button" id="logoutButton" type="button">退出当前会话</button>
+          <button class="danger-button" id="revokeButton" type="button">移除此浏览器</button>
+        </div>
+      </aside>
+
+      <section class="workspace-main">
+        <header class="workspace-header">
+          <div>
+            <p class="panel-kicker" id="workspaceKicker">PERSONAL CHAT</p>
+            <h2 id="workspaceTitle">和个人助理继续聊</h2>
+          </div>
+          <div class="device-pill" id="deviceName">当前浏览器</div>
+        </header>
+
+        <div class="workspace-preview" id="chatPreview">
+          <div class="preview-symbol" aria-hidden="true">✦</div>
+          <h3>工作台已连接</h3>
+          <p>你的 Person、个人助理和浏览器设备已建立真实绑定。Chat 与 Work 的完整体验正在载入。</p>
+          <div class="preview-grid">
+            <article>
+              <span>Chat</span>
+              <strong>一个持续对话</strong>
+              <p>不同设备共享同一个 Home Chat，不需要管理会话列表。</p>
+            </article>
+            <article>
+              <span>Work</span>
+              <strong>多个独立事项</strong>
+              <p>每个项目拥有独立上下文、状态与推进节奏。</p>
+            </article>
+          </div>
+        </div>
+
+        <div class="workspace-preview hidden" id="workPreview">
+          <div class="preview-symbol" aria-hidden="true">⌁</div>
+          <h3>Work 空间已就绪</h3>
+          <p>下一阶段会在这里呈现 Work 列表、目标、进度、待确认项和完整上下文。</p>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <noscript>请启用 JavaScript 以使用 Family AI 个人工作台。</noscript>
+</body>
+</html>
