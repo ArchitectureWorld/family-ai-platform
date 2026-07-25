@@ -37,13 +37,20 @@ export type SessionRestoreResult =
   | { kind: 'revoked' };
 
 export class SessionManager {
+  private readonly gateway: SessionGateway;
+  private readonly credentials: MobileCredentialStore;
+  private readonly now: () => number;
   private renewalTask: Promise<EntrySessionCredential> | null = null;
 
   constructor(
-    private readonly gateway: SessionGateway,
-    private readonly credentials: MobileCredentialStore,
-    private readonly now: () => number = () => Date.now()
-  ) {}
+    gateway: SessionGateway,
+    credentials: MobileCredentialStore,
+    now: () => number = () => Date.now()
+  ) {
+    this.gateway = gateway;
+    this.credentials = credentials;
+    this.now = now;
+  }
 
   async restore(): Promise<SessionRestoreResult> {
     const profile = await this.credentials.gatewayProfile();
