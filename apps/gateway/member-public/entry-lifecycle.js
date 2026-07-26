@@ -26,6 +26,7 @@ const PUBLIC_ERRORS = Object.freeze({
   ENTRY_IDENTITY_POINTER_RETAINED: "本地身份清理尚未完成，请重试。",
   ENTRY_CLEANUP_CHECKPOINT_FAILED: "入口清理检查点未完成，请重试。",
   REVOKE_COOKIE_CLEAR_FAILED: "无法清除浏览器入口，请重试。",
+  MEMBER_CACHE_DELETE_FAILED: "本地数据清理失败，请重试。",
   MEMBER_CACHE_DELETE_BLOCKED: "本地数据正在被其他页面使用，请关闭后重试。",
   PAIRING_FRAGMENT_INVALID: "配对链接无效，请重新获取。",
   PAIRING_OUTCOME_UNKNOWN: "配对结果未确认，浏览器入口已安全清理，请重试。",
@@ -343,13 +344,19 @@ export function createEntryController(input) {
       let cleared = false;
       await mutationLock.runCookieMutation(async () => {
         const owner = read();
-        if (!owner || owner.transitionId !== expectedTransitionId) return;
-        await mutationLock.run(owner.installationId, () =>
-          mutationLock.runProductDrain(owner.installationId, async () => {
+        if (!sameRecord(owner, before)) return;
+        await mutationLock.run(before.installationId, () =>
+          mutationLock.runProductDrain(before.installationId, async () => {
             const latest = read();
-            if (!latest || latest.transitionId !== expectedTransitionId) return;
+            if (!sameRecord(latest, before)) return;
             await clearCookiesForRevoke();
+            if (!sameRecord(read(), before)) {
+              throw localEntryError("ENTRY_COOKIE_OWNER_CHANGED");
+            }
             cleared = clearCookieOwner(kind, expectedTransitionId);
+            if (!cleared || read()) {
+              throw localEntryError("ENTRY_COOKIE_OWNER_CHANGED");
+            }
           })
         );
       });
@@ -365,7 +372,9 @@ export function createEntryController(input) {
       }, () => retryOriginCookieCleanup(kind, expectedTransitionId));
       return "blocked";
     } catch (error) {
-      const visible = error?.code === "REVOKE_COOKIE_CLEAR_FAILED"
+      const visible =
+        error?.code === "REVOKE_COOKIE_CLEAR_FAILED" ||
+        error?.code === "ENTRY_COOKIE_OWNER_CHANGED"
         ? error
         : Object.assign(localEntryError(
           "REVOKE_COOKIE_CLEAR_FAILED",
@@ -389,6 +398,22 @@ export function createEntryController(input) {
       installationId,
       createdAt: now().toISOString()
     });
+  }
+
+  function committedClaimContextEvidence(installationId, activationState) {
+    if (storage.readInstallationId() !== installationId) {
+      return "installation-changed";
+    }
+    const lifecycle = storage.readLifecycle(installationId);
+    if (
+      storage.readCleanupTombstone(installationId) ||
+      lifecycle?.state === "revoked"
+    ) return "revoked";
+    if (
+      !sameRecord(storage.readLockMarker(installationId), activationState.expectedMarker) ||
+      lifecycle?.state === "locked"
+    ) return "locked";
+    return "current";
   }
 
   async function prepareClaimedActivationLocked(
@@ -459,6 +484,15 @@ export function createEntryController(input) {
         if (currentCookieOwner()) {
           throw localEntryError("ENTRY_COOKIE_CLEAR_PENDING");
         }
+        const evidence = committedClaimContextEvidence(
+          installationId,
+          activationState
+        );
+        if (evidence === "revoked") throw localEntryError("DEVICE_REVOKED");
+        if (evidence === "locked") {
+          throw localEntryError("ENTRY_LOCKED_DURING_START");
+        }
+        if (evidence !== "current") return;
         const response = await api.getWebContext();
         ticket = await prepareClaimedActivationLocked(
           response.context,
@@ -512,6 +546,7 @@ export function createEntryController(input) {
   }
 
   function claim(pendingClaim, suppliedActivationState) {
+    if (destroyed) return Promise.resolve();
     if (activeClaimPromise) return activeClaimPromise;
     const activationState = suppliedActivationState ?? {
       expectedMarker: storage.readLockMarker(pendingClaim.installationId),
@@ -566,6 +601,21 @@ export function createEntryController(input) {
         const intent = persistClaimCookieIntent(installationId);
         if (destroyed || abort.signal.aborted) return;
         await mutationLock.runProductDrain(installationId, async () => {
+          const latestMarker = storage.readLockMarker(installationId);
+          if (!sameRecord(latestMarker, activationState.expectedMarker)) {
+            const latestIntent = storage.readClaimCookieIntent();
+            if (sameRecord(latestIntent, intent)) {
+              const cleared = storage.clearClaimCookieIntent(
+                intent.transitionId
+              );
+              if (
+                !cleared &&
+                sameRecord(storage.readClaimCookieIntent(), intent)
+              ) throw localEntryError("ENTRY_CLAIM_INTENT_CHANGED");
+            }
+            transition("locked", { showResume: true });
+            return;
+          }
           if (
             destroyed || abort.signal.aborted ||
             storage.readInstallationId() !== installationId ||
@@ -593,6 +643,21 @@ export function createEntryController(input) {
           pendingClaims.clear();
           activationState.pendingCleared = true;
           if (destroyed || abort.signal.aborted) return;
+          const evidence = committedClaimContextEvidence(
+            installationId,
+            activationState
+          );
+          if (evidence === "revoked") {
+            throw localEntryError("DEVICE_REVOKED");
+          }
+          if (evidence === "locked") {
+            transition("locked", { showResume: true });
+            return;
+          }
+          if (evidence !== "current") {
+            transition("unpaired", { code: "ENTRY_INSTALLATION_CHANGED" });
+            return;
+          }
           const response = await api.getWebContext();
           ticket = await prepareClaimedActivationLocked(
             response.context,
@@ -680,6 +745,12 @@ export function createEntryController(input) {
 
   async function recoverAuthenticatedSession(installationId, explicit = false) {
     if (destroyed || storage.readInstallationId() !== installationId) return;
+    const resumeBaseline = explicit
+      ? {
+          marker: storage.readLockMarker(installationId),
+          lifecycle: snapshotLifecycle(storage.readLifecycle(installationId))
+        }
+      : null;
     if (!mutationLock.available) {
       await stopForLockedState();
       transition("locked", {
@@ -689,7 +760,9 @@ export function createEntryController(input) {
       });
       return;
     }
-    let ownedMarker = storage.readLockMarker(installationId);
+    let ownedMarker = resumeBaseline
+      ? resumeBaseline.marker
+      : storage.readLockMarker(installationId);
     if (!explicit) {
       if (ownedMarker) {
         await stopForLockedState();
@@ -704,10 +777,29 @@ export function createEntryController(input) {
     try {
       await runCookieEntryAndDrain(installationId, async () => {
         if (destroyed || storage.readInstallationId() !== installationId) return;
-        const capturedLifecycle = snapshotLifecycle(
-          storage.readLifecycle(installationId)
-        );
-        const capturedMarker = storage.readLockMarker(installationId);
+        const observedLifecycle = storage.readLifecycle(installationId);
+        const observedMarker = storage.readLockMarker(installationId);
+        if (resumeBaseline) {
+          const unchanged =
+            sameRecord(observedMarker, resumeBaseline.marker) &&
+            sameRecord(
+              snapshotLifecycle(observedLifecycle),
+              resumeBaseline.lifecycle
+            );
+          const completedByPeer =
+            resumeBaseline.marker !== null &&
+            resumeBaseline.lifecycle.state === "locked" &&
+            observedMarker === null &&
+            observedLifecycle?.state === "active" &&
+            observedLifecycle.revision > resumeBaseline.lifecycle.revision;
+          if (!unchanged && !completedByPeer) return;
+        }
+        if (
+          storage.readCleanupTombstone(installationId) ||
+          observedLifecycle?.state === "revoked"
+        ) return;
+        const capturedLifecycle = snapshotLifecycle(observedLifecycle);
+        const capturedMarker = observedMarker;
         if (!explicit && !sameRecord(capturedMarker, ownedMarker)) return;
         const stillCurrent = () =>
           !destroyed &&
@@ -787,6 +879,7 @@ export function createEntryController(input) {
   }
 
   async function resume() {
+    if (destroyed) return;
     const installationId = storage.readInstallationId();
     if (!installationId) return;
     if (!mutationLock.available) {
@@ -801,6 +894,7 @@ export function createEntryController(input) {
   }
 
   async function logout() {
+    if (destroyed) return;
     const installationId = storage.readInstallationId();
     if (!installationId) return;
     let marker;
@@ -890,13 +984,22 @@ export function createEntryController(input) {
       !currentTombstone.cookiesCleared
     ) throw localEntryError("ENTRY_TOMBSTONE_INCONSISTENT");
     if (!currentTombstone) {
-      currentTombstone = storage.writeCleanupTombstone(installationId, {
+      const expected = {
         protocolVersion: 2,
         transitionId,
         identity: null,
         phase: "closing",
         cookiesCleared: false
-      });
+      };
+      const written = storage.writeCleanupTombstone(
+        installationId,
+        expected
+      );
+      const backing = storage.readCleanupTombstone(installationId);
+      if (!sameRecord(written, expected) || !sameRecord(backing, expected)) {
+        throw localEntryError("ENTRY_CLEANUP_CHECKPOINT_FAILED");
+      }
+      currentTombstone = backing;
     }
     const lifecycle = storage.readLifecycle(installationId);
     if (lifecycle?.state !== "revoked") {
@@ -915,17 +1018,25 @@ export function createEntryController(input) {
     if (!pending) return false;
     const { kind, record } = pending;
     let cleared = false;
+    const readOwner = () => kind === "claim-intent"
+      ? storage.readClaimCookieIntent()
+      : storage.readCookieClearPending();
     await mutationLock.run(record.installationId, () =>
       mutationLock.runProductDrain(record.installationId, async () => {
         const latest = currentCookieOwner();
         if (
           !latest || latest.kind !== kind ||
-          latest.record.transitionId !== record.transitionId
+          !sameRecord(latest.record, record)
         ) return;
         if (!validateTarget()) return;
         await clearCookiesForRevoke();
+        if (!sameRecord(readOwner(), record)) {
+          throw localEntryError("ENTRY_COOKIE_OWNER_CHANGED");
+        }
         cleared = clearCookieOwner(kind, record.transitionId);
-        if (!cleared) throw localEntryError("ENTRY_COOKIE_OWNER_CHANGED");
+        if (!cleared || readOwner()) {
+          throw localEntryError("ENTRY_COOKIE_OWNER_CHANGED");
+        }
       })
     );
     return cleared;
@@ -935,37 +1046,54 @@ export function createEntryController(input) {
     installationId,
     {
       cookiesAlreadyCleared = false,
-      expectedMarker = storage.readLockMarker(installationId)
+      expectedMarker = storage.readLockMarker(installationId),
+      expectedCleanup = null
     } = {}
   ) {
     return mutationLock.runCacheOpen(installationId, async () => {
+      if (destroyed && !cookiesAlreadyCleared) return null;
       let cleanup = storage.readCleanupTombstone(installationId);
       if (!cleanup) return null;
       if (
         storage.readInstallationId() !== installationId &&
         !cleanup.cookiesCleared
       ) throw localEntryError("ENTRY_TOMBSTONE_INCONSISTENT");
+      const checkpointAuthority = expectedCleanup ?? cleanup;
       if (!cleanup.cookiesCleared) {
+        const checkpointAuthorized = () =>
+          storage.readInstallationId() === installationId &&
+          checkpointAuthority?.cookiesCleared === false &&
+          sameRecord(
+            storage.readCleanupTombstone(installationId),
+            checkpointAuthority
+          ) &&
+          sameRecord(storage.readLockMarker(installationId), expectedMarker);
+        if (!checkpointAuthorized()) {
+          throw localEntryError("ENTRY_CLEANUP_CHECKPOINT_FAILED");
+        }
         if (!cookiesAlreadyCleared) {
-          if (
-            storage.readInstallationId() !== installationId ||
-            !sameRecord(storage.readCleanupTombstone(installationId), cleanup) ||
-            !sameRecord(storage.readLockMarker(installationId), expectedMarker)
-          ) throw localEntryError("ENTRY_CLEANUP_CHECKPOINT_FAILED");
           await clearCookiesForRevoke();
         }
         const clearedCheckpoint = {
-          ...cleanup,
+          ...checkpointAuthority,
           cookiesCleared: true
         };
-        cleanup = storage.writeCleanupTombstone(
+        if (!checkpointAuthorized()) {
+          throw localEntryError("ENTRY_CLEANUP_CHECKPOINT_FAILED");
+        }
+        const written = storage.writeCleanupTombstone(
           installationId,
           clearedCheckpoint
         );
-        if (!sameRecord(storage.readCleanupTombstone(installationId), cleanup)) {
+        if (
+          !sameRecord(written, clearedCheckpoint) ||
+          !sameRecord(storage.readCleanupTombstone(installationId), clearedCheckpoint)
+        ) {
           throw localEntryError("ENTRY_CLEANUP_CHECKPOINT_FAILED");
         }
+        cleanup = written;
       }
+      if (destroyed) return cleanup;
       for (;;) {
         const pointer = storage.readIdentityPointer(installationId);
         if (!pointer) break;
@@ -1041,37 +1169,51 @@ export function createEntryController(input) {
   async function cleanupSupported(
     installationId,
     transitionId = uuid(),
-    expectedMarker = storage.readLockMarker(installationId)
+    expectedMarker = storage.readLockMarker(installationId),
+    originCookiesCleared = false
   ) {
     await mutationLock.runCookieMutation(async () => {
+      if (destroyed) return;
+      if (originCookiesCleared && currentCookieOwner()) return;
       let targetExists = false;
       await mutationLock.run(installationId, async () => {
+        if (destroyed) return;
         targetExists = Boolean(
           ensureTargetTombstoneLocked(installationId, transitionId)
         );
       });
-      if (!targetExists) return;
+      if (destroyed || !targetExists) return;
       const target = storage.readCleanupTombstone(installationId);
-      const cookiesAlreadyCleared = await finishOriginOwnerWhileCookieLocked(
-        () =>
-          !destroyed &&
-          storage.readInstallationId() === installationId &&
-          sameRecord(storage.readCleanupTombstone(installationId), target) &&
-          target?.cookiesCleared === false &&
-          sameRecord(storage.readLockMarker(installationId), expectedMarker)
-      );
-      await mutationLock.run(installationId, () =>
-        mutationLock.runProductDrain(installationId, () =>
-          revokeLocked(installationId, {
+      let cookiesAlreadyCleared = originCookiesCleared;
+      if (cookiesAlreadyCleared) {
+        if (currentCookieOwner()) return;
+      } else {
+        cookiesAlreadyCleared = await finishOriginOwnerWhileCookieLocked(
+          () =>
+            !destroyed &&
+            storage.readInstallationId() === installationId &&
+            sameRecord(storage.readCleanupTombstone(installationId), target) &&
+            target?.cookiesCleared === false &&
+            sameRecord(storage.readLockMarker(installationId), expectedMarker)
+        );
+      }
+      if (destroyed && !cookiesAlreadyCleared) return;
+      await mutationLock.run(installationId, () => {
+        if (destroyed && !cookiesAlreadyCleared) return;
+        return mutationLock.runProductDrain(installationId, () => {
+          if (destroyed && !cookiesAlreadyCleared) return;
+          return revokeLocked(installationId, {
             cookiesAlreadyCleared,
-            expectedMarker
-          })
-        )
-      );
+            expectedMarker,
+            expectedCleanup: target
+          });
+        });
+      });
     });
   }
 
   function revoke(error, installationId) {
+    if (destroyed) return Promise.resolve();
     if (activeRevokes.has(installationId)) {
       return activeRevokes.get(installationId);
     }
@@ -1109,6 +1251,7 @@ export function createEntryController(input) {
     try {
       await cleanupSupported(installationId, uuid(), marker);
     } catch (cleanupError) {
+      if (destroyed) return;
       await stopTrackedWorkbench().catch(() => undefined);
       transition("recoverable_error", {
         code: cleanupError?.code ?? "GATEWAY_UNAVAILABLE",
@@ -1119,6 +1262,12 @@ export function createEntryController(input) {
   }
 
   async function retryCleanup(installationId) {
+    if (destroyed) return;
+    return retryCleanupWithEvidence(installationId, false);
+  }
+
+  async function retryCleanupWithEvidence(installationId, cookiesAlreadyCleared) {
+    if (destroyed) return;
     const existing = storage.readCleanupTombstone(installationId);
     if (!existing && storage.readInstallationId() !== installationId) {
       transition("unpaired");
@@ -1136,7 +1285,9 @@ export function createEntryController(input) {
     try {
       await cleanupSupported(
         installationId,
-        existing?.transitionId ?? uuid()
+        existing?.transitionId ?? uuid(),
+        storage.readLockMarker(installationId),
+        cookiesAlreadyCleared
       );
       if (
         !storage.readCleanupTombstone(installationId) &&
@@ -1152,6 +1303,7 @@ export function createEntryController(input) {
   }
 
   async function removeDevice() {
+    if (destroyed) return;
     const installationId = storage.readInstallationId();
     if (!installationId) return;
     if (!mutationLock.available) {
@@ -1166,9 +1318,18 @@ export function createEntryController(input) {
     if (!marker) return;
     await stopTrackedWorkbench();
     transition("locked", { showResume: true });
+    const validateTarget = () =>
+      !destroyed &&
+      storage.readInstallationId() === installationId &&
+      sameRecord(storage.readLockMarker(installationId), marker) &&
+      !storage.readCleanupTombstone(installationId) &&
+      storage.readLifecycle(installationId)?.state !== "revoked";
     try {
       await mutationLock.runCookieMutation(async () => {
-        const cookiesAlreadyCleared = await finishOriginOwnerWhileCookieLocked();
+        if (!validateTarget()) return;
+        const cookiesAlreadyCleared = await finishOriginOwnerWhileCookieLocked(
+          validateTarget
+        );
         await mutationLock.run(installationId, () =>
           mutationLock.runProductDrain(installationId, async () => {
             if (
@@ -1212,7 +1373,6 @@ export function createEntryController(input) {
       storage.readInstallationId() !== installationId
     ) return true;
     try {
-      if (invalidating && activeRevokes.has(installationId)) return true;
       if (invalidating) await revoke(error, installationId);
       else await recoverAuthenticatedSession(installationId);
     } catch (recoveryError) {
@@ -1238,18 +1398,28 @@ export function createEntryController(input) {
     if (destroyed) return;
     try {
       const cookieOwner = currentCookieOwner();
+      let handledCookieOwner = false;
+      let cookieOwnerCleared = false;
       if (cookieOwner) {
-        await retryOriginCookieCleanup(
+        const result = await retryOriginCookieCleanup(
           cookieOwner.kind,
           cookieOwner.record.transitionId
         );
-        return;
+        if (result === "blocked" || destroyed) return;
+        if (result !== "cleared" && result !== "gone") return;
+        if (currentCookieOwner()) return;
+        handledCookieOwner = true;
+        cookieOwnerCleared = result === "cleared";
       }
       const cleanupRecords = storage.listCleanupTombstones();
       if (cleanupRecords.length > 0) {
-        await retryCleanup(cleanupRecords[0].installationId);
+        await retryCleanupWithEvidence(
+          cleanupRecords[0].installationId,
+          cookieOwnerCleared
+        );
         return;
       }
+      if (handledCookieOwner) return;
       const installationId = storage.readInstallationId();
       if (!installationId) {
         transition("unpaired");
@@ -1365,9 +1535,18 @@ export function createEntryController(input) {
   }
 
   async function handleReceiverFailure(error, installationId) {
-    if (await handleEntryFailure(error, installationId)) return;
-    if (storage.readInstallationId() !== installationId) return;
-    await stopTrackedWorkbench();
+    let handled = false;
+    try {
+      handled = await handleEntryFailure(error, installationId);
+    } catch {
+      handled = false;
+    }
+    if (
+      handled || destroyed ||
+      storage.readInstallationId() !== installationId
+    ) return;
+    await stopTrackedWorkbench().catch(() => undefined);
+    if (destroyed || storage.readInstallationId() !== installationId) return;
     transition("recoverable_error", {
       code: error?.code ?? "GATEWAY_UNAVAILABLE",
       message: error?.message,
@@ -1376,11 +1555,18 @@ export function createEntryController(input) {
   }
 
   function enqueueReceiver(installationId, operation) {
-    receiverLane = receiverLane
-      .then(() => destroyed ? undefined : operation())
-      .catch((error) => destroyed
-        ? undefined
-        : handleReceiverFailure(error, installationId));
+    const predecessor = receiverLane.catch(() => undefined);
+    receiverLane = predecessor.then(async () => {
+      if (destroyed) return;
+      try {
+        await operation();
+      } catch (error) {
+        if (destroyed) return;
+        await handleReceiverFailure(error, installationId).catch(
+          () => undefined
+        );
+      }
+    });
     return receiverLane;
   }
 
@@ -1394,7 +1580,11 @@ export function createEntryController(input) {
       const revision = lifecycle?.revision ?? 0;
       const expectedLifecycle = snapshotLifecycle(lifecycle);
       const lastApplied = lastAppliedRevisions.get(installationId) ?? 0;
-      if (requireActiveEvidence && !lifecycle) {
+      if (
+        !lifecycle &&
+        storage.readInstallationId() === installationId &&
+        (requireActiveEvidence || lastApplied > 0)
+      ) {
         await stopTrackedWorkbench();
         transition("recoverable_error", {
           code: "ENTRY_LIFECYCLE_MISSING",
@@ -1421,7 +1611,17 @@ export function createEntryController(input) {
         if (result === "gone") continue;
         return;
       }
-      if (storage.readInstallationId() !== installationId && !cleanup) {
+      const currentInstallationId = storage.readInstallationId();
+      if (currentInstallationId !== installationId && !cleanup) {
+        if (
+          currentInstallationId &&
+          activeProductInstallationId === currentInstallationId
+        ) return;
+        if (activeProductInstallationId) {
+          await stopTrackedWorkbench();
+          if (destroyed) return;
+        }
+        transition("unpaired");
         return;
       }
       if (cleanup || lifecycle?.state === "revoked") {
@@ -1432,7 +1632,9 @@ export function createEntryController(input) {
           (storage.readLifecycle(installationId)?.revision ?? 0) !== revision
         ) continue;
         lastAppliedRevisions.set(installationId, revision);
-        transition("revoked", { showRetry: true });
+        transition("revoked", { showRetry: true }, () =>
+          retryCleanup(installationId)
+        );
         return;
       }
       if (marker || lifecycle?.state === "locked") {
@@ -1550,6 +1752,7 @@ export function createEntryController(input) {
   eventTarget?.addEventListener?.("storage", storageListener);
 
   async function retry() {
+    if (destroyed) return;
     if (typeof retryAction === "function") await retryAction();
   }
 
@@ -1564,6 +1767,7 @@ export function createEntryController(input) {
   function destroy() {
     if (destroyPromise) return destroyPromise;
     destroyed = true;
+    retryAction = null;
     activeClaimAbort?.abort();
     eventTarget?.removeEventListener?.("storage", storageListener);
     channel?.removeEventListener?.("message", channelListener);

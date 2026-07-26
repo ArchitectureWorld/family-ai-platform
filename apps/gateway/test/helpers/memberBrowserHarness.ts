@@ -1056,6 +1056,26 @@ export function createSharedEntryBrowserStorage() {
 export function createSharedEntryBroadcastChannels() {
   const channels = new Set<any>();
   const posted: unknown[] = [];
+  const pendingDeliveries = new Set<Promise<void>>();
+  let deliveryLane = Promise.resolve();
+
+  const enqueueDelivery = (deliver: () => void) => {
+    const delivery = deliveryLane.then(() => {
+      deliver();
+    });
+    deliveryLane = delivery.catch(() => undefined);
+    pendingDeliveries.add(delivery);
+    void delivery.finally(() => pendingDeliveries.delete(delivery));
+  };
+
+  const dispatchMessage = (channel: EventTarget, data: unknown) => {
+    const event = new Event("message");
+    Object.defineProperty(event, "data", {
+      value: structuredClone(data),
+    });
+    channel.dispatchEvent(event);
+  };
+
   class Channel extends EventTarget {
     closed = false;
     constructor(readonly name: string) {
@@ -1065,14 +1085,12 @@ export function createSharedEntryBroadcastChannels() {
     postMessage(data: unknown) {
       if (this.closed) throw new Error("CHANNEL_CLOSED");
       posted.push(structuredClone(data));
-      for (const peer of channels) {
-        if (peer === this || peer.closed || peer.name !== this.name) continue;
-        const event = new Event("message");
-        Object.defineProperty(event, "data", {
-          value: structuredClone(data),
-        });
-        peer.dispatchEvent(event);
-      }
+      enqueueDelivery(() => {
+        for (const peer of channels) {
+          if (peer === this || peer.closed || peer.name !== this.name) continue;
+          dispatchMessage(peer, data);
+        }
+      });
     }
     close() {
       if (this.closed) return;
@@ -1087,11 +1105,17 @@ export function createSharedEntryBroadcastChannels() {
       return channels.size;
     },
     dispatch(data: unknown) {
-      for (const channel of channels) {
-        const event = new Event("message");
-        Object.defineProperty(event, "data", { value: structuredClone(data) });
-        channel.dispatchEvent(event);
+      enqueueDelivery(() => {
+        for (const channel of channels) {
+          if (!channel.closed) dispatchMessage(channel, data);
+        }
+      });
+    },
+    async whenIdle() {
+      while (pendingDeliveries.size > 0) {
+        await Promise.all([...pendingDeliveries]);
       }
+      await deliveryLane;
     },
   };
 }

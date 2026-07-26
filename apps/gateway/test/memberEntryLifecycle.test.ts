@@ -925,14 +925,21 @@ describe("Member Entry two-phase Revoke cleanup", () => {
 
   it("serializes an old origin Cookie clear against a new-installation Claim", async () => {
     const clear = deferred<void>();
-    const env = createEntryControllerHarness({ initialClaimIntent: owner(I1, T1) });
-    env.api.clearWebEntryCookies.mockImplementation(() => clear.promise);
+    const env = createEntryControllerHarness({
+      initialClaimIntent: owner(I1, T1),
+      api: { clearWebEntryCookies: vi.fn(() => clear.promise) },
+    });
     const cleanup = env.createController().bootstrap();
-    await flushMicrotasks();
+    await env.http.waitForRequest("clearWebEntryCookies");
     env.localStorage.setItem("family-ai-web-installation-id", I2);
     const peer = env.createTab();
     const claim = peer.createController().claim(pendingClaimFixture(I2));
-    await flushMicrotasks();
+    await env.locks.waitForEvent(
+      "request",
+      "family-ai-member-cookie-mutation",
+      "exclusive",
+      2,
+    );
     expect(peer.api.claimWebPairing).not.toHaveBeenCalled();
     clear.resolve(undefined);
     await cleanup;
@@ -945,7 +952,11 @@ describe("Member Entry two-phase Revoke cleanup", () => {
     const lease = await env.mutationLock.acquireProductFlight(I1);
     const controller = env.createController();
     const claim = controller.claim(pendingClaimFixture());
-    await flushMicrotasks();
+    await env.locks.waitForEvent(
+      "request",
+      `family-ai-member-product-flight:${I1}`,
+      "exclusive",
+    );
     expect(env.api.claimWebPairing).not.toHaveBeenCalled();
     await lease.release();
     await claim;
@@ -1015,7 +1026,7 @@ describe("Member Entry two-phase Revoke cleanup", () => {
           I1,
         );
       }
-      return callback;
+      return Promise.resolve();
     });
     const controller = env.createController();
     env.controller = controller;
@@ -1202,5 +1213,842 @@ describe("Member Entry two-phase Revoke cleanup", () => {
       cookiesCleared: true,
     });
     expect(controller.getState()).toMatchObject({ name: "recoverable_error" });
+  });
+});
+
+describe("Member Entry review race regressions", () => {
+  it("does not let a stale I1 Remove clear a queued I2 Claim owner", async () => {
+    const cookieEntered = deferred<void>();
+    const releaseCookie = deferred<void>();
+    const stopEntered = deferred<void>();
+    const releaseStop = deferred<void>();
+    const env = createEntryControllerHarness({
+      initialIdentity: IDENTITY,
+      workbench: {
+        stop: vi.fn(() => {
+          stopEntered.resolve(undefined);
+          return releaseStop.promise;
+        }),
+      },
+    });
+    const holder = env.mutationLock.runCookieMutation(async () => {
+      cookieEntered.resolve(undefined);
+      await releaseCookie.promise;
+    });
+    await cookieEntered.promise;
+
+    const operation = env.createController().removeDevice();
+    await stopEntered.promise;
+    expect(env.storage.readLockMarker(I1)).not.toBeNull();
+
+    env.storage.rotateInstallationId(I1);
+    const i2Owner = owner(I2, T2);
+    env.storage.writeClaimCookieIntent(i2Owner);
+    releaseStop.resolve(undefined);
+    await env.locks.waitForEvent(
+      "request",
+      "family-ai-member-cookie-mutation",
+      "exclusive",
+      2,
+    );
+    releaseCookie.resolve(undefined);
+    await Promise.all([holder, operation]);
+
+    expect(env.api.clearWebEntryCookies).not.toHaveBeenCalled();
+    expect(env.api.revokeWebDevice).not.toHaveBeenCalled();
+    expect(env.cacheLifecycle.deleteIdentity).not.toHaveBeenCalled();
+    expect(env.storage.readClaimCookieIntent()).toEqual(i2Owner);
+    expect(env.storage.readIdentityPointer(I1)).toEqual({
+      protocolVersion: 2,
+      ...IDENTITY,
+    });
+    expect(env.storage.readCleanupTombstone(I1)).toBeNull();
+    expect(env.storage.readInstallationId()).toBe(I2);
+  });
+
+  it("aborts Claim before bytes when M2 arrives while Product exclusive is queued", async () => {
+    const env = createEntryControllerHarness({ initialMarker: true });
+    const expectedM1 = env.storage.readLockMarker(I1);
+    const lease = await env.mutationLock.acquireProductFlight(I1);
+    const controller = env.createController();
+    const operation = controller.claim(pendingClaimFixture());
+    await env.locks.waitForEvent(
+      "request",
+      `family-ai-member-product-flight:${I1}`,
+      "exclusive",
+    );
+    const unsentIntent = env.storage.readClaimCookieIntent();
+    expect(unsentIntent).not.toBeNull();
+
+    const peer = env.createTab({
+      now: () => new Date("2026-07-25T09:00:01.000Z"),
+    });
+    const markerM2 = await peer.mutationLock.runMarkerMutation(
+      I1,
+      () => peer.storage.writeLockMarkerLocked(I1),
+    );
+    expect(markerM2).not.toEqual(expectedM1);
+    await lease.release();
+    await operation;
+
+    expect(env.api.claimWebPairing).not.toHaveBeenCalled();
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.pendingClaims.clear).not.toHaveBeenCalled();
+    expect(env.storage.readClaimCookieIntent()).toBeNull();
+    expect(env.storage.readLockMarker(I1)).toEqual(markerM2);
+    expect(env.storage.readLifecycle(I1)).toBeNull();
+    expect(controller.getState().name).toBe("locked");
+  });
+
+  it("does not fetch Context when M2 arrives during a committed Claim response", async () => {
+    const response = deferred<void>();
+    const env = createEntryControllerHarness({
+      initialMarker: true,
+      api: { claimWebPairing: vi.fn(() => response.promise) },
+    });
+    const expectedM1 = env.storage.readLockMarker(I1);
+    const controller = env.createController();
+    const operation = controller.claim(pendingClaimFixture());
+    await env.http.waitForRequest("claimWebPairing");
+
+    const peer = env.createTab({
+      now: () => new Date("2026-07-25T09:00:01.000Z"),
+    });
+    const markerM2 = await peer.mutationLock.runMarkerMutation(
+      I1,
+      () => peer.storage.writeLockMarkerLocked(I1),
+    );
+    expect(markerM2).not.toEqual(expectedM1);
+    response.resolve(undefined);
+    await operation;
+
+    expect(env.api.claimWebPairing).toHaveBeenCalledOnce();
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.pendingClaims.clear).toHaveBeenCalledOnce();
+    expect(env.storage.readClaimCookieIntent()).toBeNull();
+    expect(env.storage.readLockMarker(I1)).toEqual(markerM2);
+    expect(env.workbench.start).not.toHaveBeenCalled();
+    expect(controller.getState().name).toBe("locked");
+    await controller.retry();
+    expect(env.api.claimWebPairing).toHaveBeenCalledOnce();
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit Resume locked when M1 changes to M2 in the Cookie queue", async () => {
+    const env = createEntryControllerHarness({
+      initialMarker: true,
+      initialLifecycle: { state: "locked", revision: 1, transitionId: T1 },
+    });
+    const expectedM1 = env.storage.readLockMarker(I1);
+    const cookieEntered = deferred<void>();
+    const releaseCookie = deferred<void>();
+    const holder = env.mutationLock.runCookieMutation(async () => {
+      cookieEntered.resolve(undefined);
+      await releaseCookie.promise;
+    });
+    await cookieEntered.promise;
+
+    const controller = env.createController();
+    const operation = controller.resume();
+    await env.locks.waitForEvent(
+      "request",
+      "family-ai-member-cookie-mutation",
+      "exclusive",
+      2,
+    );
+    const peer = env.createTab({
+      now: () => new Date("2026-07-25T09:00:01.000Z"),
+    });
+    const markerM2 = await peer.mutationLock.runMarkerMutation(
+      I1,
+      () => peer.storage.writeLockMarkerLocked(I1),
+    );
+    expect(markerM2).not.toEqual(expectedM1);
+    releaseCookie.resolve(undefined);
+    await Promise.all([holder, operation]);
+
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.api.renewWebSession).not.toHaveBeenCalled();
+    expect(env.storage.readLockMarker(I1)).toEqual(markerM2);
+    expect(env.storage.readLifecycle(I1)).toMatchObject({
+      state: "locked",
+      revision: 1,
+      transitionId: T1,
+    });
+    expect(env.workbench.start).not.toHaveBeenCalled();
+    expect(controller.getState().name).toBe("locked");
+  });
+
+  it("stops active Product when the current lifecycle storage record is deleted", async () => {
+    const env = createEntryControllerHarness({
+      initialLifecycle: { state: "active", revision: 1, transitionId: T1 },
+    });
+    const controller = env.createController();
+    await controller.bootstrap();
+    expect(controller.getState().name).toBe("active");
+    expect(env.workbench.start).toHaveBeenCalledOnce();
+    env.workbench.stop.mockClear();
+
+    const peer = env.createTab();
+    peer.localStorage.removeItem(`family-ai-member-entry-state:${I1}`);
+    await env.shared.whenIdle();
+    await controller.whenIdle();
+
+    expect(env.workbench.stop).toHaveBeenCalled();
+    expect(controller.getState()).toMatchObject({
+      name: "recoverable_error",
+      code: "ENTRY_LIFECYCLE_MISSING",
+    });
+    expect(controller.getState().name).not.toBe("active");
+  });
+
+  it("converges a revoked peer to unpaired after leader cleanup completes", async () => {
+    const deletion = deferred<void>();
+    const deletionStarted = deferred<void>();
+    const env = createEntryControllerHarness({ initialIdentity: IDENTITY });
+    env.cacheLifecycle.deleteIdentity.mockImplementation(() => {
+      deletionStarted.resolve(undefined);
+      return deletion.promise;
+    });
+    const peer = env.createTab();
+    const leaderController = env.createController();
+    const peerController = peer.createController();
+
+    const operation = leaderController.revoke(entryError("DEVICE_REVOKED"), I1);
+    await deletionStarted.promise;
+    await env.channels.whenIdle();
+    await env.shared.whenIdle();
+    await peerController.whenIdle();
+    expect(peerController.getState().name).toBe("revoked");
+
+    deletion.resolve(undefined);
+    await operation;
+    await env.channels.whenIdle();
+    await env.shared.whenIdle();
+    await peerController.whenIdle();
+
+    expect(env.storage.readInstallationId()).toBe(I2);
+    expect(env.storage.readCleanupTombstone(I1)).toBeNull();
+    expect(peerController.getState().name).toBe("unpaired");
+  });
+
+  it("binds a revoked peer Retry to the retained old tombstone cleanup", async () => {
+    const retryStarted = deferred<void>();
+    const releaseRetry = deferred<void>();
+    const env = createEntryControllerHarness({ initialIdentity: IDENTITY });
+    env.cacheLifecycle.deleteIdentity.mockRejectedValue(
+      entryError("MEMBER_CACHE_DELETE_FAILED"),
+    );
+    const peer = env.createTab({
+      cacheLifecycle: {
+        deleteIdentity: vi.fn(() => {
+          retryStarted.resolve(undefined);
+          return releaseRetry.promise;
+        }),
+      },
+    });
+    const leaderController = env.createController();
+    const peerController = peer.createController();
+
+    await leaderController.revoke(entryError("DEVICE_REVOKED"), I1);
+    await env.channels.whenIdle();
+    await env.shared.whenIdle();
+    await peerController.whenIdle();
+    expect(peerController.getState().name).toBe("revoked");
+    expect(env.storage.readCleanupTombstone(I1)).toMatchObject({
+      phase: "deleting",
+      cookiesCleared: true,
+      identity: IDENTITY,
+    });
+    const cookieRequestsBefore = env.locks.events.filter((event: any) =>
+      event.phase === "request" &&
+      event.name === "family-ai-member-cookie-mutation"
+    ).length;
+
+    const retry = peerController.retry();
+    const firstOutcome = await Promise.race([
+      retryStarted.promise.then(() => "started"),
+      retry.then(() => "returned"),
+    ]);
+    expect(firstOutcome).toBe("started");
+    releaseRetry.resolve(undefined);
+    await retry;
+
+    const cookieRequestsAfter = env.locks.events.filter((event: any) =>
+      event.phase === "request" &&
+      event.name === "family-ai-member-cookie-mutation"
+    ).length;
+    expect(cookieRequestsAfter).toBeGreaterThan(cookieRequestsBefore);
+    expect(peer.cacheLifecycle.deleteIdentity).toHaveBeenCalledOnce();
+    expect(peer.api.clearWebEntryCookies).not.toHaveBeenCalled();
+    expect(peer.rotationCount).toBe(1);
+    expect(peer.storage.readInstallationId()).toBe(I2);
+    expect(peer.storage.readCleanupTombstone(I1)).toBeNull();
+    expect(peerController.getState().name).toBe("unpaired");
+  });
+
+  it("ignores a delayed old-installation wake while the current Product is active", async () => {
+    const env = createEntryControllerHarness({
+      installationId: I2,
+      initialLifecycle: { state: "active", revision: 1, transitionId: T2 },
+    });
+    env.storage.advanceLifecycle(I1, "revoked", T1);
+    const controller = env.createController();
+    await controller.bootstrap();
+    expect(controller.getState().name).toBe("active");
+    env.workbench.stop.mockClear();
+
+    const peer = env.createTab();
+    peer.localStorage.removeItem(`family-ai-member-entry-state:${I1}`);
+    await env.shared.whenIdle();
+    await controller.whenIdle();
+
+    expect(env.workbench.stop).not.toHaveBeenCalled();
+    expect(controller.getState().name).toBe("active");
+  });
+
+  it("awaits the same active Revoke from an independent second invalidation", async () => {
+    const clear = deferred<void>();
+    const env = createEntryControllerHarness({
+      api: { clearWebEntryCookies: vi.fn(() => clear.promise) },
+    });
+    const controller = env.createController();
+    const first = controller.handleEntryFailure(
+      entryError("DEVICE_REVOKED"),
+      I1,
+    );
+    await env.http.waitForRequest("clearWebEntryCookies");
+
+    const second = controller.handleEntryFailure(
+      entryError("DEVICE_REVOKED"),
+      I1,
+    );
+    const inspection = deferred<void>();
+    const beforeRelease = Promise.race([
+      second.then(() => "settled"),
+      inspection.promise.then(() => "pending"),
+    ]);
+    inspection.resolve(undefined);
+    const outcome = await beforeRelease;
+    clear.resolve(undefined);
+    await Promise.all([first, second]);
+
+    expect(outcome).toBe("pending");
+    expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+    expect(env.storage.readInstallationId()).toBe(I2);
+    expect(env.rotationCount).toBe(1);
+  });
+
+  it("lets a fire-and-forget stop callback await Revoke without self-deadlock", async () => {
+    const clear = deferred<void>();
+    const callbackStarted = deferred<void>();
+    let callback: Promise<boolean> | undefined;
+    const env = createEntryControllerHarness({
+      api: { clearWebEntryCookies: vi.fn(() => clear.promise) },
+    });
+    env.workbench.stop.mockImplementation(() => {
+      if (!callback && env.controller) {
+        callback = env.controller.handleEntryFailure(
+          entryError("DEVICE_REVOKED"),
+          I1,
+        );
+        callbackStarted.resolve(undefined);
+      }
+      return Promise.resolve();
+    });
+    const controller = env.createController();
+    env.controller = controller;
+
+    const operation = controller.handleEntryFailure(
+      entryError("DEVICE_REVOKED"),
+      I1,
+    );
+    await callbackStarted.promise;
+    await env.http.waitForRequest("clearWebEntryCookies");
+    const callbackPromise = callback!;
+    const inspection = deferred<void>();
+    const beforeRelease = Promise.race([
+      callbackPromise.then(() => "settled"),
+      inspection.promise.then(() => "pending"),
+    ]);
+    inspection.resolve(undefined);
+    const outcome = await beforeRelease;
+    clear.resolve(undefined);
+    await Promise.all([operation, callbackPromise]);
+
+    expect(outcome).toBe("pending");
+    expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+    expect(env.storage.readInstallationId()).toBe(I2);
+  });
+
+  it("resolves a failed receiver lane and still applies the next I1 revision", async () => {
+    const firstContext = deferred<any>();
+    const env = createEntryControllerHarness({
+      initialLifecycle: { state: "active", revision: 1, transitionId: T1 },
+      api: {
+        getWebContext: vi.fn()
+          .mockImplementationOnce(() => firstContext.promise)
+          .mockResolvedValueOnce({ context: memberContextFixture() }),
+      },
+    });
+    env.workbench.stop
+      .mockRejectedValueOnce(entryError("STOP_FAILED"))
+      .mockResolvedValue(undefined);
+    const controller = env.createController();
+
+    env.channels.dispatch({
+      protocolVersion: 2,
+      type: "session-restored",
+      installationId: I1,
+      transitionId: T1,
+      revision: 1,
+      occurredAt: FIXED,
+    });
+    await env.channels.whenIdle();
+    await env.http.waitForRequest("getWebContext");
+    firstContext.reject(entryError("PROVIDER_FAILED", { retryable: true }));
+    const firstIdle = await controller.whenIdle().then(
+      () => "resolved",
+      () => "rejected",
+    );
+
+    const next = env.storage.advanceLifecycle(I1, "active", T2);
+    env.channels.dispatch({
+      protocolVersion: 2,
+      type: "session-restored",
+      installationId: I1,
+      transitionId: next.transitionId,
+      revision: next.revision,
+      occurredAt: FIXED,
+    });
+    await env.channels.whenIdle();
+    const secondIdle = await controller.whenIdle().then(
+      () => "resolved",
+      () => "rejected",
+    );
+
+    expect({
+      firstIdle,
+      secondIdle,
+      contexts: env.api.getWebContext.mock.calls.length,
+      starts: env.workbench.start.mock.calls.length,
+      startedInstallationId: env.workbench.start.mock.calls[0]?.[1] ?? null,
+      state: controller.getState().name,
+    }).toEqual({
+      firstIdle: "resolved",
+      secondIdle: "resolved",
+      contexts: 2,
+      starts: 1,
+      startedInstallationId: I1,
+      state: "active",
+    });
+  });
+
+  it.each([
+    ["supported", {}],
+    ["no-lock", { locks: null }],
+  ])(
+    "keeps every destroyed public mutator inert with %s coordination",
+    async (_kind, options) => {
+      const env = createEntryControllerHarness({
+        initialIdentity: IDENTITY,
+        ...options,
+      });
+      const controller = env.createController();
+      await controller.destroy();
+      env.workbench.start.mockClear();
+      env.workbench.stop.mockClear();
+      env.cacheLifecycle.deleteIdentity.mockClear();
+      env.pendingClaims.clear.mockClear();
+      const before = {
+        storage: env.localStorage.dump(),
+        http: env.http.events.length,
+        posted: env.channels.posted.length,
+        views: env.view.states.length,
+        rotations: env.rotationCount,
+        openChannels: env.channels.openCount,
+      };
+
+      const operations = [
+        controller.bootstrap({ pendingClaim: pendingClaimFixture() }),
+        controller.claim(pendingClaimFixture()),
+        controller.logout(),
+        controller.resume(),
+        controller.removeDevice(),
+        controller.revoke(entryError("DEVICE_REVOKED"), I1),
+        controller.retry(),
+        controller.retryCleanup(I1),
+        controller.handleEntryFailure(entryError("DEVICE_REVOKED"), I1),
+        controller.destroy(),
+      ];
+      await Promise.all(operations);
+
+      expect({
+        storage: env.localStorage.dump(),
+        httpDelta: env.http.events.length - before.http,
+        postedDelta: env.channels.posted.length - before.posted,
+        viewDelta: env.view.states.length - before.views,
+        rotationDelta: env.rotationCount - before.rotations,
+        openChannels: env.channels.openCount,
+        starts: env.workbench.start.mock.calls.length,
+        stops: env.workbench.stop.mock.calls.length,
+        deletes: env.cacheLifecycle.deleteIdentity.mock.calls.length,
+        pendingClears: env.pendingClaims.clear.mock.calls.length,
+      }).toEqual({
+        storage: before.storage,
+        httpDelta: 0,
+        postedDelta: 0,
+        viewDelta: 0,
+        rotationDelta: 0,
+        openChannels: before.openChannels,
+        starts: 0,
+        stops: 0,
+        deletes: 0,
+        pendingClears: 0,
+      });
+    },
+  );
+
+  it("cancels a supported Revoke queued on Cookie when destroy wins", async () => {
+    const cookieEntered = deferred<void>();
+    const releaseCookie = deferred<void>();
+    const env = createEntryControllerHarness({ initialIdentity: IDENTITY });
+    const holder = env.mutationLock.runCookieMutation(async () => {
+      cookieEntered.resolve(undefined);
+      await releaseCookie.promise;
+    });
+    await cookieEntered.promise;
+    const controller = env.createController();
+    const operation = controller.revoke(entryError("DEVICE_REVOKED"), I1);
+    await env.locks.waitForEvent(
+      "request",
+      "family-ai-member-cookie-mutation",
+      "exclusive",
+      2,
+    );
+    const marker = env.storage.readLockMarker(I1);
+    expect(marker).not.toBeNull();
+    await controller.destroy();
+    const afterDestroy = {
+      posted: env.channels.posted.length,
+      views: env.view.states.length,
+      stops: env.workbench.stop.mock.calls.length,
+      lifecycle: env.storage.readLifecycle(I1),
+    };
+
+    releaseCookie.resolve(undefined);
+    await Promise.all([holder, operation]);
+
+    expect(env.api.clearWebEntryCookies).not.toHaveBeenCalled();
+    expect(env.cacheLifecycle.deleteIdentity).not.toHaveBeenCalled();
+    expect(env.storage.readInstallationId()).toBe(I1);
+    expect(env.rotationCount).toBe(0);
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.storage.readCleanupTombstone(I1)).toBeNull();
+    expect(env.storage.readLifecycle(I1)).toEqual(afterDestroy.lifecycle);
+    expect(env.storage.readIdentityPointer(I1)).toMatchObject(IDENTITY);
+    expect(env.channels.posted).toHaveLength(afterDestroy.posted);
+    expect(env.view.states).toHaveLength(afterDestroy.views);
+    expect(env.workbench.stop).toHaveBeenCalledTimes(afterDestroy.stops);
+  });
+
+  it("checkpoints a clear already started at destroy but performs no later cleanup", async () => {
+    const clear = deferred<void>();
+    const env = createEntryControllerHarness({
+      initialIdentity: IDENTITY,
+      initialClaimIntent: owner(),
+      api: { clearWebEntryCookies: vi.fn(() => clear.promise) },
+    });
+    const controller = env.createController();
+    const operation = controller.revoke(entryError("DEVICE_REVOKED"), I1);
+    await env.http.waitForRequest("clearWebEntryCookies");
+    const marker = env.storage.readLockMarker(I1);
+    const target = env.storage.readCleanupTombstone(I1);
+    expect(marker).not.toBeNull();
+    expect(target).toMatchObject({ cookiesCleared: false, phase: "closing" });
+    await controller.destroy();
+    const afterDestroy = {
+      posted: env.channels.posted.length,
+      views: env.view.states.length,
+      stops: env.workbench.stop.mock.calls.length,
+      lifecycle: env.storage.readLifecycle(I1),
+    };
+
+    clear.resolve(undefined);
+    await operation;
+    await env.channels.whenIdle();
+
+    expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+    expect(env.storage.readClaimCookieIntent()).toBeNull();
+    expect(env.storage.readCleanupTombstone(I1)).toEqual({
+      ...target,
+      cookiesCleared: true,
+    });
+    expect(env.storage.readLifecycle(I1)).toEqual(afterDestroy.lifecycle);
+    expect(env.cacheLifecycle.deleteIdentity).not.toHaveBeenCalled();
+    expect(env.storage.readIdentityPointer(I1)).toMatchObject(IDENTITY);
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.storage.readInstallationId()).toBe(I1);
+    expect(env.rotationCount).toBe(0);
+    expect(env.channels.posted).toHaveLength(afterDestroy.posted);
+    expect(env.view.states).toHaveLength(afterDestroy.views);
+    expect(env.workbench.stop).toHaveBeenCalledTimes(afterDestroy.stops);
+  });
+
+  it.each(["missing", "replaced"])(
+    "fails closed when initial tombstone write lies with backing %s",
+    async (mode) => {
+      const env = createEntryControllerHarness({ initialIdentity: IDENTITY });
+      const baseStorage = env.storage;
+      let writes = 0;
+      let replacement: any = null;
+      const lyingStorage = new Proxy(baseStorage, {
+        get(target, property, receiver) {
+          if (property !== "writeCleanupTombstone") {
+            return Reflect.get(target, property, receiver);
+          }
+          return (installationId: string, record: any) => {
+            writes += 1;
+            if (writes === 1) {
+              if (mode === "replaced") {
+                replacement = target.writeCleanupTombstone(installationId, {
+                  ...record,
+                  transitionId: T2,
+                });
+              }
+              return structuredClone(record);
+            }
+            return target.writeCleanupTombstone(installationId, record);
+          };
+        },
+      });
+      const controller = env.createController({ storage: lyingStorage });
+
+      await controller.revoke(entryError("DEVICE_REVOKED"), I1);
+
+      expect(env.api.clearWebEntryCookies).not.toHaveBeenCalled();
+      expect(env.cacheLifecycle.deleteIdentity).not.toHaveBeenCalled();
+      expect(env.storage.readInstallationId()).toBe(I1);
+      expect(env.rotationCount).toBe(0);
+      expect(env.storage.readIdentityPointer(I1)).toMatchObject(IDENTITY);
+      expect(env.storage.readCleanupTombstone(I1)).toEqual(replacement);
+      expect(env.storage.readLifecycle(I1)).toBeNull();
+      expect(env.storage.readLockMarker(I1)).not.toBeNull();
+      expect(controller.getState()).toMatchObject({
+        name: "recoverable_error",
+        code: "ENTRY_CLEANUP_CHECKPOINT_FAILED",
+      });
+    },
+  );
+
+  it.each(["retained", "replaced"])(
+    "rejects a lying owner clear whose exact owner is %s",
+    async (mode) => {
+      const clear = deferred<void>();
+      const initialOwner = owner(I1, T1);
+      const changedOwner = owner(I1, T2);
+      const env = createEntryControllerHarness({
+        initialIdentity: IDENTITY,
+        initialClaimIntent: initialOwner,
+        api: { clearWebEntryCookies: vi.fn(() => clear.promise) },
+      });
+      const baseStorage = env.storage;
+      const lyingStorage = new Proxy(baseStorage, {
+        get(target, property, receiver) {
+          if (property !== "clearClaimCookieIntent") {
+            return Reflect.get(target, property, receiver);
+          }
+          return () => {
+            if (mode === "replaced") {
+              env.localStorage.setItem(
+                "family-ai-member-claim-cookie-intent",
+                JSON.stringify(changedOwner),
+              );
+            }
+            return true;
+          };
+        },
+      });
+      const controller = env.createController({ storage: lyingStorage });
+      const operation = controller.revoke(entryError("DEVICE_REVOKED"), I1);
+      await env.http.waitForRequest("clearWebEntryCookies");
+      const target = env.storage.readCleanupTombstone(I1);
+      const marker = env.storage.readLockMarker(I1);
+      const lifecycle = env.storage.readLifecycle(I1);
+      clear.resolve(undefined);
+      await operation;
+
+      expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+      expect(env.storage.readClaimCookieIntent()).toEqual(
+        mode === "replaced" ? changedOwner : initialOwner,
+      );
+      expect(env.storage.readCleanupTombstone(I1)).toEqual(target);
+      expect(env.storage.readLifecycle(I1)).toEqual(lifecycle);
+      expect(env.cacheLifecycle.deleteIdentity).not.toHaveBeenCalled();
+      expect(env.storage.readIdentityPointer(I1)).toMatchObject(IDENTITY);
+      expect(env.storage.readLockMarker(I1)).toEqual(marker);
+      expect(env.storage.readInstallationId()).toBe(I1);
+      expect(env.rotationCount).toBe(0);
+      expect(controller.getState()).toMatchObject({
+        name: "recoverable_error",
+        code: "ENTRY_COOKIE_OWNER_CHANGED",
+      });
+    },
+  );
+
+  it("does not clear a rotated old marker without exact tombstone authority", async () => {
+    const env = createEntryControllerHarness({ installationId: I2 });
+    const marker = env.storage.writeLockMarkerLocked(I1);
+    const baseStorage = env.storage;
+    const clearMarker = vi.fn((installationId: string, expected: any) =>
+      baseStorage.clearLockMarkerLocked(installationId, expected)
+    );
+    const observedStorage = new Proxy(baseStorage, {
+      get(target, property, receiver) {
+        if (property === "clearLockMarkerLocked") return clearMarker;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const controller = env.createController({ storage: observedStorage });
+
+    await controller.retryCleanup(I1);
+
+    expect(clearMarker).not.toHaveBeenCalled();
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.storage.readInstallationId()).toBe(I2);
+    expect(env.api.clearWebEntryCookies).not.toHaveBeenCalled();
+  });
+
+  it("clears only the exact rotated old marker authorized by its tombstone", async () => {
+    const env = createEntryControllerHarness({
+      installationId: I2,
+      initialTombstoneInstallationId: I1,
+      initialTombstone: tombstone({ cookiesCleared: true }),
+    });
+    const marker = env.storage.writeLockMarkerLocked(I1);
+    const baseStorage = env.storage;
+    const clearMarker = vi.fn((installationId: string, expected: any) =>
+      baseStorage.clearLockMarkerLocked(installationId, expected)
+    );
+    const observedStorage = new Proxy(baseStorage, {
+      get(target, property, receiver) {
+        if (property === "clearLockMarkerLocked") return clearMarker;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const controller = env.createController({ storage: observedStorage });
+
+    await controller.retryCleanup(I1);
+
+    expect(clearMarker).toHaveBeenCalledOnce();
+    expect(clearMarker).toHaveBeenCalledWith(I1, marker);
+    expect(env.storage.readLockMarker(I1)).toBeNull();
+    expect(env.storage.readCleanupTombstone(I1)).toBeNull();
+    expect(env.storage.readInstallationId()).toBe(I2);
+    expect(env.rotationCount).toBe(0);
+    expect(env.api.clearWebEntryCookies).not.toHaveBeenCalled();
+  });
+
+  it("maps cache delete failure to its fixed safe public error", async () => {
+    const hostile = Object.assign(
+      new Error("token=HOSTILE cookie=HOSTILE family:private"),
+      {
+        code: "MEMBER_CACHE_DELETE_FAILED",
+        cause: { secret: "HOSTILE_CAUSE" },
+      },
+    );
+    const env = createEntryControllerHarness({
+      initialIdentity: IDENTITY,
+      cacheLifecycle: {
+        deleteIdentity: vi.fn(async () => { throw hostile; }),
+      },
+    });
+    const controller = env.createController();
+
+    await controller.revoke(entryError("DEVICE_REVOKED"), I1);
+
+    const state = controller.getState();
+    expect(state).toMatchObject({
+      name: "recoverable_error",
+      code: "MEMBER_CACHE_DELETE_FAILED",
+      message: expect.any(String),
+      showRetry: true,
+    });
+    expect(JSON.stringify(state)).not.toMatch(
+      /HOSTILE|token|cookie|family:private|cause|secret/iu,
+    );
+    expect(env.storage.readInstallationId()).toBe(I1);
+    expect(env.storage.readIdentityPointer(I1)).toMatchObject(IDENTITY);
+    expect(env.storage.readCleanupTombstone(I1)).toMatchObject({
+      phase: "deleting",
+      cookiesCleared: true,
+      identity: IDENTITY,
+    });
+  });
+
+  it("finishes owner and target cleanup in one cold bootstrap pass", async () => {
+    const env = createEntryControllerHarness({
+      initialIdentity: IDENTITY,
+      initialClaimIntent: owner(),
+      initialTombstone: tombstone(),
+    });
+    const controller = env.createController();
+
+    await controller.bootstrap({ pendingClaim: pendingClaimFixture() });
+
+    expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+    expect(env.storage.readClaimCookieIntent()).toBeNull();
+    expect(env.cacheLifecycle.deleteIdentity).toHaveBeenCalledOnce();
+    expect(env.storage.readIdentityPointer(I1)).toBeNull();
+    expect(env.storage.readCleanupTombstone(I1)).toBeNull();
+    expect(env.storage.readInstallationId()).toBe(I2);
+    expect(env.rotationCount).toBe(1);
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.api.claimWebPairing).not.toHaveBeenCalled();
+    expect(env.cacheLifecycle.deleteLegacy).not.toHaveBeenCalled();
+    expect(controller.getState().name).toBe("unpaired");
+  });
+
+  it("delivers BroadcastChannel messages asynchronously in FIFO order without echo", async () => {
+    const env = createEntryControllerHarness();
+    const sender = new env.channels.Channel("review-fifo");
+    const firstPeer = new env.channels.Channel("review-fifo");
+    const secondPeer = new env.channels.Channel("review-fifo");
+    const otherName = new env.channels.Channel("review-other");
+    const senderMessages: string[] = [];
+    const firstMessages: string[] = [];
+    const secondMessages: string[] = [];
+    const otherMessages: string[] = [];
+    sender.addEventListener("message", (event: any) =>
+      senderMessages.push(event.data.id)
+    );
+    firstPeer.addEventListener("message", (event: any) =>
+      firstMessages.push(event.data.id)
+    );
+    secondPeer.addEventListener("message", (event: any) =>
+      secondMessages.push(event.data.id)
+    );
+    otherName.addEventListener("message", (event: any) =>
+      otherMessages.push(event.data.id)
+    );
+
+    sender.postMessage({ id: "A" });
+    sender.postMessage({ id: "B" });
+    expect(firstMessages).toEqual([]);
+    expect(secondMessages).toEqual([]);
+    expect(senderMessages).toEqual([]);
+    await env.channels.whenIdle();
+
+    expect(firstMessages).toEqual(["A", "B"]);
+    expect(secondMessages).toEqual(["A", "B"]);
+    expect(senderMessages).toEqual([]);
+    expect(otherMessages).toEqual([]);
+    firstPeer.close();
+    expect(() => firstPeer.postMessage({ id: "late" })).toThrowError(
+      "CHANNEL_CLOSED",
+    );
+    sender.close();
+    secondPeer.close();
+    otherName.close();
   });
 });
