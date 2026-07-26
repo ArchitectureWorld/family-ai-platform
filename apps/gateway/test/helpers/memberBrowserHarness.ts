@@ -140,6 +140,15 @@ class E extends EventTarget {
     this.open = false;
     this.closeCalls += 1;
   }
+  dispatchKeyboard(type: string, key: string, shiftKey = false) {
+    const event = new Event(type, { cancelable: true });
+    Object.defineProperties(event, {
+      key: { value: key },
+      shiftKey: { value: shiftKey },
+    });
+    this.dispatchEvent(event);
+    return event;
+  }
   click() {
     this.dispatchEvent(new Event("click", { cancelable: true }));
   }
@@ -159,6 +168,32 @@ class D {
   }
 }
 const tag: Record<string, string> = {
+  entryView: "section",
+  loadingState: "div",
+  pairForm: "form",
+  pairingMessage: "p",
+  pairingCode: "input",
+  resumeBrowserButton: "button",
+  errorState: "div",
+  errorMessage: "p",
+  retryButton: "button",
+  workspaceView: "section",
+  workspaceSidebar: "aside",
+  personAvatar: "span",
+  personName: "strong",
+  familyName: "small",
+  primaryNavigation: "nav",
+  workNavigationTitle: "h2",
+  logoutButton: "button",
+  revokeButton: "button",
+  deviceName: "span",
+  chatHeading: "h2",
+  chatToWorkTitle: "h2",
+  sendMessageButton: "button",
+  workDetail: "aside",
+  workProgress: "div",
+  mobileNavigation: "nav",
+  createWorkTitle: "h2",
   connectionStatus: "div",
   chatSection: "section",
   workSection: "section",
@@ -221,19 +256,56 @@ export function createMemberDocumentHarness() {
     nodes.createWorkGoalInput,
   );
   nodes.chatToWorkDialog.append(nodes.chatToWorkForm);
-  nodes.chatToWorkForm.append(
-    nodes.chatToWorkTitleInput,
-    nodes.chatToWorkGoalInput,
+  nodes.chatToWorkForm.append(nodes.chatToWorkTitleInput);
+  nodes.entryView.append(nodes.loadingState, nodes.pairForm, nodes.errorState);
+  nodes.pairForm.append(
+    nodes.pairingMessage,
+    nodes.pairingCode,
+    nodes.resumeBrowserButton,
   );
-  for (const section of ["chat", "work"]) {
-    const button = document.createElement("button");
-    button.dataset.section = section;
-    document.body.append(button);
+  nodes.errorState.append(nodes.errorMessage, nodes.retryButton);
+  nodes.workspaceView.append(
+    nodes.workspaceSidebar,
+    nodes.primaryNavigation,
+    nodes.mobileNavigation,
+  );
+  nodes.workspaceSidebar.append(
+    nodes.personAvatar,
+    nodes.personName,
+    nodes.familyName,
+    nodes.workNavigationTitle,
+    nodes.createWorkButton,
+    nodes.workList,
+    nodes.logoutButton,
+    nodes.revokeButton,
+  );
+  nodes.messageComposer.append(nodes.composerStatus, nodes.sendMessageButton);
+  nodes.workMessageComposer.append(
+    nodes.workComposerStatus,
+    nodes.workSendMessageButton,
+  );
+  nodes.workDetail.append(
+    nodes.workDetailGoal,
+    nodes.workSummary,
+    nodes.workProgress,
+  );
+  nodes.workProgress.append(nodes.workPhaseSummary, nodes.workProgressGroups);
+  nodes.createWorkForm.append(nodes.createWorkTitle);
+  nodes.chatToWorkForm.append(nodes.chatToWorkTitle);
+  for (const navigation of [nodes.primaryNavigation, nodes.mobileNavigation]) {
+    for (const section of ["chat", "work"]) {
+      const button = document.createElement("button");
+      button.dataset.section = section;
+      navigation.append(button);
+    }
   }
   for (const dialog of ["createWorkDialog", "chatToWorkDialog"]) {
     const button = document.createElement("button");
     button.dataset.closeDialog = dialog;
-    document.body.append(button);
+    (dialog === "createWorkDialog"
+      ? nodes.createWorkForm
+      : nodes.chatToWorkForm
+    ).append(button);
   }
   return {
     document,
@@ -244,6 +316,9 @@ export function createMemberDocumentHarness() {
     input(id: string, value: string) {
       nodes[id].value = value;
       nodes[id].dispatchEvent(new Event("input", { cancelable: true }));
+    },
+    key(id: string, key: string, shiftKey = false) {
+      return nodes[id].dispatchKeyboard("keydown", key, shiftKey);
     },
     submit(id: string) {
       nodes[id].requestSubmit();
