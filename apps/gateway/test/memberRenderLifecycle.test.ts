@@ -203,4 +203,57 @@ describe("Member Web render lifecycle", () => {
     event.preventDefault();
     expect(event.defaultPrevented).toBe(true);
   });
+  it("matches every real index ID nearest-ancestor chain and dialog form traversal", () => {
+    const harness = createMemberDocumentHarness();
+    const stack: Array<{ tag: string; id: string | null }> = [];
+    const actualParents = new Map<string, string | null>();
+    const voidTags = new Set(["input", "meta", "link", "img", "br", "hr"]);
+    for (const token of readFileSync(indexPath, "utf8").matchAll(
+      /<\/?[a-z][^>]*>/gi,
+    )) {
+      const value = token[0];
+      if (value.startsWith("</")) {
+        stack.pop();
+        continue;
+      }
+      const tag = /^<([a-z]+)/i.exec(value)![1].toLowerCase();
+      const id = /\bid="([^"]+)"/.exec(value)?.[1] ?? null;
+      if (id)
+        actualParents.set(
+          id,
+          [...stack].reverse().find((node) => node.id)?.id ?? null,
+        );
+      if (!voidTags.has(tag) && !value.endsWith("/>")) stack.push({ tag, id });
+    }
+    expect(actualParents).toHaveLength(68);
+    for (const [id, expectedParent] of actualParents) {
+      let parent = harness.elements[id].parentElement;
+      while (parent && !parent.id) parent = parent.parentElement;
+      expect(parent?.id ?? null, id).toBe(expectedParent);
+    }
+    for (const formId of ["createWorkForm", "chatToWorkForm"] as const) {
+      const form = harness.elements[formId];
+      const fields = form.querySelectorAll("button, input, textarea");
+      expect(fields).toContain(
+        formId === "createWorkForm"
+          ? harness.elements.createWorkTitleInput
+          : harness.elements.chatToWorkTitleInput,
+      );
+      expect(fields).toContain(
+        formId === "createWorkForm"
+          ? harness.elements.createWorkGoalInput
+          : harness.elements.chatToWorkGoalInput,
+      );
+    }
+    harness.elements.createWorkTitleInput.value = "title";
+    harness.elements.createWorkGoalInput.value = "goal";
+    harness.elements.chatToWorkTitleInput.value = "chat title";
+    harness.elements.chatToWorkGoalInput.value = "chat goal";
+    harness.elements.createWorkForm.reset();
+    harness.elements.chatToWorkForm.reset();
+    expect(harness.elements.createWorkTitleInput.value).toBe("");
+    expect(harness.elements.createWorkGoalInput.value).toBe("");
+    expect(harness.elements.chatToWorkTitleInput.value).toBe("");
+    expect(harness.elements.chatToWorkGoalInput.value).toBe("");
+  });
 });
