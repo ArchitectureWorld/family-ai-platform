@@ -3,9 +3,11 @@ import { z } from "zod";
 import {
   MOBILE_ENTRY_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  WEB_ENTRY_PROTOCOL_VERSION,
   messageEnvelopeSchema,
   mobileGatewayErrorCodeSchema,
   mobileGatewayErrorSchema,
+  webGatewayErrorSchema,
   type MessageEnvelope,
   type PublicError
 } from "@family-ai/contracts";
@@ -44,6 +46,10 @@ import {
   registerWebEntryCookieBridge,
   registerWebEntryRoutes
 } from "./webEntryRoutes.js";
+import {
+  webAuthenticationSource,
+  webErrorCookieHeaders
+} from "./webEntryCookies.js";
 
 export type GatewayMode = "test" | "development" | "production";
 
@@ -95,8 +101,36 @@ function mobileErrorRoute(request: FastifyRequest): boolean {
     /^\/api\/v1\/admin\/members\/[^/]+\/pairing-codes$/.test(path);
 }
 
-function publicError(request: FastifyRequest, reply: FastifyReply, error: unknown) {
+function webErrorRoute(request: FastifyRequest): boolean {
+  const path = request.url.split("?", 1)[0] ?? request.url;
+  return path.startsWith("/api/v1/web-entry/");
+}
+
+function publicError(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  error: unknown,
+  mode: GatewayMode
+) {
   if (error instanceof GatewayDomainError) {
+    const cookieHeaders = webErrorCookieHeaders({
+      source: webAuthenticationSource(request),
+      errorCode: error.code,
+      mode
+    });
+    if (cookieHeaders.length > 0) reply.header("Set-Cookie", cookieHeaders);
+    if (webErrorRoute(request)) {
+      return reply.code(error.statusCode).send(webGatewayErrorSchema.parse({
+        protocolVersion: WEB_ENTRY_PROTOCOL_VERSION,
+        error: {
+          code: error.code,
+          category: error.category,
+          message: error.message,
+          retryable: error.retryable,
+          requestId: `request:${String(request.id)}`
+        }
+      }));
+    }
     if (
       mobileErrorRoute(request) &&
       mobileGatewayErrorCodeSchema.safeParse(error.code).success
@@ -117,6 +151,18 @@ function publicError(request: FastifyRequest, reply: FastifyReply, error: unknow
       category: error.category,
       message: error.message,
       retryable: error.retryable
+    }));
+  }
+  if (webErrorRoute(request)) {
+    return reply.code(500).send(webGatewayErrorSchema.parse({
+      protocolVersion: WEB_ENTRY_PROTOCOL_VERSION,
+      error: {
+        code: "GATEWAY_INTERNAL_ERROR",
+        category: "internal",
+        message: "Family AI 暂时无法完成这个操作，请稍后重试。",
+        retryable: true,
+        requestId: `request:${String(request.id)}`
+      }
     }));
   }
   if (mobileErrorRoute(request)) {
@@ -328,11 +374,13 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
       });
       return reply.code(result.statusCode).send(result.body);
     } catch (error) {
-      return publicError(request, reply, error);
+      return publicError(request, reply, error, options.mode);
     }
   });
 
-  app.setErrorHandler((error, request, reply) => publicError(request, reply, error));
+  app.setErrorHandler((error, request, reply) =>
+    publicError(request, reply, error, options.mode)
+  );
 
   return app;
 }

@@ -23,10 +23,20 @@ function cookieHeader(setCookie: string | string[] | undefined): string {
   return values.map((value) => value.split(";", 1)[0]).join("; ");
 }
 
+function cookieValue(cookie: string, name: string): string {
+  const encoded = cookie.split("; ")
+    .find((pair) => pair.startsWith(`${name}=`))
+    ?.slice(name.length + 1);
+  if (!encoded) throw new Error(`missing ${name}`);
+  return decodeURIComponent(encoded);
+}
+
 describe("Web Entry Cookie bridge", () => {
   let directory = "";
   let app: Awaited<ReturnType<typeof buildGatewayApp>>;
   let cookie = "";
+  let admin: EntryCredential;
+  let webDeviceRef = "";
 
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-web-entry-bridge-"));
@@ -54,6 +64,7 @@ describe("Web Entry Cookie bridge", () => {
       owner: { personRef: string };
       entries: { admin: EntryCredential };
     };
+    admin = body.entries.admin;
     const pairing = await app.inject({
       method: "POST",
       url: `/api/v1/admin/members/${encodeURIComponent(body.owner.personRef)}/pairing-codes`,
@@ -84,6 +95,7 @@ describe("Web Entry Cookie bridge", () => {
     expect(claim.statusCode).toBe(204);
     expect(claim.body).toBe("");
     cookie = cookieHeader(claim.headers["set-cookie"]);
+    webDeviceRef = cookieValue(cookie, "family_ai_web_device_ref");
   });
 
   afterEach(async () => {
@@ -185,5 +197,59 @@ describe("Web Entry Cookie bridge", () => {
     });
     expect(explicit.statusCode).toBe(401);
     expect(explicit.json()).toMatchObject({ code: "ENTRY_SESSION_INVALID" });
+  });
+
+  it("expires revoked Cookie credentials on every bridge surface without touching explicit Authorization", async () => {
+    const revoked = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/admin/devices/${encodeURIComponent(webDeviceRef)}`,
+      headers: entryHeaders(admin)
+    });
+    expect(revoked.statusCode).toBe(200);
+
+    const surfaces = [
+      "/api/v1/web-entry/context",
+      "/api/v1/chat?timezone=UTC",
+      "/api/v1/work-conversations",
+      "/api/v1/sync/events?afterSequence=0&limit=100"
+    ];
+    for (const url of surfaces) {
+      const response = await app.inject({
+        method: "GET",
+        url,
+        headers: { cookie }
+      });
+      expect(response.statusCode, url).toBe(403);
+      const body = response.json() as {
+        code?: string;
+        error?: { code?: string };
+      };
+      expect(body.error?.code ?? body.code, url).toBe("DEVICE_REVOKED");
+      const setCookie = response.headers["set-cookie"];
+      const values = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+      expect(values, url).toHaveLength(4);
+      expect(values.map((value) => value.split("=", 1)[0]), url).toEqual([
+        "family_ai_web_device_ref",
+        "family_ai_web_device_credential",
+        "family_ai_web_entry_session_ref",
+        "family_ai_web_entry_token"
+      ]);
+      expect(values.every((value) => value.includes("Max-Age=0")), url).toBe(true);
+    }
+
+    const explicitHeaders = {
+      cookie,
+      authorization: `Bearer ${cookieValue(cookie, "family_ai_web_entry_token")}`,
+      "x-entry-session-ref": cookieValue(cookie, "family_ai_web_entry_session_ref")
+    };
+    for (const url of surfaces) {
+      const response = await app.inject({
+        method: "GET",
+        url,
+        headers: explicitHeaders
+      });
+      expect(response.statusCode, url).toBe(403);
+      expect(response.headers["set-cookie"], url).toBeUndefined();
+    }
   });
 });

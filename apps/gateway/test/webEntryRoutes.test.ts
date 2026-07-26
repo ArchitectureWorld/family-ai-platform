@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
+import { WebEntryRepository } from "../src/webEntry.js";
 
 const deviceToken = "web-entry-route-bootstrap-device-token-with-enough-length";
 const deviceCredential = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -48,6 +49,31 @@ function deviceCookie(
   ].join("; ");
 }
 
+const allWebCookieNames = [
+  "family_ai_web_device_ref",
+  "family_ai_web_device_credential",
+  "family_ai_web_entry_session_ref",
+  "family_ai_web_entry_token"
+] as const;
+
+const sessionCookieNames = [
+  "family_ai_web_entry_session_ref",
+  "family_ai_web_entry_token"
+] as const;
+
+function expectExpiredCookies(
+  setCookie: string | string[] | undefined,
+  names: readonly string[]
+): void {
+  const values = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+  expect(values).toHaveLength(names.length);
+  expect(values.map((value) => value.split("=", 1)[0])).toEqual(names);
+  expect(values.every((value) =>
+    value.includes("Max-Age=0") &&
+    value.includes("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+  )).toBe(true);
+}
+
 describe("Web Entry HTTP routes", () => {
   let directory = "";
   let app: Awaited<ReturnType<typeof buildGatewayApp>>;
@@ -55,14 +81,16 @@ describe("Web Entry HTTP routes", () => {
   let personRef = "";
   let pairingRef = "";
   let code = "";
+  let currentTime = new Date("2026-07-25T09:00:00.000Z");
 
   beforeEach(async () => {
+    currentTime = new Date("2026-07-25T09:00:00.000Z");
     directory = mkdtempSync(join(tmpdir(), "family-ai-web-entry-routes-"));
     app = await buildGatewayApp({
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "test",
-      now: () => new Date("2026-07-25T09:00:00.000Z")
+      now: () => currentTime
     });
     const onboarding = await app.inject({
       method: "POST",
@@ -96,6 +124,7 @@ describe("Web Entry HTTP routes", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await app.close();
     rmSync(directory, { recursive: true, force: true });
   });
@@ -230,6 +259,7 @@ describe("Web Entry HTTP routes", () => {
     expect(malformed.statusCode).toBe(400);
     expect(repositoryError.statusCode).toBe(404);
     expect(invalidExistingDevice.statusCode).toBe(401);
+    expectExpiredCookies(invalidExistingDevice.headers["set-cookie"], allWebCookieNames);
     for (const response of [malformed, repositoryError, invalidExistingDevice]) {
       const positiveWebCookies = Object.entries(cookiesByName(response.headers["set-cookie"]))
         .filter(([name, value]) => name.startsWith("family_ai_web_") && value.length > 0);
@@ -311,7 +341,83 @@ describe("Web Entry HTTP routes", () => {
       headers: { cookie: deviceOnly, "x-family-ai-web-request": "1" }
     });
     expect(rejected.statusCode).toBe(403);
-    expect(rejected.json()).toMatchObject({ code: "DEVICE_REVOKED" });
+    expect(rejected.json()).toMatchObject({
+      protocolVersion: 2,
+      error: { code: "DEVICE_REVOKED" }
+    });
+    expectExpiredCookies(rejected.headers["set-cookie"], allWebCookieNames);
+  });
+
+  it("expires only Session cookies for invalid and expired Entry Cookie authentication", async () => {
+    const claimed = await claim();
+    const named = cookiesByName(claimed.headers["set-cookie"]);
+    const invalidCookie = [
+      `family_ai_web_device_ref=${named.family_ai_web_device_ref}`,
+      `family_ai_web_device_credential=${named.family_ai_web_device_credential}`,
+      `family_ai_web_entry_session_ref=${named.family_ai_web_entry_session_ref}`,
+      `family_ai_web_entry_token=${"Z".repeat(43)}`
+    ].join("; ");
+    const invalid = await app.inject({
+      method: "GET",
+      url: "/api/v1/web-entry/context",
+      headers: { cookie: invalidCookie }
+    });
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.json()).toMatchObject({
+      protocolVersion: 2,
+      error: { code: "ENTRY_SESSION_INVALID" }
+    });
+    expectExpiredCookies(invalid.headers["set-cookie"], sessionCookieNames);
+
+    currentTime = new Date("2027-07-25T09:00:00.000Z");
+    const expired = await app.inject({
+      method: "GET",
+      url: "/api/v1/web-entry/context",
+      headers: { cookie: cookieHeader(claimed.headers["set-cookie"]) }
+    });
+    expect(expired.statusCode).toBe(401);
+    expect(expired.json()).toMatchObject({
+      protocolVersion: 2,
+      error: { code: "ENTRY_SESSION_EXPIRED" }
+    });
+    expectExpiredCookies(expired.headers["set-cookie"], sessionCookieNames);
+  });
+
+  it("expires all cookies for invalid Device Cookie authentication but not explicit Authorization", async () => {
+    const claimed = await claim();
+    const named = cookiesByName(claimed.headers["set-cookie"]);
+    const invalidDeviceCookie = deviceCookie(named, otherDeviceCredential);
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/v1/web-entry/session/renew",
+      headers: {
+        cookie: invalidDeviceCookie,
+        "x-family-ai-web-request": "1"
+      }
+    });
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.json()).toMatchObject({
+      protocolVersion: 2,
+      error: { code: "DEVICE_AUTH_INVALID" }
+    });
+    expectExpiredCookies(invalid.headers["set-cookie"], allWebCookieNames);
+
+    const explicit = await app.inject({
+      method: "POST",
+      url: "/api/v1/web-entry/session/renew",
+      headers: {
+        cookie: invalidDeviceCookie,
+        authorization: "Bearer deliberately-invalid-explicit-token",
+        "x-family-ai-web-request": "1"
+      }
+    });
+    expect(explicit.statusCode).toBe(401);
+    expect(explicit.json()).toMatchObject({
+      protocolVersion: 2,
+      error: { code: "DEVICE_AUTH_INVALID" }
+    });
+    expect(explicit.headers["set-cookie"]).toBeUndefined();
   });
 
   it("logs out only the exact authenticated Session and leaves a newer Session active", async () => {
@@ -380,9 +486,113 @@ describe("Web Entry HTTP routes", () => {
     });
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({
-      code: "WEB_REQUEST_FORBIDDEN",
-      category: "permission",
-      retryable: false
+      protocolVersion: 2,
+      error: {
+        code: "WEB_REQUEST_FORBIDDEN",
+        category: "permission",
+        retryable: false
+      }
     });
+  });
+
+  it("clears all browser credentials only for auth-free same-origin requests", async () => {
+    const cleared = await app.inject({
+      method: "POST",
+      url: "/api/v1/web-entry/cookies/clear",
+      headers: {
+        host: "family.example",
+        origin: "https://family.example",
+        "sec-fetch-site": "same-origin",
+        "x-family-ai-web-request": "1"
+      }
+    });
+    expect(cleared.statusCode).toBe(204);
+    expect(cleared.body).toBe("");
+    const setCookie = cleared.headers["set-cookie"];
+    const values = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+    expect(values).toHaveLength(4);
+    expect(values.map((value) => value.split("=", 1)[0])).toEqual([
+      "family_ai_web_device_ref",
+      "family_ai_web_device_credential",
+      "family_ai_web_entry_session_ref",
+      "family_ai_web_entry_token"
+    ]);
+    expect(values.every((value) =>
+      value.includes("Max-Age=0") &&
+      value.includes("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+    )).toBe(true);
+
+    const rejected = [
+      await app.inject({
+        method: "POST",
+        url: "/api/v1/web-entry/cookies/clear",
+        headers: { host: "family.example" }
+      }),
+      await app.inject({
+        method: "POST",
+        url: "/api/v1/web-entry/cookies/clear",
+        headers: {
+          host: "family.example",
+          origin: "https://evil.example",
+          "sec-fetch-site": "cross-site",
+          "x-family-ai-web-request": "1"
+        }
+      }),
+      await app.inject({
+        method: "POST",
+        url: "/api/v1/web-entry/cookies/clear",
+        headers: {
+          host: "family.example",
+          origin: "https://family.example",
+          "sec-fetch-site": "same-origin",
+          "x-family-ai-web-request": "1",
+          authorization: "Bearer explicit-token"
+        }
+      })
+    ];
+    expect(rejected.map((response) => response.statusCode)).toEqual([403, 403, 400]);
+    expect(rejected.map((response) => response.json())).toEqual([
+      expect.objectContaining({
+        protocolVersion: 2,
+        error: expect.objectContaining({ code: "WEB_REQUEST_FORBIDDEN" })
+      }),
+      expect.objectContaining({
+        protocolVersion: 2,
+        error: expect.objectContaining({ code: "WEB_REQUEST_FORBIDDEN" })
+      }),
+      expect.objectContaining({
+        protocolVersion: 2,
+        error: expect.objectContaining({ code: "REQUEST_INVALID" })
+      })
+    ]);
+    expect(rejected.every((response) => response.headers["set-cookie"] === undefined)).toBe(true);
+  });
+
+  it("serializes unexpected Claim failures as the strict Web v2 error envelope", async () => {
+    vi.spyOn(WebEntryRepository.prototype, "claimPairing").mockImplementationOnce(() => {
+      throw new Error("repository implementation detail");
+    });
+    const response = await claim();
+    expect(response.statusCode).toBe(500);
+    const body = response.json() as Record<string, unknown> & {
+      error: Record<string, unknown>;
+    };
+    expect(Object.keys(body)).toEqual(["protocolVersion", "error"]);
+    expect(body.protocolVersion).toBe(2);
+    expect(Object.keys(body.error)).toEqual([
+      "code",
+      "category",
+      "message",
+      "retryable",
+      "requestId"
+    ]);
+    expect(body.error).toMatchObject({
+      code: "GATEWAY_INTERNAL_ERROR",
+      category: "internal",
+      message: "Family AI 暂时无法完成这个操作，请稍后重试。",
+      retryable: true,
+      requestId: expect.stringMatching(/^request:/)
+    });
+    expect(body).not.toHaveProperty("code");
   });
 });

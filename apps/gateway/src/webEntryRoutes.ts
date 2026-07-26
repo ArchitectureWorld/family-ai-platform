@@ -20,8 +20,8 @@ import {
   assertWebCookieRequestAllowed,
   clearAllWebEntryCookieHeaders,
   clearWebSessionCookieHeaders,
-  readWebDeviceCookies,
   setWebEntryCookieHeaders,
+  useWebDeviceCookies,
   type WebCookieMode
 } from "./webEntryCookies.js";
 
@@ -80,6 +80,15 @@ export function registerWebEntryRoutes(
     mode: WebCookieMode;
   }
 ): void {
+  app.post("/api/v1/web-entry/cookies/clear", async (request, reply) => {
+    assertWebCookieRequestAllowed(request);
+    if (request.headers.authorization) {
+      throw invalidRequest("Cookie 清理接口不接受 Authorization。");
+    }
+    setCookies(reply, clearAllWebEntryCookieHeaders(input.mode));
+    return reply.code(204).send();
+  });
+
   app.post("/api/v1/web-entry/pairing/claim", async (request, reply) => {
     assertWebCookieRequestAllowed(request);
     if (request.headers.authorization) {
@@ -88,7 +97,7 @@ export function registerWebEntryRoutes(
     const parsed = webPairingClaimRequestSchema.safeParse(request.body);
     if (!parsed.success) throw invalidRequest("浏览器配对请求格式无效。");
 
-    const existingDevice = readWebDeviceCookies(request);
+    const existingDevice = useWebDeviceCookies(request);
     const claimed = input.repository.claimPairing({
       ...parsed.data,
       ...(existingDevice ? { existingDevice } : {})
@@ -117,7 +126,7 @@ export function registerWebEntryRoutes(
 
   app.post("/api/v1/web-entry/session/renew", async (request, reply) => {
     assertWebCookieRequestAllowed(request);
-    const cookies = readWebDeviceCookies(request);
+    const cookies = useWebDeviceCookies(request);
     if (!cookies) throw invalidDevice();
     const device = input.repository.authenticateDevice(
       cookies.deviceRef,
@@ -159,7 +168,7 @@ export function registerWebEntryRoutes(
 
   app.delete("/api/v1/web-entry/device", async (request, reply) => {
     assertWebCookieRequestAllowed(request);
-    const cookies = readWebDeviceCookies(request);
+    const cookies = useWebDeviceCookies(request);
     if (!cookies) throw invalidDevice();
     const device = input.repository.authenticateDevice(
       cookies.deviceRef,

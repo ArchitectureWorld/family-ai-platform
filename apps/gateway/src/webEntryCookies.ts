@@ -3,6 +3,12 @@ import { GatewayDomainError } from "./service.js";
 
 export type WebCookieMode = "test" | "development" | "production";
 
+export type WebAuthenticationSource =
+  | "none"
+  | "explicit_authorization"
+  | "entry_cookie"
+  | "device_cookie";
+
 export const WEB_COOKIE_NAMES = {
   deviceRef: "family_ai_web_device_ref",
   deviceCredential: "family_ai_web_device_credential",
@@ -15,6 +21,18 @@ export interface WebEntryCookieSecrets {
   deviceCredential: string;
   entrySessionRef: string;
   entryToken: string;
+}
+
+const authenticationSources =
+  new WeakMap<FastifyRequest, WebAuthenticationSource>();
+
+export function webAuthenticationSource(
+  request: FastifyRequest
+): WebAuthenticationSource {
+  if (request.headers.authorization && !authenticationSources.has(request)) {
+    return "explicit_authorization";
+  }
+  return authenticationSources.get(request) ?? "none";
 }
 
 function headerString(value: string | string[] | undefined): string | undefined {
@@ -77,6 +95,32 @@ export function clearAllWebEntryCookieHeaders(mode: WebCookieMode): string[] {
     expiredCookie(WEB_COOKIE_NAMES.deviceCredential, mode),
     ...clearWebSessionCookieHeaders(mode)
   ];
+}
+
+export function webErrorCookieHeaders(input: {
+  source: WebAuthenticationSource;
+  errorCode: string;
+  mode: WebCookieMode;
+}): string[] {
+  if (input.source === "explicit_authorization" || input.source === "none") {
+    return [];
+  }
+  if (input.errorCode === "DEVICE_REVOKED") {
+    return clearAllWebEntryCookieHeaders(input.mode);
+  }
+  if (
+    input.source === "device_cookie" &&
+    input.errorCode === "DEVICE_AUTH_INVALID"
+  ) {
+    return clearAllWebEntryCookieHeaders(input.mode);
+  }
+  if (
+    input.source === "entry_cookie" &&
+    ["ENTRY_SESSION_INVALID", "ENTRY_SESSION_EXPIRED"].includes(input.errorCode)
+  ) {
+    return clearWebSessionCookieHeaders(input.mode);
+  }
+  return [];
 }
 
 export function parseCookieHeader(header: string | string[] | undefined): Record<string, string> {
@@ -162,12 +206,13 @@ export function applyWebEntryCookieHeaders(request: FastifyRequest): boolean {
   if (!entrySessionRef || !entryToken) return false;
 
   assertWebCookieRequestAllowed(request);
+  authenticationSources.set(request, "entry_cookie");
   request.headers.authorization = `Bearer ${entryToken}`;
   request.headers["x-entry-session-ref"] = entrySessionRef;
   return true;
 }
 
-export function readWebDeviceCookies(request: FastifyRequest): {
+function readWebDeviceCookies(request: FastifyRequest): {
   deviceRef: string;
   deviceCredential: string;
 } | null {
@@ -175,4 +220,19 @@ export function readWebDeviceCookies(request: FastifyRequest): {
   const deviceRef = cookies[WEB_COOKIE_NAMES.deviceRef];
   const deviceCredential = cookies[WEB_COOKIE_NAMES.deviceCredential];
   return deviceRef && deviceCredential ? { deviceRef, deviceCredential } : null;
+}
+
+export function useWebDeviceCookies(request: FastifyRequest): {
+  deviceRef: string;
+  deviceCredential: string;
+} | null {
+  const cookies = readWebDeviceCookies(request);
+  if (
+    cookies &&
+    !request.headers.authorization &&
+    !authenticationSources.has(request)
+  ) {
+    authenticationSources.set(request, "device_cookie");
+  }
+  return cookies;
 }
