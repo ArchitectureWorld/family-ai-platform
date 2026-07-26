@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   openGatewayDatabase,
@@ -25,7 +26,8 @@ const migrationVersions = [
   { version: 2 },
   { version: 3 },
   { version: 4 },
-  { version: 5 }
+  { version: 5 },
+  { version: 6 }
 ];
 
 describe("gateway database", () => {
@@ -81,7 +83,9 @@ describe("gateway database", () => {
       "created_at",
       "consumed_at",
       "consumed_device_ref",
-      "revoked_at"
+      "revoked_at",
+      "web_claim_session_ref",
+      "web_replay_count"
     ]);
 
     const mobileColumns = db
@@ -99,6 +103,137 @@ describe("gateway database", () => {
     );
 
     expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("adds bounded Web Claim replay metadata", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-web-replay-schema-"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    const columns = db
+      .prepare("PRAGMA table_info(mobile_pairing_codes)")
+      .all()
+      .map((row) => String((row as { name: unknown }).name));
+    expect(columns).toEqual(expect.arrayContaining([
+      "web_claim_session_ref",
+      "web_replay_count"
+    ]));
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("upgrades V5 pairing rows with bounded Web Claim replay metadata", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-web-replay-upgrade-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    const legacy = new Database(databasePath);
+    legacy.pragma("foreign_keys = ON");
+    legacy.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+      INSERT INTO schema_migrations(version, applied_at) VALUES
+        (1, '2026-07-25T00:00:00.000Z'),
+        (2, '2026-07-25T00:00:00.000Z'),
+        (3, '2026-07-25T00:00:00.000Z'),
+        (4, '2026-07-25T00:00:00.000Z'),
+        (5, '2026-07-25T00:00:00.000Z');
+      CREATE TABLE families (family_ref TEXT PRIMARY KEY);
+      CREATE TABLE persons (person_ref TEXT PRIMARY KEY);
+      CREATE TABLE entry_bindings (entry_binding_ref TEXT PRIMARY KEY);
+      CREATE TABLE managed_devices (device_ref TEXT PRIMARY KEY);
+      CREATE TABLE entry_sessions (entry_session_ref TEXT PRIMARY KEY);
+      CREATE TABLE mobile_pairing_codes (
+        pairing_ref TEXT PRIMARY KEY,
+        family_ref TEXT NOT NULL REFERENCES families(family_ref) ON DELETE CASCADE,
+        person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+        code_hash TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL CHECK (status IN ('active', 'consumed', 'revoked', 'expired')),
+        failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+        max_attempts INTEGER NOT NULL CHECK (max_attempts > 0),
+        expires_at TEXT NOT NULL,
+        created_by_entry_binding_ref TEXT NOT NULL REFERENCES entry_bindings(entry_binding_ref),
+        created_at TEXT NOT NULL,
+        consumed_at TEXT,
+        consumed_device_ref TEXT REFERENCES managed_devices(device_ref),
+        revoked_at TEXT
+      );
+      INSERT INTO families VALUES ('family:one');
+      INSERT INTO persons VALUES ('person:one');
+      INSERT INTO entry_bindings VALUES ('binding:one');
+      INSERT INTO managed_devices VALUES ('device:one');
+      INSERT INTO mobile_pairing_codes VALUES
+        ('pairing:active', 'family:one', 'person:one', 'hash:active', 'active', 0, 3,
+         '2026-07-26T00:00:00.000Z', 'binding:one', '2026-07-25T00:00:00.000Z', NULL, NULL, NULL),
+        ('pairing:consumed', 'family:one', 'person:one', 'hash:consumed', 'consumed', 0, 3,
+         '2026-07-26T00:00:00.000Z', 'binding:one', '2026-07-25T00:00:00.000Z',
+         '2026-07-25T01:00:00.000Z', 'device:one', NULL);
+    `);
+    legacy.close();
+
+    db = openGatewayDatabase(databasePath);
+    expect(
+      db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
+    ).toEqual(migrationVersions);
+    expect(
+      db.prepare(
+        `SELECT pairing_ref, status, web_claim_session_ref, web_replay_count
+         FROM mobile_pairing_codes ORDER BY pairing_ref`
+      ).all()
+    ).toEqual([
+      {
+        pairing_ref: "pairing:active",
+        status: "active",
+        web_claim_session_ref: null,
+        web_replay_count: 0
+      },
+      {
+        pairing_ref: "pairing:consumed",
+        status: "consumed",
+        web_claim_session_ref: null,
+        web_replay_count: 0
+      }
+    ]);
+    expect(
+      db.prepare("PRAGMA table_info(mobile_pairing_codes)").all()
+    ).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "web_replay_count",
+        notnull: 1,
+        dflt_value: "0"
+      })
+    ]));
+    expect(
+      db.prepare("PRAGMA foreign_key_list(mobile_pairing_codes)").all()
+    ).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        table: "entry_sessions",
+        from: "web_claim_session_ref",
+        to: "entry_session_ref"
+      })
+    ]));
+    expect(() => {
+      db!.prepare(
+        "UPDATE mobile_pairing_codes SET web_replay_count = -1 WHERE pairing_ref = ?"
+      ).run("pairing:active");
+    }).toThrow(/CHECK constraint failed/);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("rejects unknown newer Gateway schema versions", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-unknown-schema-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    const legacy = new Database(databasePath);
+    legacy.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+      INSERT INTO schema_migrations(version, applied_at)
+      VALUES(7, '2026-07-25T00:00:00.000Z');
+    `);
+    legacy.close();
+
+    expect(() => openGatewayDatabase(databasePath)).toThrow(
+      "Unsupported Gateway schema version: 7"
+    );
   });
 
   it("creates the formal Chat Work domain schema with thread-scoped uniqueness", () => {

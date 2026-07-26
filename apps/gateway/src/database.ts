@@ -407,6 +407,14 @@ CREATE INDEX thread_provider_turns_thread_status_idx
   ON thread_provider_turns(thread_ref, status, requested_at);
 `;
 
+const MIGRATION_V6 = `
+ALTER TABLE mobile_pairing_codes
+  ADD COLUMN web_claim_session_ref TEXT REFERENCES entry_sessions(entry_session_ref);
+ALTER TABLE mobile_pairing_codes
+  ADD COLUMN web_replay_count INTEGER NOT NULL DEFAULT 0
+  CHECK (web_replay_count >= 0);
+`;
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -428,7 +436,7 @@ function applyMigrations(db: GatewayDatabase): void {
   }
 
   let latest = latestMigrationVersion(db);
-  if (latest > 5 || latest < 1) {
+  if (latest > 6 || latest < 1) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
   if (latest === 1) {
@@ -467,7 +475,16 @@ function applyMigrations(db: GatewayDatabase): void {
     })();
     latest = 5;
   }
-  if (latest !== 5) {
+  if (latest === 5) {
+    db.transaction(() => {
+      db.exec(MIGRATION_V6);
+      db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES(6, ?)").run(
+        new Date().toISOString()
+      );
+    })();
+    latest = 6;
+  }
+  if (latest !== 6) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
