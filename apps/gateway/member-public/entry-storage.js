@@ -34,12 +34,24 @@ const INSTALLATION_PREFIXES = [
   TOMBSTONE_PREFIX
 ];
 
-function exactObject(value, keys) {
-  return value !== null
-    && typeof value === "object"
-    && !Array.isArray(value)
-    && Object.keys(value).length === keys.length
-    && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+function readExactFields(value, keys) {
+  try {
+    if (
+      value === null
+      || typeof value !== "object"
+      || Array.isArray(value)
+    ) return null;
+    const ownKeys = Object.keys(value);
+    if (
+      ownKeys.length !== keys.length
+      || keys.some((key) => !ownKeys.includes(key))
+    ) return null;
+    const fields = {};
+    for (const key of keys) fields[key] = value[key];
+    return fields;
+  } catch {
+    throw invalidRecord();
+  }
 }
 
 function validUuid(value) {
@@ -54,84 +66,137 @@ function validTimestamp(value) {
     && new Date(millis).toISOString() === value;
 }
 
-function validIdentity(value) {
-  return exactObject(value, ["familyRef", "personRef", "deviceRef"])
-    && FAMILY_REF_PATTERN.test(value.familyRef)
-    && PERSON_REF_PATTERN.test(value.personRef)
-    && DEVICE_REF_PATTERN.test(value.deviceRef);
+function canonicalIdentity(value) {
+  const fields = readExactFields(
+    value,
+    ["familyRef", "personRef", "deviceRef"]
+  );
+  if (
+    !fields
+    || typeof fields.familyRef !== "string"
+    || typeof fields.personRef !== "string"
+    || typeof fields.deviceRef !== "string"
+    || !FAMILY_REF_PATTERN.test(fields.familyRef)
+    || !PERSON_REF_PATTERN.test(fields.personRef)
+    || !DEVICE_REF_PATTERN.test(fields.deviceRef)
+  ) return null;
+  return {
+    familyRef: fields.familyRef,
+    personRef: fields.personRef,
+    deviceRef: fields.deviceRef
+  };
 }
 
 function sameIdentity(left, right) {
-  return left?.familyRef === right?.familyRef
-    && left?.personRef === right?.personRef
-    && left?.deviceRef === right?.deviceRef;
+  return left.familyRef === right.familyRef
+    && left.personRef === right.personRef
+    && left.deviceRef === right.deviceRef;
 }
 
-function validLockMarker(value) {
-  return exactObject(value, ["protocolVersion", "lockedAt"])
-    && value.protocolVersion === 2
-    && validTimestamp(value.lockedAt);
+function canonicalLockMarker(value) {
+  const fields = readExactFields(value, ["protocolVersion", "lockedAt"]);
+  if (
+    !fields
+    || fields.protocolVersion !== 2
+    || !validTimestamp(fields.lockedAt)
+  ) return null;
+  return {
+    protocolVersion: 2,
+    lockedAt: fields.lockedAt
+  };
 }
 
-function validIdentityPointer(value) {
-  return exactObject(value, [
+function canonicalIdentityPointer(value) {
+  const fields = readExactFields(value, [
     "protocolVersion",
     "familyRef",
     "personRef",
     "deviceRef"
-  ])
-    && value.protocolVersion === 2
-    && validIdentity({
-      familyRef: value.familyRef,
-      personRef: value.personRef,
-      deviceRef: value.deviceRef
-    });
+  ]);
+  if (!fields || fields.protocolVersion !== 2) return null;
+  const identity = canonicalIdentity({
+    familyRef: fields.familyRef,
+    personRef: fields.personRef,
+    deviceRef: fields.deviceRef
+  });
+  return identity ? { protocolVersion: 2, ...identity } : null;
 }
 
-function validLifecycle(value) {
-  return exactObject(value, [
+function canonicalLifecycle(value) {
+  const fields = readExactFields(value, [
     "protocolVersion",
     "revision",
     "state",
     "transitionId"
-  ])
-    && value.protocolVersion === 2
-    && Number.isSafeInteger(value.revision)
-    && value.revision > 0
-    && LIFECYCLE_STATES.has(value.state)
-    && validUuid(value.transitionId);
+  ]);
+  if (
+    !fields
+    || fields.protocolVersion !== 2
+    || !Number.isSafeInteger(fields.revision)
+    || fields.revision <= 0
+    || !LIFECYCLE_STATES.has(fields.state)
+    || !validUuid(fields.transitionId)
+  ) return null;
+  return {
+    protocolVersion: 2,
+    revision: fields.revision,
+    state: fields.state,
+    transitionId: fields.transitionId
+  };
 }
 
-function validTombstone(value) {
-  if (!exactObject(value, [
+function canonicalTombstone(value) {
+  const fields = readExactFields(value, [
     "protocolVersion",
     "transitionId",
     "identity",
     "phase",
     "cookiesCleared"
-  ])) return false;
+  ]);
   if (
-    value.protocolVersion !== 2
-    || !validUuid(value.transitionId)
-    || !["closing", "deleting"].includes(value.phase)
-    || typeof value.cookiesCleared !== "boolean"
-    || (value.identity !== null && !validIdentity(value.identity))
-  ) return false;
-  return value.phase !== "deleting"
-    || (value.identity !== null && value.cookiesCleared === true);
+    !fields
+    || fields.protocolVersion !== 2
+    || !validUuid(fields.transitionId)
+    || !["closing", "deleting"].includes(fields.phase)
+    || typeof fields.cookiesCleared !== "boolean"
+  ) return null;
+  const identity = fields.identity === null
+    ? null
+    : canonicalIdentity(fields.identity);
+  if (fields.identity !== null && identity === null) return null;
+  if (
+    fields.phase === "deleting"
+    && (identity === null || fields.cookiesCleared !== true)
+  ) return null;
+  return {
+    protocolVersion: 2,
+    transitionId: fields.transitionId,
+    identity,
+    phase: fields.phase,
+    cookiesCleared: fields.cookiesCleared
+  };
 }
 
-function validCookieOwner(value) {
-  return exactObject(value, [
+function canonicalCookieOwner(value) {
+  const fields = readExactFields(value, [
     "protocolVersion",
     "transitionId",
     "installationId",
     "createdAt"
-  ])
-    && value.protocolVersion === 2
-    && validUuid(value.transitionId)
-    && validUuid(value.installationId)
-    && validTimestamp(value.createdAt);
+  ]);
+  if (
+    !fields
+    || fields.protocolVersion !== 2
+    || !validUuid(fields.transitionId)
+    || !validUuid(fields.installationId)
+    || !validTimestamp(fields.createdAt)
+  ) return null;
+  return {
+    protocolVersion: 2,
+    transitionId: fields.transitionId,
+    installationId: fields.installationId,
+    createdAt: fields.createdAt
+  };
 }
 
 function invalidRecord() {
@@ -144,7 +209,7 @@ function parseEventRecord(text, validator) {
   if (typeof text !== "string") return null;
   try {
     const value = JSON.parse(text);
-    return validator(value) ? value : null;
+    return validator(value);
   } catch {
     return null;
   }
@@ -215,7 +280,7 @@ export function createEntryStorage({
     return value;
   }
 
-  function getOrCreateInstallationId() {
+  function getOrCreateInstallationIdLocked() {
     const current = readInstallationId();
     if (current) return current;
     const next = nextInstallationId();
@@ -236,11 +301,11 @@ export function createEntryStorage({
     return readStoredRecord(
       localStorage,
       lockKey(installationId),
-      validLockMarker
+      canonicalLockMarker
     );
   }
 
-  function writeLockMarker(installationId) {
+  function writeLockMarkerLocked(installationId) {
     requireInstallationId(installationId);
     const current = readLockMarker(installationId);
     const currentMillis = Date.parse(current?.lockedAt ?? "");
@@ -256,21 +321,19 @@ export function createEntryStorage({
     return marker;
   }
 
-  function clearLockMarker(installationId, expectedMarker) {
+  function clearLockMarkerLocked(installationId, expectedMarker) {
     requireInstallationId(installationId);
     const key = lockKey(installationId);
     const currentText = localStorage.getItem(key);
     if (currentText === null) return false;
+    const current = parseEventRecord(currentText, canonicalLockMarker);
+    if (!current) throw invalidRecord();
     if (arguments.length < 2) {
       localStorage.removeItem(key);
       return true;
     }
-    const current = parseEventRecord(currentText, validLockMarker);
-    if (!current) throw invalidRecord();
-    if (
-      !validLockMarker(expectedMarker)
-      || currentText !== JSON.stringify(expectedMarker)
-    ) return false;
+    const expected = canonicalLockMarker(expectedMarker);
+    if (!expected || currentText !== JSON.stringify(expected)) return false;
     localStorage.removeItem(key);
     return true;
   }
@@ -280,19 +343,20 @@ export function createEntryStorage({
     return readStoredRecord(
       localStorage,
       identityKey(installationId),
-      validIdentityPointer
+      canonicalIdentityPointer
     );
   }
 
   function writeIdentityPointer(installationId, identity) {
     requireInstallationId(installationId);
-    if (!validIdentity(identity)) throw invalidRecord();
+    const canonical = canonicalIdentity(identity);
+    if (!canonical) throw invalidRecord();
     const current = readIdentityPointer(installationId);
     if (current) {
-      if (!sameIdentity(current, identity)) throw identityConflict();
+      if (!sameIdentity(current, canonical)) throw identityConflict();
       return current;
     }
-    const pointer = { protocolVersion: 2, ...identity };
+    const pointer = { protocolVersion: 2, ...canonical };
     localStorage.setItem(identityKey(installationId), JSON.stringify(pointer));
     return pointer;
   }
@@ -302,13 +366,14 @@ export function createEntryStorage({
     const key = identityKey(installationId);
     const currentText = localStorage.getItem(key);
     if (currentText === null) return false;
+    const current = parseEventRecord(currentText, canonicalIdentityPointer);
+    if (!current) throw invalidRecord();
     if (arguments.length < 2) {
       localStorage.removeItem(key);
       return true;
     }
-    const current = parseEventRecord(currentText, validIdentityPointer);
-    if (!current) throw invalidRecord();
-    if (!validIdentity(expectedIdentity) || !sameIdentity(current, expectedIdentity)) {
+    const expected = canonicalIdentity(expectedIdentity);
+    if (!expected || !sameIdentity(current, expected)) {
       return false;
     }
     localStorage.removeItem(key);
@@ -320,20 +385,24 @@ export function createEntryStorage({
     return readStoredRecord(
       localStorage,
       tombstoneKey(installationId),
-      validTombstone
+      canonicalTombstone
     );
   }
 
   function listCleanupTombstones() {
-    const records = [];
+    const keys = [];
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index);
-      if (typeof key !== "string" || !key.startsWith(TOMBSTONE_PREFIX)) {
-        continue;
+      if (typeof key === "string" && key.startsWith(TOMBSTONE_PREFIX)) {
+        keys.push(key);
       }
+    }
+    const records = [];
+    for (const key of keys) {
       const installationId = key.slice(TOMBSTONE_PREFIX.length);
       if (!validUuid(installationId)) throw invalidRecord();
-      const tombstone = readStoredRecord(localStorage, key, validTombstone);
+      const tombstone = readStoredRecord(localStorage, key, canonicalTombstone);
+      if (tombstone === null) continue;
       records.push({ installationId, tombstone });
     }
     return records.sort((left, right) =>
@@ -343,26 +412,27 @@ export function createEntryStorage({
 
   function writeCleanupTombstone(installationId, tombstone) {
     requireInstallationId(installationId);
-    if (!validTombstone(tombstone)) throw invalidRecord();
+    const next = canonicalTombstone(tombstone);
+    if (!next) throw invalidRecord();
     const current = readCleanupTombstone(installationId);
     if (current) {
-      const regressed = current.transitionId !== tombstone.transitionId
-        || (current.cookiesCleared && !tombstone.cookiesCleared)
-        || (current.phase === "deleting" && tombstone.phase !== "deleting")
+      const regressed = current.transitionId !== next.transitionId
+        || (current.cookiesCleared && !next.cookiesCleared)
+        || (current.phase === "deleting" && next.phase !== "deleting")
         || (
           current.identity !== null
           && (
-            tombstone.identity === null
-            || !sameIdentity(current.identity, tombstone.identity)
+            next.identity === null
+            || !sameIdentity(current.identity, next.identity)
           )
         );
       if (regressed) throw tombstoneRegression();
     }
     localStorage.setItem(
       tombstoneKey(installationId),
-      JSON.stringify(tombstone)
+      JSON.stringify(next)
     );
-    return tombstone;
+    return next;
   }
 
   function clearCleanupTombstone(installationId, expectedTransitionId) {
@@ -374,7 +444,7 @@ export function createEntryStorage({
   }
 
   function readCookieOwner(key) {
-    return readStoredRecord(localStorage, key, validCookieOwner);
+    return readStoredRecord(localStorage, key, canonicalCookieOwner);
   }
 
   function readClaimCookieIntent() {
@@ -391,24 +461,26 @@ export function createEntryStorage({
   }
 
   function writeClaimCookieIntent(intent) {
-    if (!validCookieOwner(intent)) throw invalidRecord();
+    const canonical = canonicalCookieOwner(intent);
+    if (!canonical) throw invalidRecord();
     requireNoCookieOwner(COOKIE_CLEAR_PENDING_KEY);
     const current = readClaimCookieIntent();
     if (current) {
-      if (current.transitionId !== intent.transitionId) throw ownerConflict();
+      if (current.transitionId !== canonical.transitionId) throw ownerConflict();
       return current;
     }
-    localStorage.setItem(CLAIM_COOKIE_INTENT_KEY, JSON.stringify(intent));
-    return intent;
+    localStorage.setItem(CLAIM_COOKIE_INTENT_KEY, JSON.stringify(canonical));
+    return canonical;
   }
 
   function writeCookieClearPending(signal) {
-    if (!validCookieOwner(signal)) throw invalidRecord();
+    const canonical = canonicalCookieOwner(signal);
+    if (!canonical) throw invalidRecord();
     requireNoCookieOwner(CLAIM_COOKIE_INTENT_KEY);
     const current = readCookieClearPending();
     if (current) return current;
-    localStorage.setItem(COOKIE_CLEAR_PENDING_KEY, JSON.stringify(signal));
-    return signal;
+    localStorage.setItem(COOKIE_CLEAR_PENDING_KEY, JSON.stringify(canonical));
+    return canonical;
   }
 
   function clearCookieOwner(key, expectedTransitionId) {
@@ -427,16 +499,30 @@ export function createEntryStorage({
   }
 
   function readCookieOwnerWakeFromEvent(storageEvent) {
+    let key;
+    try {
+      key = storageEvent?.key;
+    } catch {
+      throw invalidRecord();
+    }
     if (
-      storageEvent?.key !== CLAIM_COOKIE_INTENT_KEY
-      && storageEvent?.key !== COOKIE_CLEAR_PENDING_KEY
+      key !== CLAIM_COOKIE_INTENT_KEY
+      && key !== COOKIE_CLEAR_PENDING_KEY
     ) return null;
-    if (storageEvent.oldValue === null && storageEvent.newValue !== null) {
-      const owner = parseEventRecord(storageEvent.newValue, validCookieOwner);
+    let oldValue;
+    let newValue;
+    try {
+      oldValue = storageEvent.oldValue;
+      newValue = storageEvent.newValue;
+    } catch {
+      throw invalidRecord();
+    }
+    if (oldValue === null && newValue !== null) {
+      const owner = parseEventRecord(newValue, canonicalCookieOwner);
       return owner ? { kind: "set", owner } : null;
     }
-    if (storageEvent.newValue === null) {
-      const owner = parseEventRecord(storageEvent.oldValue, validCookieOwner);
+    if (newValue === null) {
+      const owner = parseEventRecord(oldValue, canonicalCookieOwner);
       return owner ? { kind: "clear", owner } : null;
     }
     return null;
@@ -447,7 +533,7 @@ export function createEntryStorage({
     return readStoredRecord(
       localStorage,
       lifecycleKey(installationId),
-      validLifecycle
+      canonicalLifecycle
     );
   }
 
@@ -470,12 +556,12 @@ export function createEntryStorage({
   }
 
   return {
-    getOrCreateInstallationId,
+    getOrCreateInstallationIdLocked,
     readInstallationId,
     rotateInstallationId,
     readLockMarker,
-    writeLockMarker,
-    clearLockMarker,
+    writeLockMarkerLocked,
+    clearLockMarkerLocked,
     readIdentityPointer,
     writeIdentityPointer,
     clearIdentityPointer,

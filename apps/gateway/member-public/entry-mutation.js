@@ -9,6 +9,9 @@ export function createEntryMutationLock({
 } = {}) {
   const available = typeof locks?.request === "function";
   const cookieMutationName = "family-ai-member-cookie-mutation";
+  const installationInitName = "family-ai-member-installation-init";
+  const markerMutationName = (installationId) =>
+    `family-ai-member-entry-marker:${installationId}`;
   const entryMutationName = (installationId) =>
     `family-ai-member-entry-mutation:${installationId}`;
   const productFlightName = (installationId) =>
@@ -18,6 +21,28 @@ export function createEntryMutationLock({
 
   return {
     available,
+
+    async runInstallationInit(callback) {
+      if (!available) {
+        throw unavailable("当前浏览器不支持安全安装初始化。");
+      }
+      return locks.request(
+        installationInitName,
+        { mode: "exclusive" },
+        callback
+      );
+    },
+
+    async runMarkerMutation(installationId, callback) {
+      if (!available) {
+        throw unavailable("当前浏览器不支持安全入口标记协调。");
+      }
+      return locks.request(
+        markerMutationName(installationId),
+        { mode: "exclusive" },
+        callback
+      );
+    },
 
     async runCookieMutation(callback) {
       if (!available) {

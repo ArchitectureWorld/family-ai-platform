@@ -406,7 +406,11 @@ export function createMemberDocumentHarness() {
 import { vi } from "vitest";
 export { D as FakeDocument, E as FakeElement };
 export function createStorage(
-  options: { onSetItem?: (key: string, value: string) => void } = {},
+  options: {
+    onGetItem?: (key: string) => void;
+    onSetItem?: (key: string, value: string) => void;
+    onRemoveItem?: (key: string) => void;
+  } = {},
 ) {
   const values = new Map<string, string>();
   return {
@@ -414,13 +418,17 @@ export function createStorage(
       return values.size;
     },
     key: (index: number) => [...values.keys()][index] ?? null,
-    getItem: (key: string) => values.get(key) ?? null,
+    getItem: (key: string) => {
+      options.onGetItem?.(key);
+      return values.get(key) ?? null;
+    },
     setItem: (key: string, value: string) => {
       const text = String(value);
       values.set(key, text);
       options.onSetItem?.(key, text);
     },
     removeItem: (key: string) => {
+      options.onRemoveItem?.(key);
       values.delete(key);
     },
     clear: () => values.clear(),

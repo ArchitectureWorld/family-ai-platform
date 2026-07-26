@@ -80,11 +80,24 @@ async function flush() {
   await Promise.resolve();
 }
 
+function changingOwnKeys<T extends object>(
+  target: T,
+  firstKeys: string[],
+): T {
+  let calls = 0;
+  return new Proxy(target, {
+    ownKeys(value) {
+      calls += 1;
+      return calls === 1 ? firstKeys : Reflect.ownKeys(value);
+    },
+  });
+}
+
 describe("Member Entry non-secret storage", () => {
   it("stores only protocol-v2 non-secret lifecycle records under exact installation keys", () => {
     const { entry, storage } = createFixedEntry();
-    const installationId = entry.getOrCreateInstallationId();
-    const marker = entry.writeLockMarker(installationId);
+    const installationId = entry.getOrCreateInstallationIdLocked();
+    const marker = entry.writeLockMarkerLocked(installationId);
     entry.writeIdentityPointer(installationId, IDENTITY_A);
     entry.writeCleanupTombstone(
       installationId,
@@ -238,14 +251,24 @@ describe("Member Entry non-secret storage", () => {
     }
   });
 
+  it("exposes synchronous installation and marker RMW only with an explicit locked precondition", () => {
+    const { entry } = createFixedEntry();
+    expect(entry.getOrCreateInstallationIdLocked).toBeTypeOf("function");
+    expect(entry.writeLockMarkerLocked).toBeTypeOf("function");
+    expect(entry.clearLockMarkerLocked).toBeTypeOf("function");
+    expect((entry as any).getOrCreateInstallationId).toBeUndefined();
+    expect((entry as any).writeLockMarker).toBeUndefined();
+    expect((entry as any).clearLockMarker).toBeUndefined();
+  });
+
   it("creates one installation UUID and rotates an expected UUID only once", () => {
     const storage = createStorage();
     const cryptoImpl = deterministicUuidCrypto();
     const firstTab = createEntryStorage({ localStorage: storage, cryptoImpl });
     const secondTab = createEntryStorage({ localStorage: storage, cryptoImpl });
 
-    const first = firstTab.getOrCreateInstallationId();
-    expect(secondTab.getOrCreateInstallationId()).toBe(first);
+    const first = firstTab.getOrCreateInstallationIdLocked();
+    expect(secondTab.getOrCreateInstallationIdLocked()).toBe(first);
     const rotated = firstTab.rotateInstallationId(first);
     expect(rotated).toBe(INSTALLATION_B);
     expect(secondTab.rotateInstallationId(first)).toBe(rotated);
@@ -297,6 +320,93 @@ describe("Member Entry non-secret storage", () => {
         ),
       ).toThrowError(expect.objectContaining({ code: "ENTRY_STORAGE_INVALID" }));
     }
+  });
+
+  it("canonicalizes changing-ownKeys identity and tombstone inputs before persistence", () => {
+    const { entry, storage } = createFixedEntry();
+    const identity = changingOwnKeys(
+      { ...IDENTITY_A, token: "identity-secret" },
+      ["familyRef", "personRef", "deviceRef"],
+    );
+    const pointer = entry.writeIdentityPointer(INSTALLATION_A, identity);
+    expect(pointer).toEqual({ protocolVersion: 2, ...IDENTITY_A });
+    expect(pointer).not.toBe(identity);
+    expect(storage.getItem(identityKey(INSTALLATION_A))).toBe(
+      JSON.stringify({ protocolVersion: 2, ...IDENTITY_A }),
+    );
+    expect(entry.readIdentityPointer(INSTALLATION_A)).toEqual({
+      protocolVersion: 2,
+      ...IDENTITY_A,
+    });
+
+    const nestedIdentityTarget = {
+      ...IDENTITY_A,
+      token: "nested-identity-secret",
+    };
+    Object.setPrototypeOf(nestedIdentityTarget, {
+      toJSON: () => ({ ...IDENTITY_A, token: "nested-toJSON-secret" }),
+    });
+    const nestedIdentity = changingOwnKeys(
+      nestedIdentityTarget,
+      ["familyRef", "personRef", "deviceRef"],
+    );
+    const tombstoneInput = changingOwnKeys(
+      {
+        ...closingTombstone(),
+        identity: nestedIdentity,
+        token: "tombstone-secret",
+      },
+      [
+        "protocolVersion",
+        "transitionId",
+        "identity",
+        "phase",
+        "cookiesCleared",
+      ],
+    );
+    const tombstone = entry.writeCleanupTombstone(
+      INSTALLATION_B,
+      tombstoneInput,
+    );
+    expect(tombstone).toEqual(closingTombstone());
+    expect(tombstone).not.toBe(tombstoneInput);
+    expect(tombstone.identity).not.toBe(nestedIdentity);
+    expect(Object.getPrototypeOf(tombstone.identity)).toBe(Object.prototype);
+    expect(storage.getItem(tombstoneKey(INSTALLATION_B))).toBe(
+      JSON.stringify(closingTombstone()),
+    );
+    expect(entry.readCleanupTombstone(INSTALLATION_B)).toEqual(
+      closingTombstone(),
+    );
+    expect(JSON.stringify(storage.dump())).not.toContain("secret");
+    expect(JSON.stringify(storage.dump())).not.toContain("token");
+  });
+
+  it("converts getter and Proxy failures into controlled storage errors", () => {
+    const first = createFixedEntry();
+    const throwingIdentity = new Proxy({ ...IDENTITY_A }, {
+      ownKeys() {
+        throw new Error("identity ownKeys escaped");
+      },
+    });
+    expect(() =>
+      first.entry.writeIdentityPointer(INSTALLATION_A, throwingIdentity),
+    ).toThrowError(expect.objectContaining({ code: "ENTRY_STORAGE_INVALID" }));
+    expect(first.storage.dump()).toEqual({});
+
+    const second = createFixedEntry();
+    const throwingOwner = { ...OWNER_A } as Record<string, unknown>;
+    Object.defineProperty(throwingOwner, "createdAt", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        throw new Error("owner getter escaped");
+      },
+    });
+    expect(() =>
+      second.entry.writeClaimCookieIntent(throwingOwner),
+    ).toThrowError(expect.objectContaining({ code: "ENTRY_STORAGE_INVALID" }));
+    expect(second.storage.dump()).toEqual({});
   });
 
   it("writes one exact identity and compare-clears only that identity", () => {
@@ -442,6 +552,33 @@ describe("Member Entry non-secret storage", () => {
     ]);
   });
 
+  it("skips a cleanup key that disappears before its value is read", () => {
+    let storage: ReturnType<typeof createStorage>;
+    let removed = false;
+    storage = createStorage({
+      onGetItem(key) {
+        if (!removed && key === tombstoneKey(INSTALLATION_A)) {
+          removed = true;
+          storage.removeItem(key);
+        }
+      },
+    });
+    storage.setItem(
+      tombstoneKey(INSTALLATION_A),
+      JSON.stringify(closingTombstone()),
+    );
+    storage.setItem(
+      tombstoneKey(INSTALLATION_B),
+      JSON.stringify(closingTombstone()),
+    );
+    const entry = createEntryStorage({ localStorage: storage });
+
+    expect(entry.listCleanupTombstones()).toEqual([
+      { installationId: INSTALLATION_B, tombstone: closingTombstone() },
+    ]);
+    expect(storage.getItem(tombstoneKey(INSTALLATION_A))).toBeNull();
+  });
+
   it("fails closed when a cleanup-prefixed key or record is malformed", () => {
     const badKey = createFixedEntry();
     badKey.storage.setItem(
@@ -498,25 +635,115 @@ describe("Member Entry non-secret storage", () => {
     expect(entry.readLifecycle(INSTALLATION_A)).toEqual(current);
   });
 
+  it("never lets omitted or supplied clear preconditions erase malformed current bytes", () => {
+    const cases = [
+      {
+        key: lockKey(INSTALLATION_A),
+        bytes: JSON.stringify({ protocolVersion: 1, lockedAt: FIXED_TIME }),
+        clearOmitted: (entry: any) => entry.clearLockMarkerLocked(INSTALLATION_A),
+        clearExpected: (entry: any) =>
+          entry.clearLockMarkerLocked(INSTALLATION_A, {
+            protocolVersion: 2,
+            lockedAt: FIXED_TIME,
+          }),
+      },
+      {
+        key: identityKey(INSTALLATION_A),
+        bytes: JSON.stringify({
+          protocolVersion: 1,
+          ...IDENTITY_A,
+        }),
+        clearOmitted: (entry: any) =>
+          entry.clearIdentityPointer(INSTALLATION_A),
+        clearExpected: (entry: any) =>
+          entry.clearIdentityPointer(INSTALLATION_A, IDENTITY_A),
+      },
+    ];
+
+    for (const { key, bytes, clearOmitted, clearExpected } of cases) {
+      for (const clear of [clearOmitted, clearExpected]) {
+        const { entry, storage } = createFixedEntry();
+        storage.setItem(key, bytes);
+        expect(() => clear(entry)).toThrowError(
+          expect.objectContaining({ code: "ENTRY_STORAGE_INVALID" }),
+        );
+        expect(storage.getItem(key)).toBe(bytes);
+      }
+    }
+  });
+
+  it("converts exceptional clear preconditions into controlled errors without erasing bytes", () => {
+    const marker = createFixedEntry();
+    marker.entry.writeLockMarkerLocked(INSTALLATION_A);
+    const markerBytes = marker.storage.getItem(lockKey(INSTALLATION_A));
+    const exceptional = new Proxy({}, {
+      ownKeys() {
+        throw new Error("raw precondition trap");
+      },
+    });
+    expect(() =>
+      marker.entry.clearLockMarkerLocked(INSTALLATION_A, exceptional),
+    ).toThrowError(expect.objectContaining({ code: "ENTRY_STORAGE_INVALID" }));
+    expect(marker.storage.getItem(lockKey(INSTALLATION_A))).toBe(markerBytes);
+
+    const identity = createFixedEntry();
+    identity.entry.writeIdentityPointer(INSTALLATION_A, IDENTITY_A);
+    const identityBytes = identity.storage.getItem(identityKey(INSTALLATION_A));
+    expect(() =>
+      identity.entry.clearIdentityPointer(INSTALLATION_A, exceptional),
+    ).toThrowError(expect.objectContaining({ code: "ENTRY_STORAGE_INVALID" }));
+    expect(identity.storage.getItem(identityKey(INSTALLATION_A))).toBe(
+      identityBytes,
+    );
+  });
+
+  it("reads each lock-marker clear precondition field only once", () => {
+    const { entry } = createFixedEntry();
+    const current = entry.writeLockMarkerLocked(INSTALLATION_A);
+    let protocolVersionReads = 0;
+    let lockedAtReads = 0;
+    const expected = Object.defineProperties({}, {
+      protocolVersion: {
+        enumerable: true,
+        get() {
+          protocolVersionReads += 1;
+          if (protocolVersionReads > 1) throw new Error("read twice");
+          return 2;
+        },
+      },
+      lockedAt: {
+        enumerable: true,
+        get() {
+          lockedAtReads += 1;
+          if (lockedAtReads > 1) throw new Error("read twice");
+          return current.lockedAt;
+        },
+      },
+    });
+
+    expect(entry.clearLockMarkerLocked(INSTALLATION_A, expected)).toBe(true);
+    expect(protocolVersionReads).toBe(1);
+    expect(lockedAtReads).toBe(1);
+  });
+
   it("makes same-clock lock markers monotonic and compare-clears captured bytes", () => {
     const { entry } = createFixedEntry();
-    const first = entry.writeLockMarker(INSTALLATION_A);
-    const second = entry.writeLockMarker(INSTALLATION_A);
+    const first = entry.writeLockMarkerLocked(INSTALLATION_A);
+    const second = entry.writeLockMarkerLocked(INSTALLATION_A);
 
     expect(first.lockedAt).toBe(FIXED_TIME);
     expect(second.lockedAt).toBe("2026-07-25T09:00:00.001Z");
-    expect(entry.clearLockMarker(INSTALLATION_A, null)).toBe(false);
+    expect(entry.clearLockMarkerLocked(INSTALLATION_A, null)).toBe(false);
+    expect(entry.clearLockMarkerLocked(INSTALLATION_A, first)).toBe(false);
+    expect(entry.readLockMarker(INSTALLATION_A)).toEqual(second);
     expect(
-      entry.clearLockMarker(INSTALLATION_A, {
+      entry.clearLockMarkerLocked(INSTALLATION_A, {
         lockedAt: second.lockedAt,
         protocolVersion: 2,
       }),
-    ).toBe(false);
-    expect(entry.clearLockMarker(INSTALLATION_A, first)).toBe(false);
-    expect(entry.readLockMarker(INSTALLATION_A)).toEqual(second);
-    expect(entry.clearLockMarker(INSTALLATION_A, second)).toBe(true);
-    entry.writeLockMarker(INSTALLATION_A);
-    expect(entry.clearLockMarker(INSTALLATION_A)).toBe(true);
+    ).toBe(true);
+    entry.writeLockMarkerLocked(INSTALLATION_A);
+    expect(entry.clearLockMarkerLocked(INSTALLATION_A)).toBe(true);
   });
 });
 
@@ -537,6 +764,39 @@ describe("Member Entry origin-global Cookie ownership", () => {
     expect(() =>
       entry.writeCookieClearPending({ ...OWNER_A, createdAt: "yesterday" }),
     ).toThrow();
+  });
+
+  it("ignores inherited or non-enumerable owner toJSON hooks and persists canonical bytes", () => {
+    for (const [method, key] of [
+      ["writeClaimCookieIntent", CLAIM_COOKIE_INTENT_KEY],
+      ["writeCookieClearPending", COOKIE_CLEAR_PENDING_KEY],
+    ] as const) {
+      for (const mode of ["inherited", "nonenumerable"] as const) {
+        const { entry, storage } = createFixedEntry();
+        const owner = { ...OWNER_A } as Record<string, unknown>;
+        const toJSON = () => ({ ...OWNER_A, token: `${mode}-secret` });
+        if (mode === "inherited") {
+          Object.setPrototypeOf(owner, { toJSON });
+        } else {
+          Object.defineProperty(owner, "toJSON", {
+            enumerable: false,
+            value: toJSON,
+          });
+        }
+
+        const persisted = entry[method](owner);
+        expect(persisted).toEqual(OWNER_A);
+        expect(persisted).not.toBe(owner);
+        expect(Object.getPrototypeOf(persisted)).toBe(Object.prototype);
+        expect(storage.getItem(key)).toBe(JSON.stringify(OWNER_A));
+        expect(storage.getItem(key)).not.toContain("token");
+        expect(
+          method === "writeClaimCookieIntent"
+            ? entry.readClaimCookieIntent()
+            : entry.readCookieClearPending(),
+        ).toEqual(OWNER_A);
+      }
+    }
   });
 
   it("preserves one exact Claim intent owner and refuses replacement", () => {
@@ -565,6 +825,48 @@ describe("Member Entry origin-global Cookie ownership", () => {
       expect.objectContaining({ code: "ENTRY_COOKIE_OWNER_CONFLICT" }),
     );
     expect(second.entry.readClaimCookieIntent()).toBeNull();
+  });
+
+  it("snapshots storage-event fields once and controls exceptional access", () => {
+    const { entry } = createFixedEntry();
+    const reads = { key: 0, oldValue: 0, newValue: 0 };
+    const event = Object.defineProperties({}, {
+      key: {
+        get() {
+          reads.key += 1;
+          if (reads.key > 1) throw new Error("raw repeated key read");
+          return COOKIE_CLEAR_PENDING_KEY;
+        },
+      },
+      oldValue: {
+        get() {
+          reads.oldValue += 1;
+          if (reads.oldValue > 1) throw new Error("raw repeated oldValue read");
+          return null;
+        },
+      },
+      newValue: {
+        get() {
+          reads.newValue += 1;
+          if (reads.newValue > 1) throw new Error("raw repeated newValue read");
+          return JSON.stringify(OWNER_A);
+        },
+      },
+    });
+
+    expect(entry.readCookieOwnerWakeFromEvent(event)).toEqual({
+      kind: "set",
+      owner: OWNER_A,
+    });
+    expect(reads).toEqual({ key: 1, oldValue: 1, newValue: 1 });
+    const exceptional = new Proxy({}, {
+      get() {
+        throw new Error("raw storage-event trap");
+      },
+    });
+    expect(() =>
+      entry.readCookieOwnerWakeFromEvent(exceptional),
+    ).toThrowError(expect.objectContaining({ code: "ENTRY_STORAGE_INVALID" }));
   });
 
   it("returns the exact set or clear event edge and rejects updates or malformed replacements", () => {
@@ -611,6 +913,238 @@ describe("Member Entry origin-global Cookie ownership", () => {
 });
 
 describe("Member Entry Web Lock coordination", () => {
+  it("uses exact exclusive installation-init and marker lock names", async () => {
+    const locks = createDeterministicWebLocks();
+    const mutation = createEntryMutationLock({ locks });
+
+    await mutation.runInstallationInit(async () => undefined);
+    await mutation.runMarkerMutation(INSTALLATION_A, async () => undefined);
+
+    expect(locks.events).toEqual([
+      {
+        phase: "request",
+        name: "family-ai-member-installation-init",
+        mode: "exclusive",
+      },
+      {
+        phase: "enter",
+        name: "family-ai-member-installation-init",
+        mode: "exclusive",
+      },
+      {
+        phase: "exit",
+        name: "family-ai-member-installation-init",
+        mode: "exclusive",
+      },
+      {
+        phase: "request",
+        name: `family-ai-member-entry-marker:${INSTALLATION_A}`,
+        mode: "exclusive",
+      },
+      {
+        phase: "enter",
+        name: `family-ai-member-entry-marker:${INSTALLATION_A}`,
+        mode: "exclusive",
+      },
+      {
+        phase: "exit",
+        name: `family-ai-member-entry-marker:${INSTALLATION_A}`,
+        mode: "exclusive",
+      },
+    ]);
+  });
+
+  it("linearizes first-installation creation across tabs with one UUID", async () => {
+    const locks = createDeterministicWebLocks();
+    const firstMutation = createEntryMutationLock({ locks });
+    const secondMutation = createEntryMutationLock({ locks });
+    const storage = createStorage();
+    let uuidCalls = 0;
+    let secondOperation: Promise<string> | undefined;
+    let secondEntry: ReturnType<typeof createEntryStorage>;
+    const firstEntry = createEntryStorage({
+      localStorage: storage,
+      cryptoImpl: {
+        randomUUID() {
+          uuidCalls += 1;
+          secondOperation = secondMutation.runInstallationInit(() =>
+            secondEntry.getOrCreateInstallationIdLocked(),
+          );
+          expect(
+            locks.events
+              .filter((event) =>
+                event.name === "family-ai-member-installation-init",
+              )
+              .map((event) => event.phase),
+          ).toEqual(["request", "enter", "request"]);
+          return INSTALLATION_A;
+        },
+      },
+    });
+    secondEntry = createEntryStorage({
+      localStorage: storage,
+      cryptoImpl: {
+        randomUUID() {
+          uuidCalls += 1;
+          return INSTALLATION_B;
+        },
+      },
+    });
+
+    const firstId = await firstMutation.runInstallationInit(() =>
+      firstEntry.getOrCreateInstallationIdLocked(),
+    );
+    const secondId = await secondOperation!;
+
+    expect(firstId).toBe(INSTALLATION_A);
+    expect(secondId).toBe(INSTALLATION_A);
+    expect(firstEntry.readInstallationId()).toBe(INSTALLATION_A);
+    expect(secondEntry.readInstallationId()).toBe(INSTALLATION_A);
+    expect(uuidCalls).toBe(1);
+    expect(
+      locks.events
+        .filter((event) =>
+          event.name === "family-ai-member-installation-init",
+        )
+        .map((event) => event.phase),
+    ).toEqual([
+      "request",
+      "enter",
+      "request",
+      "exit",
+      "enter",
+      "exit",
+    ]);
+  });
+
+  it("linearizes same-clock marker writers and preserves a strictly newer marker", async () => {
+    const locks = createDeterministicWebLocks();
+    const firstMutation = createEntryMutationLock({ locks });
+    const secondMutation = createEntryMutationLock({ locks });
+    const storage = createStorage();
+    let secondOperation: Promise<{ protocolVersion: number; lockedAt: string }> | undefined;
+    const secondEntry = createEntryStorage({
+      localStorage: storage,
+      now: () => new Date(FIXED_TIME),
+    });
+    const firstEntry = createEntryStorage({
+      localStorage: storage,
+      now() {
+        secondOperation = secondMutation.runMarkerMutation(
+          INSTALLATION_A,
+          () => secondEntry.writeLockMarkerLocked(INSTALLATION_A),
+        );
+        expect(
+          locks.events
+            .filter((event) =>
+              event.name ===
+                `family-ai-member-entry-marker:${INSTALLATION_A}`,
+            )
+            .map((event) => event.phase),
+        ).toEqual(["request", "enter", "request"]);
+        return new Date(FIXED_TIME);
+      },
+    });
+
+    const firstMarker = await firstMutation.runMarkerMutation(
+      INSTALLATION_A,
+      () => firstEntry.writeLockMarkerLocked(INSTALLATION_A),
+    );
+    const secondMarker = await secondOperation!;
+
+    expect(firstMarker.lockedAt).toBe(FIXED_TIME);
+    expect(secondMarker.lockedAt).toBe("2026-07-25T09:00:00.001Z");
+    expect(firstEntry.readLockMarker(INSTALLATION_A)).toEqual(secondMarker);
+    expect(
+      locks.events
+        .filter((event) =>
+          event.name === `family-ai-member-entry-marker:${INSTALLATION_A}`,
+        )
+        .map((event) => event.phase),
+    ).toEqual([
+      "request",
+      "enter",
+      "request",
+      "exit",
+      "enter",
+      "exit",
+    ]);
+  });
+
+  it("keeps a writer queued through marker removal and preserves its new marker", async () => {
+    const locks = createDeterministicWebLocks();
+    const firstMutation = createEntryMutationLock({ locks });
+    const secondMutation = createEntryMutationLock({ locks });
+    let secondOperation: Promise<{ protocolVersion: number; lockedAt: string }> | undefined;
+    let secondEntry: ReturnType<typeof createEntryStorage>;
+    const storage = createStorage({
+      onRemoveItem(key) {
+        if (key !== lockKey(INSTALLATION_A) || secondOperation) return;
+        secondOperation = secondMutation.runMarkerMutation(
+          INSTALLATION_A,
+          () => secondEntry.writeLockMarkerLocked(INSTALLATION_A),
+        );
+        expect(
+          locks.events
+            .filter((event) =>
+              event.name ===
+                `family-ai-member-entry-marker:${INSTALLATION_A}`,
+            )
+            .map((event) => event.phase),
+        ).toEqual(["request", "enter", "request"]);
+      },
+    });
+    const original = { protocolVersion: 2, lockedAt: FIXED_TIME };
+    storage.setItem(lockKey(INSTALLATION_A), JSON.stringify(original));
+    const firstEntry = createEntryStorage({ localStorage: storage });
+    secondEntry = createEntryStorage({
+      localStorage: storage,
+      now: () => new Date("2026-07-25T09:00:00.001Z"),
+    });
+
+    const cleared = await firstMutation.runMarkerMutation(
+      INSTALLATION_A,
+      () => firstEntry.clearLockMarkerLocked(INSTALLATION_A, original),
+    );
+    const secondMarker = await secondOperation!;
+
+    expect(cleared).toBe(true);
+    expect(secondMarker).toEqual({
+      protocolVersion: 2,
+      lockedAt: "2026-07-25T09:00:00.001Z",
+    });
+    expect(firstEntry.readLockMarker(INSTALLATION_A)).toEqual(secondMarker);
+    expect(
+      locks.events
+        .filter((event) =>
+          event.name === `family-ai-member-entry-marker:${INSTALLATION_A}`,
+        )
+        .map((event) => event.phase),
+    ).toEqual([
+      "request",
+      "enter",
+      "request",
+      "exit",
+      "enter",
+      "exit",
+    ]);
+  });
+
+  it("fails closed for installation-init and marker mutation without Web Locks", async () => {
+    const storage = createStorage();
+    const mutation = createEntryMutationLock({ locks: null });
+    const callback = vi.fn();
+
+    await expect(mutation.runInstallationInit(callback)).rejects.toMatchObject({
+      code: "ENTRY_MUTATION_LOCK_UNAVAILABLE",
+    });
+    await expect(
+      mutation.runMarkerMutation(INSTALLATION_A, callback),
+    ).rejects.toMatchObject({ code: "ENTRY_MUTATION_LOCK_UNAVAILABLE" });
+    expect(callback).not.toHaveBeenCalled();
+    expect(storage.dump()).toEqual({});
+  });
+
   it("serializes two mutations under the exact installation lock", async () => {
     const locks = createDeterministicWebLocks();
     const mutation = createEntryMutationLock({ locks });
