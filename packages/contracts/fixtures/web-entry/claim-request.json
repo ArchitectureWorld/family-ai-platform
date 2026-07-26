@@ -1,8 +1,9 @@
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "pairingRef": "pairing:web-alice-0001",
   "code": "ABCD-EFGH",
   "installationId": "b53f0490-99f1-4d6c-9a95-921a3d76a8c3",
+  "deviceCredential": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   "device": {
     "displayName": "Alice 的浏览器",
     "browser": "Chrome 140",

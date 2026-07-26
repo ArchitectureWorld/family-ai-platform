@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 2,
+  "error": {
+    "code": "DEVICE_REVOKED",
+    "category": "permission",
+    "message": "This device has been revoked.",
+    "retryable": false,
+    "requestId": "req-web-entry-v2-fixture"
+  }
+}
