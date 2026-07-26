@@ -30,6 +30,24 @@ const migrationVersions = [
   { version: 6 }
 ];
 
+const mobilePairingColumnNames = [
+  "pairing_ref",
+  "family_ref",
+  "person_ref",
+  "code_hash",
+  "status",
+  "failed_attempts",
+  "max_attempts",
+  "expires_at",
+  "created_by_entry_binding_ref",
+  "created_at",
+  "consumed_at",
+  "consumed_device_ref",
+  "revoked_at",
+  "web_claim_session_ref",
+  "web_replay_count"
+];
+
 describe("gateway database", () => {
   let directory = "";
   let db: GatewayDatabase | null = null;
@@ -70,23 +88,7 @@ describe("gateway database", () => {
       .prepare("PRAGMA table_info(mobile_pairing_codes)")
       .all()
       .map((column) => String((column as { name: unknown }).name));
-    expect(pairingColumns).toEqual([
-      "pairing_ref",
-      "family_ref",
-      "person_ref",
-      "code_hash",
-      "status",
-      "failed_attempts",
-      "max_attempts",
-      "expires_at",
-      "created_by_entry_binding_ref",
-      "created_at",
-      "consumed_at",
-      "consumed_device_ref",
-      "revoked_at",
-      "web_claim_session_ref",
-      "web_replay_count"
-    ]);
+    expect(pairingColumns).toEqual(mobilePairingColumnNames);
 
     const mobileColumns = db
       .prepare("PRAGMA table_info(managed_devices)")
@@ -191,6 +193,12 @@ describe("gateway database", () => {
         web_replay_count: 0
       }
     ]);
+    const upgradedPairingColumns = db
+      .prepare("PRAGMA table_info(mobile_pairing_codes)")
+      .all()
+      .map((column) => String((column as { name: unknown }).name));
+    expect(upgradedPairingColumns).toEqual(mobilePairingColumnNames);
+
     expect(
       db.prepare("PRAGMA table_info(mobile_pairing_codes)").all()
     ).toEqual(expect.arrayContaining([
