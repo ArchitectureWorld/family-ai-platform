@@ -8,11 +8,15 @@ import { MobilePairingRepository } from "../src/mobilePairing.js";
 import { EntrySessionAuthenticator } from "../src/entrySessionAuth.js";
 import { WebEntryRepository } from "../src/webEntry.js";
 
+const EXISTING_CREDENTIAL = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBE";
+const WRONG_CREDENTIAL = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCI";
+
 const claim = {
-  protocolVersion: 1 as const,
+  protocolVersion: 2 as const,
   pairingRef: "",
   code: "ABCD-EFGH",
   installationId: "b53f0490-99f1-4d6c-9a95-921a3d76a8c3",
+  deviceCredential: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   device: {
     displayName: "Alice 的浏览器",
     browser: "Chrome 140",
@@ -28,7 +32,20 @@ describe("Web Entry repository", () => {
   let web: WebEntryRepository;
   let currentNow: Date;
   let ownerPersonRef = "";
+  let familyRef = "";
+  let adminEntryBindingRef = "";
   let pairingRef = "";
+
+  function createPairing(code: string) {
+    return new MobilePairingRepository(db, {
+      now: () => currentNow,
+      codeGenerator: () => code
+    }).createPairingCode({
+      familyRef,
+      personRef: ownerPersonRef,
+      createdByEntryBindingRef: adminEntryBindingRef
+    });
+  }
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-web-entry-"));
@@ -41,15 +58,10 @@ describe("Web Entry repository", () => {
       deviceCredential: "web-entry-bootstrap-device-credential-with-enough-length"
     });
     ownerPersonRef = onboarding.owner.personRef;
+    familyRef = onboarding.family.familyRef;
+    adminEntryBindingRef = onboarding.entries.admin.entryBindingRef;
     currentNow = new Date("2026-07-25T08:00:00.000Z");
-    const pairing = new MobilePairingRepository(db, {
-      now: () => currentNow,
-      codeGenerator: () => "ABCD-EFGH"
-    }).createPairingCode({
-      familyRef: onboarding.family.familyRef,
-      personRef: ownerPersonRef,
-      createdByEntryBindingRef: onboarding.entries.admin.entryBindingRef
-    });
+    const pairing = createPairing(claim.code);
     pairingRef = pairing.pairingRef;
     web = new WebEntryRepository(db, () => currentNow);
   });
@@ -63,7 +75,7 @@ describe("Web Entry repository", () => {
     const result = web.claimPairing({ ...claim, pairingRef });
 
     expect(result.deviceRef).toMatch(/^device:/);
-    expect(result.deviceCredential).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(result.deviceCredential).toBe(claim.deviceCredential);
     expect(result.entrySessionRef).toMatch(/^entry-session:/);
     expect(result.entryToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
@@ -100,42 +112,203 @@ describe("Web Entry repository", () => {
     });
   });
 
-  it("replays a consumed pairing only for the same installation and Device credential", () => {
+  it("replays the same consumed Claim without rotating its Session", () => {
     const first = web.claimPairing({ ...claim, pairingRef });
     currentNow = new Date("2026-07-25T08:01:00.000Z");
-    const replay = web.claimPairing({
-      ...claim,
-      pairingRef,
-      existingDevice: {
-        deviceRef: first.deviceRef,
-        deviceCredential: first.deviceCredential
-      }
-    });
+    const replay = web.claimPairing({ ...claim, pairingRef });
 
-    expect(replay.deviceRef).toBe(first.deviceRef);
-    expect(replay.deviceCredential).toBe(first.deviceCredential);
-    expect(replay.entrySessionRef).not.toBe(first.entrySessionRef);
+    expect(replay).toEqual(first);
     expect(db.prepare(
       "SELECT COUNT(*) AS count FROM managed_devices WHERE installation_ref = ?"
     ).get(sha256(claim.installationId))).toEqual({ count: 1 });
+    expect(db.prepare(
+      "SELECT web_replay_count FROM mobile_pairing_codes WHERE pairing_ref = ?"
+    ).get(pairingRef)).toEqual({ web_replay_count: 1 });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM entry_sessions WHERE entry_binding_ref = ?"
+    ).get(first.entryBindingRef)).toEqual({ count: 1 });
+  });
+
+  it("rejects replay with the wrong submitted Device Credential before incrementing", () => {
+    const first = web.claimPairing({ ...claim, pairingRef });
+
+    expect(() => web.claimPairing({
+      ...claim,
+      pairingRef,
+      deviceCredential: WRONG_CREDENTIAL
+    })).toThrowError(expect.objectContaining({ code: "DEVICE_AUTH_INVALID", statusCode: 401 }));
+    expect(db.prepare(
+      "SELECT web_replay_count FROM mobile_pairing_codes WHERE pairing_ref = ?"
+    ).get(pairingRef)).toEqual({ web_replay_count: 0 });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM entry_sessions WHERE entry_binding_ref = ?"
+    ).get(first.entryBindingRef)).toEqual({ count: 1 });
+  });
+
+  it("rejects replay from a different installation before incrementing", () => {
+    const first = web.claimPairing({ ...claim, pairingRef });
 
     expect(() => web.claimPairing({
       ...claim,
       pairingRef,
       installationId: "4897332a-782a-4ce8-b91b-f1c2543ba188"
     })).toThrowError(expect.objectContaining({ code: "PAIRING_CONSUMED", statusCode: 409 }));
+    expect(db.prepare(
+      "SELECT web_replay_count FROM mobile_pairing_codes WHERE pairing_ref = ?"
+    ).get(pairingRef)).toEqual({ web_replay_count: 0 });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM entry_sessions WHERE entry_binding_ref = ?"
+    ).get(first.entryBindingRef)).toEqual({ count: 1 });
   });
 
-  it("supports logout, Device-authenticated renewal and permanent revocation", () => {
+  it.each([
+    {
+      layer: "managed Device",
+      revokeSql: "UPDATE managed_devices SET status = 'revoked' WHERE device_ref = ?"
+    },
+    {
+      layer: "active Device Binding",
+      revokeSql: "UPDATE device_bindings SET status = 'revoked' WHERE device_ref = ?"
+    },
+    {
+      layer: "active Entry Binding",
+      revokeSql: "UPDATE entry_bindings SET status = 'revoked' WHERE device_ref = ?"
+    }
+  ])("rejects replay after revoking the $layer before incrementing", ({ revokeSql }) => {
+    const first = web.claimPairing({ ...claim, pairingRef });
+    db.prepare(revokeSql).run(first.deviceRef);
+
+    expect(() => web.claimPairing({ ...claim, pairingRef }))
+      .toThrowError(expect.objectContaining({ code: "DEVICE_REVOKED", statusCode: 403 }));
+    expect(db.prepare(
+      "SELECT web_replay_count FROM mobile_pairing_codes WHERE pairing_ref = ?"
+    ).get(pairingRef)).toEqual({ web_replay_count: 0 });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM entry_sessions WHERE entry_binding_ref = ?"
+    ).get(first.entryBindingRef)).toEqual({ count: 1 });
+  });
+
+  it("accepts replay at exactly two minutes and rejects it one millisecond later", () => {
+    const first = web.claimPairing({ ...claim, pairingRef });
+
+    currentNow = new Date("2026-07-25T08:02:00.000Z");
+    expect(web.claimPairing({ ...claim, pairingRef })).toEqual(first);
+
+    currentNow = new Date("2026-07-25T08:02:00.001Z");
+    expect(() => web.claimPairing({ ...claim, pairingRef }))
+      .toThrowError(expect.objectContaining({ code: "PAIRING_CONSUMED", statusCode: 409 }));
+    expect(db.prepare(
+      "SELECT web_replay_count FROM mobile_pairing_codes WHERE pairing_ref = ?"
+    ).get(pairingRef)).toEqual({ web_replay_count: 1 });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM entry_sessions WHERE entry_binding_ref = ?"
+    ).get(first.entryBindingRef)).toEqual({ count: 1 });
+  });
+
+  it("allows only three identical consumed Claim replays", () => {
+    const first = web.claimPairing({ ...claim, pairingRef });
+
+    const replay1 = web.claimPairing({ ...claim, pairingRef });
+    const replay2 = web.claimPairing({ ...claim, pairingRef });
+    const replay3 = web.claimPairing({ ...claim, pairingRef });
+    expect([replay1, replay2, replay3]).toEqual([first, first, first]);
+
+    expect(() => web.claimPairing({ ...claim, pairingRef }))
+      .toThrowError(expect.objectContaining({ code: "PAIRING_CONSUMED", statusCode: 409 }));
+    expect(db.prepare(
+      "SELECT web_replay_count FROM mobile_pairing_codes WHERE pairing_ref = ?"
+    ).get(pairingRef)).toEqual({ web_replay_count: 3 });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM entry_sessions WHERE entry_binding_ref = ?"
+    ).get(first.entryBindingRef)).toEqual({ count: 1 });
+  });
+
+  it("uses a verified existing-Device Cookie Credential for a distinct pending Claim", () => {
+    const existing = web.claimPairing({ ...claim, pairingRef });
+    const nextPairing = createPairing("JKLM-NPQR");
+    const nextClaim = {
+      ...claim,
+      pairingRef: nextPairing.pairingRef,
+      code: nextPairing.code,
+      deviceCredential: EXISTING_CREDENTIAL,
+      existingDevice: {
+        deviceRef: existing.deviceRef,
+        deviceCredential: existing.deviceCredential
+      }
+    };
+
+    const first = web.claimPairing(nextClaim);
+    const replay = web.claimPairing(nextClaim);
+
+    expect(first.deviceRef).toBe(existing.deviceRef);
+    expect(first.deviceCredential).toBe(claim.deviceCredential);
+    expect(replay).toEqual(first);
+    expect(db.prepare(
+      "SELECT credential_hash FROM managed_devices WHERE device_ref = ?"
+    ).get(existing.deviceRef)).toEqual({ credential_hash: sha256(claim.deviceCredential) });
+    expect(db.prepare(
+      "SELECT web_replay_count FROM mobile_pairing_codes WHERE pairing_ref = ?"
+    ).get(nextPairing.pairingRef)).toEqual({ web_replay_count: 1 });
+    expect(db.prepare(
+      `SELECT COUNT(*) AS count
+       FROM entry_sessions
+       WHERE entry_session_ref = (
+         SELECT web_claim_session_ref FROM mobile_pairing_codes WHERE pairing_ref = ?
+       )`
+    ).get(nextPairing.pairingRef)).toEqual({ count: 1 });
+  });
+
+  it.each(["missing", "corrupt"] as const)(
+    "rejects a distinct pending Credential when the existing-Device Cookie is %s",
+    (cookieState) => {
+      const existing = web.claimPairing({ ...claim, pairingRef });
+      const nextPairing = createPairing("JKLM-NPQR");
+      const validExistingDevice = {
+        deviceRef: existing.deviceRef,
+        deviceCredential: existing.deviceCredential
+      };
+      const nextClaim = {
+        ...claim,
+        pairingRef: nextPairing.pairingRef,
+        code: nextPairing.code,
+        deviceCredential: EXISTING_CREDENTIAL,
+        existingDevice: validExistingDevice
+      };
+      const first = web.claimPairing(nextClaim);
+
+      expect(() => web.claimPairing({
+        ...nextClaim,
+        existingDevice: cookieState === "missing"
+          ? undefined
+          : { deviceRef: existing.deviceRef, deviceCredential: WRONG_CREDENTIAL }
+      })).toThrowError(expect.objectContaining({ code: "DEVICE_AUTH_INVALID", statusCode: 401 }));
+      expect(db.prepare(
+        "SELECT web_replay_count FROM mobile_pairing_codes WHERE pairing_ref = ?"
+      ).get(nextPairing.pairingRef)).toEqual({ web_replay_count: 0 });
+      expect(db.prepare(
+        "SELECT COUNT(*) AS count FROM entry_sessions WHERE entry_binding_ref = ?"
+      ).get(first.entryBindingRef)).toEqual({ count: 2 });
+    }
+  );
+
+  it("targets exact Session logout without letting delayed S1 logout revoke S2", () => {
     const first = web.claimPairing({ ...claim, pairingRef });
     const device = web.authenticateDevice(first.deviceRef, first.deviceCredential);
+    const firstLogout = {
+      entrySessionRef: first.entrySessionRef,
+      entryBindingRef: device.entryBindingRef
+    };
 
-    web.logoutSession(device.entryBindingRef);
+    expect(web.logoutSession(firstLogout)).toBe(true);
     expect(new EntrySessionAuthenticator(db, family, () => currentNow)
       .authenticate(first.entrySessionRef, first.entryToken).status).not.toBe("authenticated");
 
     currentNow = new Date("2026-07-25T08:02:00.000Z");
     const renewed = web.renewSession(device);
+    expect(new EntrySessionAuthenticator(db, family, () => currentNow)
+      .authenticate(renewed.entrySessionRef, renewed.entryToken).status).toBe("authenticated");
+
+    expect(web.logoutSession(firstLogout)).toBe(false);
     expect(new EntrySessionAuthenticator(db, family, () => currentNow)
       .authenticate(renewed.entrySessionRef, renewed.entryToken).status).toBe("authenticated");
 

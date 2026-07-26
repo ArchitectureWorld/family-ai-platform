@@ -2,6 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { WebPairingClaimRequest } from "@family-ai/contracts";
 import { sha256, type GatewayDatabase } from "./database.js";
 import { GatewayDomainError } from "./service.js";
+import { deriveWebClaimEntryToken } from "./webEntryCrypto.js";
 
 const WEB_SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -14,7 +15,13 @@ interface PairingRow extends Record<string, unknown> {
   failed_attempts: number;
   max_attempts: number;
   expires_at: string;
+  created_by_entry_binding_ref: string;
+  created_at: string;
+  consumed_at: string | null;
   consumed_device_ref: string | null;
+  revoked_at: string | null;
+  web_claim_session_ref: string | null;
+  web_replay_count: number;
 }
 
 interface WebDeviceRow extends Record<string, unknown> {
@@ -76,7 +83,10 @@ export class WebEntryRepository {
   private pairingByRef(pairingRef: string): PairingRow | null {
     return (this.db.prepare(
       `SELECT pairing_ref, family_ref, person_ref, code_hash, status,
-              failed_attempts, max_attempts, expires_at, consumed_device_ref
+              failed_attempts, max_attempts, expires_at,
+              created_by_entry_binding_ref, created_at, consumed_at,
+              consumed_device_ref, revoked_at, web_claim_session_ref,
+              web_replay_count
        FROM mobile_pairing_codes WHERE pairing_ref = ?`
     ).get(pairingRef) as PairingRow | undefined) ?? null;
   }
@@ -84,7 +94,10 @@ export class WebEntryRepository {
   private pairingByCodeHash(codeHash: string): PairingRow | null {
     return (this.db.prepare(
       `SELECT pairing_ref, family_ref, person_ref, code_hash, status,
-              failed_attempts, max_attempts, expires_at, consumed_device_ref
+              failed_attempts, max_attempts, expires_at,
+              created_by_entry_binding_ref, created_at, consumed_at,
+              consumed_device_ref, revoked_at, web_claim_session_ref,
+              web_replay_count
        FROM mobile_pairing_codes WHERE code_hash = ?`
     ).get(codeHash) as PairingRow | undefined) ?? null;
   }
@@ -213,10 +226,16 @@ export class WebEntryRepository {
     personRef: string
   ): { entry_binding_ref: string } | null {
     return (this.db.prepare(
-      `SELECT entry_binding_ref
-       FROM entry_bindings
-       WHERE device_ref = ? AND family_ref = ? AND person_ref = ?
-         AND audience = 'personal' AND status = 'active'`
+      `SELECT eb.entry_binding_ref
+       FROM entry_bindings eb
+       JOIN device_bindings db
+         ON db.device_ref = eb.device_ref
+        AND db.family_ref = eb.family_ref
+        AND db.owner_scope = 'person'
+        AND db.person_ref = eb.person_ref
+        AND db.status = 'active'
+       WHERE eb.device_ref = ? AND eb.family_ref = ? AND eb.person_ref = ?
+         AND eb.audience = 'personal' AND eb.status = 'active'`
     ).get(deviceRef, familyRef, personRef) as { entry_binding_ref: string } | undefined) ?? null;
   }
 
@@ -242,6 +261,61 @@ export class WebEntryRepository {
     return { entryBindingRef, entrySessionRef, entryToken, expiresAt };
   }
 
+  private issueClaimSession(
+    entryBindingRef: string,
+    entryToken: string
+  ): WebEntrySessionMaterial {
+    const now = this.now();
+    const nowIso = now.toISOString();
+    const expiresAt = new Date(now.getTime() + WEB_SESSION_LIFETIME_MS).toISOString();
+    const entrySessionRef = `entry-session:${randomUUID()}`;
+
+    this.db.prepare(
+      `INSERT INTO entry_sessions
+       (entry_session_ref, entry_binding_ref, token_hash, status,
+        created_at, expires_at, revoked_at)
+       VALUES(?, ?, ?, 'active', ?, ?, NULL)`
+    ).run(entrySessionRef, entryBindingRef, sha256(entryToken), nowIso, expiresAt);
+
+    return { entryBindingRef, entrySessionRef, entryToken, expiresAt };
+  }
+
+  private activeClaimSession(
+    entrySessionRef: string,
+    entryBindingRef: string,
+    entryToken: string
+  ): WebEntrySessionMaterial | null {
+    const row = this.db.prepare(
+      `SELECT entry_session_ref, entry_binding_ref, token_hash, status, expires_at
+       FROM entry_sessions
+       WHERE entry_session_ref = ?`
+    ).get(entrySessionRef) as {
+      entry_session_ref: string;
+      entry_binding_ref: string;
+      token_hash: string;
+      status: "active" | "revoked" | "expired";
+      expires_at: string;
+    } | undefined;
+    if (
+      !row ||
+      row.entry_binding_ref !== entryBindingRef ||
+      row.status !== "active" ||
+      !secureHashEqual(row.token_hash, sha256(entryToken))
+    ) {
+      return null;
+    }
+    const expiresAtMs = Date.parse(row.expires_at);
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= this.now().getTime()) {
+      return null;
+    }
+    return {
+      entryBindingRef: row.entry_binding_ref,
+      entrySessionRef: row.entry_session_ref,
+      entryToken,
+      expiresAt: row.expires_at
+    };
+  }
+
   private requireExistingDeviceCredential(
     device: WebDeviceRow,
     input: { deviceRef: string; deviceCredential: string } | undefined
@@ -262,6 +336,124 @@ export class WebEntryRepository {
     return input.deviceCredential;
   }
 
+  private replayConsumedPairing(
+    pairing: PairingRow,
+    input: WebPairingClaimRequest & {
+      existingDevice?: { deviceRef: string; deviceCredential: string };
+    },
+    installationRef: string
+  ): WebPairingClaimResult {
+    if (
+      !pairing.consumed_at ||
+      !pairing.consumed_device_ref ||
+      !pairing.web_claim_session_ref
+    ) {
+      throw webError("PAIRING_CONSUMED", 409, "conflict", "配对码已经被使用。");
+    }
+    const consumedDevice = this.deviceByRef(pairing.consumed_device_ref);
+    if (!consumedDevice || consumedDevice.installation_ref !== installationRef) {
+      throw webError("PAIRING_CONSUMED", 409, "conflict", "配对码已经被使用。");
+    }
+
+    const submittedCredentialMatches = secureHashEqual(
+      consumedDevice.credential_hash,
+      sha256(input.deviceCredential)
+    );
+    const existingCredentialMatches =
+      input.existingDevice?.deviceRef === consumedDevice.device_ref &&
+      secureHashEqual(
+        consumedDevice.credential_hash,
+        sha256(input.existingDevice.deviceCredential)
+      );
+    const replayCredential = existingCredentialMatches
+      ? input.existingDevice!.deviceCredential
+      : submittedCredentialMatches
+        ? input.deviceCredential
+        : null;
+    if (!replayCredential) {
+      throw webError("DEVICE_AUTH_INVALID", 401, "permission", "浏览器设备凭证无效。");
+    }
+    if (consumedDevice.terminal_type !== "web" || consumedDevice.platform !== "browser") {
+      throw webError("DEVICE_AUTH_INVALID", 401, "permission", "该设备不是浏览器入口。");
+    }
+    if (consumedDevice.status === "revoked") {
+      throw webError("DEVICE_REVOKED", 403, "permission", "浏览器设备已经撤销。");
+    }
+
+    const binding = this.personalBinding(
+      consumedDevice.device_ref,
+      pairing.family_ref,
+      pairing.person_ref
+    );
+    if (!binding) {
+      throw webError("DEVICE_REVOKED", 403, "permission", "浏览器入口已经撤销。");
+    }
+
+    const recoveryDeadline = Date.parse(pairing.consumed_at) + 2 * 60 * 1000;
+    if (this.now().getTime() > recoveryDeadline || pairing.web_replay_count >= 3) {
+      throw webError("PAIRING_CONSUMED", 409, "conflict", "配对码已经被使用。");
+    }
+
+    const entryToken = deriveWebClaimEntryToken(replayCredential, pairing.pairing_ref);
+    const session = this.activeClaimSession(
+      pairing.web_claim_session_ref,
+      binding.entry_binding_ref,
+      entryToken
+    );
+    if (!session) {
+      throw webError("PAIRING_CONSUMED", 409, "conflict", "配对码已经被使用。");
+    }
+
+    const updated = this.db.prepare(
+      `UPDATE mobile_pairing_codes
+       SET web_replay_count = web_replay_count + 1
+       WHERE pairing_ref = ?
+         AND status = 'consumed'
+         AND web_replay_count < 3`
+    ).run(pairing.pairing_ref);
+    if (updated.changes !== 1) {
+      throw webError("PAIRING_CONSUMED", 409, "conflict", "配对码已经被使用。");
+    }
+
+    return {
+      deviceRef: consumedDevice.device_ref,
+      deviceCredential: replayCredential,
+      ...session
+    };
+  }
+
+  private finalizeActivePairingClaim(
+    pairing: PairingRow,
+    deviceRef: string,
+    entryBindingRef: string,
+    deviceCredential: string
+  ): WebPairingClaimResult {
+    const entryToken = deriveWebClaimEntryToken(deviceCredential, pairing.pairing_ref);
+    const session = this.issueClaimSession(entryBindingRef, entryToken);
+    const consumed = this.db.prepare(
+      `UPDATE mobile_pairing_codes
+       SET status = 'consumed',
+           consumed_at = ?,
+           consumed_device_ref = ?,
+           web_claim_session_ref = ?,
+           web_replay_count = 0
+       WHERE pairing_ref = ? AND status = 'active'`
+    ).run(
+      this.nowIso(),
+      deviceRef,
+      session.entrySessionRef,
+      pairing.pairing_ref
+    );
+    if (consumed.changes !== 1) {
+      throw webError("PAIRING_CONSUMED", 409, "conflict", "配对码已经被使用。");
+    }
+    return {
+      deviceRef,
+      deviceCredential,
+      ...session
+    };
+  }
+
   claimPairing(
     input: WebPairingClaimRequest & {
       existingDevice?: { deviceRef: string; deviceCredential: string };
@@ -273,46 +465,7 @@ export class WebEntryRepository {
       const installationRef = sha256(input.installationId);
 
       if (pairing.status === "consumed") {
-        if (!pairing.consumed_device_ref) {
-          throw webError("PAIRING_CONSUMED", 409, "conflict", "配对码已经被使用。");
-        }
-        const consumedDevice = this.deviceByRef(pairing.consumed_device_ref);
-        if (!consumedDevice || consumedDevice.installation_ref !== installationRef) {
-          throw webError("PAIRING_CONSUMED", 409, "conflict", "配对码已经被使用。");
-        }
-        const deviceCredential = this.requireExistingDeviceCredential(
-          consumedDevice,
-          input.existingDevice
-        );
-        const binding = this.personalBinding(
-          consumedDevice.device_ref,
-          pairing.family_ref,
-          pairing.person_ref
-        );
-        if (!binding) {
-          throw webError("DEVICE_REVOKED", 403, "permission", "浏览器入口已经撤销。");
-        }
-        const session = this.issueSession(binding.entry_binding_ref);
-        const now = this.nowIso();
-        this.db.prepare(
-          `UPDATE managed_devices
-           SET display_name = ?, system_version = ?, app_version = ?, device_model = ?,
-               last_seen_at = ?, updated_at = ?
-           WHERE device_ref = ?`
-        ).run(
-          input.device.displayName,
-          input.device.operatingSystem,
-          input.device.appVersion,
-          input.device.browser,
-          now,
-          now,
-          consumedDevice.device_ref
-        );
-        return {
-          deviceRef: consumedDevice.device_ref,
-          deviceCredential,
-          ...session
-        };
+        return this.replayConsumedPairing(pairing, input, installationRef);
       }
 
       const existing = this.deviceByInstallation(installationRef);
@@ -326,7 +479,6 @@ export class WebEntryRepository {
         if (!binding) {
           throw webError("PAIRING_CONSUMED", 409, "conflict", "该浏览器已绑定其他个人入口。");
         }
-        const session = this.issueSession(binding.entry_binding_ref);
         const now = this.nowIso();
         this.db.prepare(
           `UPDATE managed_devices
@@ -342,19 +494,19 @@ export class WebEntryRepository {
           now,
           existing.device_ref
         );
-        this.db.prepare(
-          `UPDATE mobile_pairing_codes
-           SET status = 'consumed', consumed_at = ?, consumed_device_ref = ?
-           WHERE pairing_ref = ? AND status = 'active'`
-        ).run(now, existing.device_ref, pairing.pairing_ref);
-        return { deviceRef: existing.device_ref, deviceCredential, ...session };
+        return this.finalizeActivePairingClaim(
+          pairing,
+          existing.device_ref,
+          binding.entry_binding_ref,
+          deviceCredential
+        );
       }
 
       const now = this.nowIso();
       const deviceRef = `device:${randomUUID()}`;
       const deviceBindingRef = `device-binding:${randomUUID()}`;
       const entryBindingRef = `entry-binding:${randomUUID()}`;
-      const deviceCredential = randomBytes(32).toString("base64url");
+      const deviceCredential = input.deviceCredential;
 
       this.db.prepare(
         `INSERT INTO managed_devices
@@ -386,14 +538,13 @@ export class WebEntryRepository {
           status, bound_at, last_used_at)
          VALUES(?, ?, ?, ?, 'personal', 'active', ?, NULL)`
       ).run(entryBindingRef, deviceRef, pairing.family_ref, pairing.person_ref, now);
-      const session = this.issueSession(entryBindingRef);
-      this.db.prepare(
-        `UPDATE mobile_pairing_codes
-         SET status = 'consumed', consumed_at = ?, consumed_device_ref = ?
-         WHERE pairing_ref = ? AND status = 'active'`
-      ).run(now, deviceRef, pairing.pairing_ref);
 
-      return { deviceRef, deviceCredential, ...session };
+      return this.finalizeActivePairingClaim(
+        pairing,
+        deviceRef,
+        entryBindingRef,
+        deviceCredential
+      );
     })();
   }
 
@@ -474,12 +625,18 @@ export class WebEntryRepository {
     })();
   }
 
-  logoutSession(entryBindingRef: string): void {
-    this.db.prepare(
+  logoutSession(input: {
+    entrySessionRef: string;
+    entryBindingRef: string;
+  }): boolean {
+    const result = this.db.prepare(
       `UPDATE entry_sessions
        SET status = 'revoked', revoked_at = ?
-       WHERE entry_binding_ref = ? AND status = 'active'`
-    ).run(this.nowIso(), entryBindingRef);
+       WHERE entry_session_ref = ?
+         AND entry_binding_ref = ?
+         AND status = 'active'`
+    ).run(this.nowIso(), input.entrySessionRef, input.entryBindingRef);
+    return result.changes === 1;
   }
 
   revokeDevice(authentication: WebDeviceAuthentication): void {
