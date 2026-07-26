@@ -1,11 +1,11 @@
-const $ = (id) => document.getElementById(id);
+const $ = (documentRef, id) => documentRef.getElementById(id);
 
 function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
-function element(tag, className, text = undefined) {
-  const node = document.createElement(tag);
+function element(documentRef, tag, className, text = undefined) {
+  const node = documentRef.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
@@ -40,41 +40,41 @@ function actorLabel(message) {
   }
 }
 
-function messageNode(message, input) {
-  const row = element("article", `message ${message.actor?.type ?? "system"}`);
+function messageNode(documentRef, listenerOptions, message, input) {
+  const row = element(documentRef, "article", `message ${message.actor?.type ?? "system"}`);
   row.dataset.messageRef = message.messageRef;
   if (input.selectable) {
-    const checkbox = document.createElement("input");
+    const checkbox = documentRef.createElement("input");
     checkbox.type = "checkbox";
     checkbox.className = "message-select";
     checkbox.checked = input.selected.has(message.messageRef);
     checkbox.setAttribute("aria-label", `选择${actorLabel(message)}的消息`);
-    checkbox.addEventListener("change", () => input.onSelect(message.messageRef));
+    checkbox.addEventListener("change", () => input.onSelect(message.messageRef), listenerOptions);
     row.append(checkbox);
   }
-  const bubble = element("div", "message-bubble");
-  bubble.append(element("p", "message-content", message.content?.text ?? ""));
-  const meta = element("div", "message-meta");
-  meta.append(element("span", "", actorLabel(message)));
-  meta.append(element("time", "", displayTime(message.occurredAt ?? message.createdAt)));
+  const bubble = element(documentRef, "div", "message-bubble");
+  bubble.append(element(documentRef, "p", "message-content", message.content?.text ?? ""));
+  const meta = element(documentRef, "div", "message-meta");
+  meta.append(element(documentRef, "span", "", actorLabel(message)));
+  meta.append(element(documentRef, "time", "", displayTime(message.occurredAt ?? message.createdAt)));
   bubble.append(meta);
   row.append(bubble);
   return row;
 }
 
-function outgoingNode(outgoing, onRetry) {
+function outgoingNode(documentRef, listenerOptions, outgoing, onRetry) {
   const failed = outgoing.status === "failed";
-  const row = element("article", `message outgoing${failed ? " failed" : ""}`);
+  const row = element(documentRef, "article", `message outgoing${failed ? " failed" : ""}`);
   row.dataset.clientMessageId = outgoing.clientMessageId;
-  const bubble = element("div", "message-bubble");
-  bubble.append(element("p", "message-content", outgoing.content?.text ?? ""));
-  const meta = element("div", "message-meta");
-  meta.append(element("span", "", failed ? "发送或回复失败" : "正在发送"));
-  meta.append(element("time", "", displayTime(outgoing.occurredAt)));
+  const bubble = element(documentRef, "div", "message-bubble");
+  bubble.append(element(documentRef, "p", "message-content", outgoing.content?.text ?? ""));
+  const meta = element(documentRef, "div", "message-meta");
+  meta.append(element(documentRef, "span", "", failed ? "发送或回复失败" : "正在发送"));
+  meta.append(element(documentRef, "time", "", displayTime(outgoing.occurredAt)));
   if (failed && outgoing.error?.retryable) {
-    const retry = element("button", "retry-message", "重试");
+    const retry = element(documentRef, "button", "retry-message", "重试");
     retry.type = "button";
-    retry.addEventListener("click", () => void onRetry(outgoing.clientMessageId));
+    retry.addEventListener("click", () => void onRetry(outgoing.clientMessageId), listenerOptions);
     meta.append(retry);
   }
   bubble.append(meta);
@@ -82,7 +82,7 @@ function outgoingNode(outgoing, onRetry) {
   return row;
 }
 
-function renderThread(input) {
+function renderThread(documentRef, listenerOptions, input) {
   const distanceFromBottom = input.container.scrollHeight -
     input.container.scrollTop - input.container.clientHeight;
   const shouldStickToBottom = distanceFromBottom < 120;
@@ -91,13 +91,13 @@ function renderThread(input) {
   const outgoing = (input.outgoing ?? []).filter((item) => item.threadRef === input.threadRef);
   const selected = new Set(input.selectedRefs ?? []);
   for (const message of authoritative) {
-    input.container.append(messageNode(message, {
+    input.container.append(messageNode(documentRef, listenerOptions, message, {
       selectable: input.selectable,
       selected,
       onSelect: input.onSelect
     }));
   }
-  for (const item of outgoing) input.container.append(outgoingNode(item, input.onRetry));
+  for (const item of outgoing) input.container.append(outgoingNode(documentRef, listenerOptions, item, input.onRetry));
   input.empty.classList.toggle("hidden", authoritative.length + outgoing.length > 0);
   input.loadEarlier.classList.toggle("hidden", input.nextBeforeSequence == null);
   if (shouldStickToBottom) {
@@ -107,45 +107,45 @@ function renderThread(input) {
   }
 }
 
-function ensureMobileWorkSelect(actions) {
-  let select = $("mobileWorkSelect");
+function ensureMobileWorkSelect(documentRef, listenerOptions, actions) {
+  let select = $(documentRef, "mobileWorkSelect");
   if (!select) {
-    select = document.createElement("select");
+    select = documentRef.createElement("select");
     select.id = "mobileWorkSelect";
     select.className = "mobile-work-select";
     select.setAttribute("aria-label", "选择 Work");
-    $("workListToggle").before(select);
+    $(documentRef, "workListToggle").before(select);
   }
   select.addEventListener("change", (event) => {
     if (event.target.value) void actions.openWork(event.target.value);
-  });
+  }, listenerOptions);
   return select;
 }
 
-function renderWorkList(state, actions) {
-  const list = $("workList");
-  const select = $("mobileWorkSelect");
+function renderWorkList(documentRef, listenerOptions, state, actions) {
+  const list = $(documentRef, "workList");
+  const select = $(documentRef, "mobileWorkSelect");
   clear(list);
   if (select) {
     clear(select);
-    const placeholder = document.createElement("option");
+    const placeholder = documentRef.createElement("option");
     placeholder.value = "";
     placeholder.textContent = "选择 Work";
     select.append(placeholder);
   }
   if (!state.works?.length) {
-    list.append(element("p", "work-list-empty", "还没有 Work。创建一个长期事项后，它会出现在这里。"));
+    list.append(element(documentRef, "p", "work-list-empty", "还没有 Work。创建一个长期事项后，它会出现在这里。"));
     return;
   }
   for (const work of state.works) {
-    const button = element("button", `work-list-item${state.selectedWorkRef === work.workConversationRef ? " active" : ""}`);
+    const button = element(documentRef, "button", `work-list-item${state.selectedWorkRef === work.workConversationRef ? " active" : ""}`);
     button.type = "button";
-    button.append(element("strong", "", work.title));
-    button.append(element("span", "", `${workStatusLabel(work.status)} · ${work.goal}`));
-    button.addEventListener("click", () => void actions.openWork(work.workConversationRef));
+    button.append(element(documentRef, "strong", "", work.title));
+    button.append(element(documentRef, "span", "", `${workStatusLabel(work.status)} · ${work.goal}`));
+    button.addEventListener("click", () => void actions.openWork(work.workConversationRef), listenerOptions);
     list.append(button);
     if (select) {
-      const option = document.createElement("option");
+      const option = documentRef.createElement("option");
       option.value = work.workConversationRef;
       option.textContent = work.title;
       option.selected = state.selectedWorkRef === work.workConversationRef;
@@ -154,9 +154,9 @@ function renderWorkList(state, actions) {
   }
 }
 
-function renderProgress(snapshot) {
-  $("workPhaseSummary").textContent = snapshot?.phaseSummary || "尚无结构化进度。";
-  const groups = $("workProgressGroups");
+function renderProgress(documentRef, snapshot) {
+  $(documentRef, "workPhaseSummary").textContent = snapshot?.phaseSummary || "尚无结构化进度。";
+  const groups = $(documentRef, "workProgressGroups");
   clear(groups);
   if (!snapshot) return;
   const definitions = [
@@ -167,10 +167,10 @@ function renderProgress(snapshot) {
   ];
   for (const [label, items] of definitions) {
     if (!items?.length) continue;
-    const group = element("section", "progress-group");
-    group.append(element("strong", "", label));
-    const list = document.createElement("ul");
-    for (const item of items) list.append(element("li", "", item));
+    const group = element(documentRef, "section", "progress-group");
+    group.append(element(documentRef, "strong", "", label));
+    const list = documentRef.createElement("ul");
+    for (const item of items) list.append(element(documentRef, "li", "", item));
     group.append(list);
     groups.append(group);
   }
@@ -183,16 +183,20 @@ function setDialogBusy(dialog, busy) {
 }
 
 export function createRenderer(input) {
-  const { store, actions } = input;
+  const { store, actions, documentRef = globalThis.document } = input;
+  const controller = new (input.AbortControllerClass ?? globalThis.AbortController)();
+  const listenerOptions = { signal: controller.signal };
+  const setTimeoutFn = input.setTimeoutFn ?? globalThis.setTimeout.bind(globalThis);
+  const clearTimeoutFn = input.clearTimeoutFn ?? globalThis.clearTimeout.bind(globalThis);
   let toastTimer = null;
-  ensureMobileWorkSelect(actions);
+  ensureMobileWorkSelect(documentRef, listenerOptions, actions);
 
   function showToast(message, kind = "info") {
-    const toast = $("productToast");
+    const toast = $(documentRef, "productToast");
     toast.textContent = message;
     toast.className = `toast${kind === "error" ? " error" : ""}`;
-    if (toastTimer !== null) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toast.classList.add("hidden"), 4200);
+    if (toastTimer !== null) clearTimeoutFn(toastTimer);
+    toastTimer = setTimeoutFn(() => toast.classList.add("hidden"), 4200);
   }
 
   async function retryOutgoing(clientMessageId) {
@@ -210,43 +214,43 @@ export function createRenderer(input) {
     actions.navigate(section);
   }
 
-  document.querySelectorAll("[data-section]").forEach((button) => {
-    button.addEventListener("click", () => navigate(button.dataset.section));
+  documentRef.querySelectorAll("[data-section]").forEach((button) => {
+    button.addEventListener("click", () => navigate(button.dataset.section), listenerOptions);
   });
-  $("createWorkButton").addEventListener("click", () => $("createWorkDialog").showModal());
-  $("mobileCreateWorkButton").addEventListener("click", () => $("createWorkDialog").showModal());
-  $("workListToggle").addEventListener("click", () => {
-    const select = $("mobileWorkSelect");
+  $(documentRef, "createWorkButton").addEventListener("click", () => $(documentRef, "createWorkDialog").showModal(), listenerOptions);
+  $(documentRef, "mobileCreateWorkButton").addEventListener("click", () => $(documentRef, "createWorkDialog").showModal(), listenerOptions);
+  $(documentRef, "workListToggle").addEventListener("click", () => {
+    const select = $(documentRef, "mobileWorkSelect");
     if (select && select.options.length > 1) select.focus();
-    else $("createWorkDialog").showModal();
+    else $(documentRef, "createWorkDialog").showModal();
+  }, listenerOptions);
+  $(documentRef, "convertSelectionButton").addEventListener("click", () => $(documentRef, "chatToWorkDialog").showModal(), listenerOptions);
+  documentRef.querySelectorAll("[data-close-dialog]").forEach((button) => {
+    button.addEventListener("click", () => $(documentRef, button.dataset.closeDialog).close(), listenerOptions);
   });
-  $("convertSelectionButton").addEventListener("click", () => $("chatToWorkDialog").showModal());
-  document.querySelectorAll("[data-close-dialog]").forEach((button) => {
-    button.addEventListener("click", () => $(button.dataset.closeDialog).close());
-  });
-  $("loadEarlierButton").addEventListener("click", () => {
+  $(documentRef, "loadEarlierButton").addEventListener("click", () => {
     void actions.loadEarlier("chat").catch((error) => showToast(error.message, "error"));
-  });
-  $("workLoadEarlierButton").addEventListener("click", () => {
+  }, listenerOptions);
+  $(documentRef, "workLoadEarlierButton").addEventListener("click", () => {
     void actions.loadEarlier("work").catch((error) => showToast(error.message, "error"));
-  });
+  }, listenerOptions);
 
   for (const [formId, inputId, target] of [
     ["messageComposer", "messageInput", "chat"],
     ["workMessageComposer", "workMessageInput", "work"]
   ]) {
-    const form = $(formId);
-    const textarea = $(inputId);
+    const form = $(documentRef, formId);
+    const textarea = $(documentRef, inputId);
     textarea.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         form.requestSubmit();
       }
-    });
+    }, listenerOptions);
     textarea.addEventListener("input", () => {
       void actions.saveDraft(target, textarea.value)
         .catch((error) => showToast(error.message ?? "草稿保存失败。", "error"));
-    });
+    }, listenerOptions);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const text = textarea.value;
@@ -262,17 +266,17 @@ export function createRenderer(input) {
       } catch (error) {
         showToast(error.message ?? "消息发送失败。", "error");
       }
-    });
+    }, listenerOptions);
   }
 
-  $("createWorkForm").addEventListener("submit", async (event) => {
+  $(documentRef, "createWorkForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const dialog = $("createWorkDialog");
+    const dialog = $(documentRef, "createWorkDialog");
     setDialogBusy(dialog, true);
     try {
       await actions.createWork({
-        title: $("createWorkTitleInput").value,
-        goal: $("createWorkGoalInput").value
+        title: $(documentRef, "createWorkTitleInput").value,
+        goal: $(documentRef, "createWorkGoalInput").value
       });
       event.target.reset();
       dialog.close();
@@ -282,16 +286,16 @@ export function createRenderer(input) {
     } finally {
       setDialogBusy(dialog, false);
     }
-  });
+  }, listenerOptions);
 
-  $("chatToWorkForm").addEventListener("submit", async (event) => {
+  $(documentRef, "chatToWorkForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const dialog = $("chatToWorkDialog");
+    const dialog = $(documentRef, "chatToWorkDialog");
     setDialogBusy(dialog, true);
     try {
       await actions.convertChatToWork({
-        title: $("chatToWorkTitleInput").value,
-        goal: $("chatToWorkGoalInput").value
+        title: $(documentRef, "chatToWorkTitleInput").value,
+        goal: $(documentRef, "chatToWorkGoalInput").value
       });
       event.target.reset();
       dialog.close();
@@ -301,24 +305,24 @@ export function createRenderer(input) {
     } finally {
       setDialogBusy(dialog, false);
     }
-  });
+  }, listenerOptions);
 
   function render(state) {
     const section = state.section ?? "chat";
-    $("chatSection").classList.toggle("hidden", section !== "chat");
-    $("workSection").classList.toggle("hidden", section !== "work");
-    document.querySelectorAll("[data-section]").forEach((button) => {
+    $(documentRef, "chatSection").classList.toggle("hidden", section !== "chat");
+    $(documentRef, "workSection").classList.toggle("hidden", section !== "work");
+    documentRef.querySelectorAll("[data-section]").forEach((button) => {
       const active = button.dataset.section === section;
       button.classList.toggle("active", active);
       if (active) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     });
-    $("workspaceKicker").textContent = section === "chat" ? "PERSONAL CHAT" : "WORK CONVERSATIONS";
-    $("workspaceTitle").textContent = section === "chat" ? "和个人助理继续聊" : "持续推进重要事项";
+    $(documentRef, "workspaceKicker").textContent = section === "chat" ? "PERSONAL CHAT" : "WORK CONVERSATIONS";
+    $(documentRef, "workspaceTitle").textContent = section === "chat" ? "和个人助理继续聊" : "持续推进重要事项";
 
     const syncStatus = state.sync?.status ?? "idle";
-    $("syncStatus").className = `sync-pill ${syncStatus}`;
-    $("syncStatus").textContent = ({
+    $(documentRef, "syncStatus").className = `sync-pill ${syncStatus}`;
+    $(documentRef, "syncStatus").textContent = ({
       idle: "准备同步",
       syncing: "正在同步",
       online: "已同步",
@@ -326,7 +330,7 @@ export function createRenderer(input) {
       degraded: "同步需重试"
     })[syncStatus] ?? syncStatus;
 
-    const connection = $("connectionStatus");
+    const connection = $(documentRef, "connectionStatus");
     if (state.network?.online === false || syncStatus === "offline") {
       connection.className = "connection offline";
       connection.lastElementChild.textContent = "当前离线";
@@ -338,17 +342,17 @@ export function createRenderer(input) {
       connection.lastElementChild.textContent = syncStatus === "syncing" ? "正在同步" : "工作台已连接";
     }
 
-    renderWorkList(state, actions);
+    renderWorkList(documentRef, listenerOptions, state, actions);
 
     const chatThreadRef = state.chat?.threadRef ?? null;
     const selected = state.selectedMessageRefs ?? [];
-    $("selectionCount").textContent = selected.length ? `已选择 ${selected.length} 条` : "";
-    $("convertSelectionButton").classList.toggle("hidden", selected.length === 0);
-    $("chatToWorkSelectionSummary").textContent = `已选择 ${selected.length} 条消息。只会传递这些消息的引用。`;
-    renderThread({
-      container: $("threadMessages"),
-      empty: $("chatEmptyState"),
-      loadEarlier: $("loadEarlierButton"),
+    $(documentRef, "selectionCount").textContent = selected.length ? `已选择 ${selected.length} 条` : "";
+    $(documentRef, "convertSelectionButton").classList.toggle("hidden", selected.length === 0);
+    $(documentRef, "chatToWorkSelectionSummary").textContent = `已选择 ${selected.length} 条消息。只会传递这些消息的引用。`;
+    renderThread(documentRef, listenerOptions, {
+      container: $(documentRef, "threadMessages"),
+      empty: $(documentRef, "chatEmptyState"),
+      loadEarlier: $(documentRef, "loadEarlierButton"),
       threadRef: chatThreadRef,
       messages: chatThreadRef ? state.messagesByThread?.[chatThreadRef] : [],
       outgoing: state.outgoing,
@@ -359,26 +363,26 @@ export function createRenderer(input) {
       onRetry: retryOutgoing
     });
     const chatDraft = chatThreadRef ? state.drafts?.[chatThreadRef] ?? "" : "";
-    if (document.activeElement !== $("messageInput") && $("messageInput").value !== chatDraft) {
-      $("messageInput").value = chatDraft;
+    if (documentRef.activeElement !== $(documentRef, "messageInput") && $(documentRef, "messageInput").value !== chatDraft) {
+      $(documentRef, "messageInput").value = chatDraft;
     }
-    $("composerStatus").textContent = state.network?.online === false
+    $(documentRef, "composerStatus").textContent = state.network?.online === false
       ? "当前离线，输入会保存为草稿"
       : "Enter 发送 · Shift+Enter 换行";
 
     const work = state.works?.find((item) => item.workConversationRef === state.selectedWorkRef) ?? null;
-    $("workStatus").textContent = work ? workStatusLabel(work.status) : "尚未选择";
-    $("workHeading").textContent = work?.title ?? "选择一个 Work";
-    $("workGoal").textContent = work?.goal ?? "每个 Work 都有独立的目标和对话上下文。";
-    $("workDetailGoal").textContent = work?.goal ?? "选择 Work 后显示目标。";
-    $("workSummary").textContent = work?.summary || "尚无阶段摘要。";
-    renderProgress(work ? state.progressByWork?.[work.workConversationRef] : null);
+    $(documentRef, "workStatus").textContent = work ? workStatusLabel(work.status) : "尚未选择";
+    $(documentRef, "workHeading").textContent = work?.title ?? "选择一个 Work";
+    $(documentRef, "workGoal").textContent = work?.goal ?? "每个 Work 都有独立的目标和对话上下文。";
+    $(documentRef, "workDetailGoal").textContent = work?.goal ?? "选择 Work 后显示目标。";
+    $(documentRef, "workSummary").textContent = work?.summary || "尚无阶段摘要。";
+    renderProgress(documentRef, work ? state.progressByWork?.[work.workConversationRef] : null);
 
     const workThreadRef = work?.threadRef ?? null;
-    renderThread({
-      container: $("workThreadMessages"),
-      empty: $("workEmptyState"),
-      loadEarlier: $("workLoadEarlierButton"),
+    renderThread(documentRef, listenerOptions, {
+      container: $(documentRef, "workThreadMessages"),
+      empty: $(documentRef, "workEmptyState"),
+      loadEarlier: $(documentRef, "workLoadEarlierButton"),
       threadRef: workThreadRef,
       messages: workThreadRef ? state.messagesByThread?.[workThreadRef] : [],
       outgoing: state.outgoing,
@@ -388,13 +392,13 @@ export function createRenderer(input) {
       onSelect: () => undefined,
       onRetry: retryOutgoing
     });
-    $("workMessageInput").disabled = !work;
-    $("workSendMessageButton").disabled = !work;
+    $(documentRef, "workMessageInput").disabled = !work;
+    $(documentRef, "workSendMessageButton").disabled = !work;
     const workDraft = workThreadRef ? state.drafts?.[workThreadRef] ?? "" : "";
-    if (document.activeElement !== $("workMessageInput") && $("workMessageInput").value !== workDraft) {
-      $("workMessageInput").value = workDraft;
+    if (documentRef.activeElement !== $(documentRef, "workMessageInput") && $(documentRef, "workMessageInput").value !== workDraft) {
+      $(documentRef, "workMessageInput").value = workDraft;
     }
-    $("workComposerStatus").textContent = !work
+    $(documentRef, "workComposerStatus").textContent = !work
       ? "先选择一个 Work"
       : state.network?.online === false
         ? "当前离线，输入会保存为草稿"
@@ -407,8 +411,12 @@ export function createRenderer(input) {
     render,
     showToast,
     destroy() {
+      controller.abort();
       unsubscribe();
-      if (toastTimer !== null) clearTimeout(toastTimer);
+      if (toastTimer !== null) {
+        clearTimeoutFn(toastTimer);
+        toastTimer = null;
+      }
     }
   };
 }
