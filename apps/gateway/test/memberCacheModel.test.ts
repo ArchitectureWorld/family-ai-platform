@@ -20,6 +20,21 @@ import {
 
 const sourcePath = fileURLToPath(new URL("../member-public/cache.js", import.meta.url));
 
+function fakeOpenRequest() {
+  const listeners = new Map<string, Array<{ listener: () => void; once: boolean }>>();
+  return {
+    result: undefined as unknown,
+    addEventListener(type: string, listener: () => void, options?: { once?: boolean }) {
+      listeners.set(type, [...(listeners.get(type) ?? []), { listener, once: options?.once === true }]);
+    },
+    emit(type: string) {
+      const entries = listeners.get(type) ?? [];
+      for (const entry of entries) entry.listener();
+      listeners.set(type, entries.filter((entry) => !entry.once));
+    }
+  };
+}
+
 describe("Member Web cache model", () => {
   it("defines the disposable product projection stores and browser opener", () => {
     expect(MEMBER_CACHE_STORES).toEqual([
@@ -32,7 +47,24 @@ describe("Member Web cache model", () => {
       "outgoing"
     ]);
     expect(openMemberCache).toBeTypeOf("function");
-    expect(readFileSync(sourcePath, "utf8")).toContain("indexedDB.open");
+  });
+
+  it("opens caller-supplied cache names without replacing the temporary legacy default", async () => {
+    const request = fakeOpenRequest();
+    const database = {
+      objectStoreNames: { contains: () => true },
+      close() {},
+      addEventListener() {}
+    };
+    request.result = database;
+    const indexedDBImpl = { open: (name: string, version: number) => {
+      expect(name).toBe("family-ai-member-web-v2:family:a:person:a:device:a");
+      expect(version).toBe(1);
+      return request;
+    } };
+    const opening = openMemberCache("family-ai-member-web-v2:family:a:person:a:device:a", { indexedDBImpl });
+    request.emit("success");
+    await expect(opening).resolves.toMatchObject({ close: expect.any(Function) });
   });
 
   it("commits event writes and localAppliedSequence in one transaction", async () => {

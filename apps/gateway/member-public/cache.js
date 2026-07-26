@@ -8,7 +8,7 @@ export const MEMBER_CACHE_STORES = [
   "outgoing"
 ];
 
-const DATABASE_NAME = "family-ai-member-web";
+export const LEGACY_DATABASE_NAME = "family-ai-member-web";
 const DATABASE_VERSION = 1;
 const KEY_PATHS = {
   meta: "key",
@@ -137,9 +137,12 @@ function createIndexedTransaction(transaction) {
   };
 }
 
-export async function openMemberCache() {
-  if (typeof indexedDB === "undefined") throw new Error("INDEXED_DB_UNAVAILABLE");
-  const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+export async function openMemberCache(
+  databaseName = LEGACY_DATABASE_NAME,
+  { indexedDBImpl = globalThis.indexedDB } = {}
+) {
+  if (!indexedDBImpl) throw new Error("INDEXED_DB_UNAVAILABLE");
+  const request = indexedDBImpl.open(databaseName, DATABASE_VERSION);
   request.addEventListener("upgradeneeded", () => {
     const database = request.result;
     if (!database.objectStoreNames.contains("meta")) {
@@ -168,6 +171,13 @@ export async function openMemberCache() {
     }
   });
   const database = await requestResult(request);
+  let closedForVersionChange = false;
+  database.addEventListener("versionchange", () => {
+    if (closedForVersionChange) return;
+    closedForVersionChange = true;
+    database.close();
+  });
+
   return {
     async transaction(storeNames, callback) {
       const transaction = database.transaction([...new Set(storeNames)], "readwrite");
