@@ -420,8 +420,11 @@ export function createStorage(
       values.set(key, text);
       options.onSetItem?.(key, text);
     },
-    removeItem: (key: string) => values.delete(key),
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
     clear: () => values.clear(),
+    dump: () => Object.fromEntries(values),
   };
 }
 export function zeroCrypto() {
@@ -453,26 +456,103 @@ export function deferred<T>() {
 }
 export function createDeterministicWebLocks() {
   const calls: string[] = [];
-  const lanes = new Map<string, Promise<unknown>>();
+  const requestedNames = calls;
+  const events: Array<{
+    phase: "request" | "enter" | "exit";
+    name: string;
+    mode: "exclusive" | "shared";
+  }> = [];
+  type Request = {
+    mode: "exclusive" | "shared";
+    callback: (lock: {
+      name: string;
+      mode: "exclusive" | "shared";
+    }) => unknown;
+    resolve: (value: unknown) => void;
+    reject: (error: unknown) => void;
+  };
+  type Lane = {
+    activeExclusive: boolean;
+    activeShared: number;
+    queue: Request[];
+  };
+  const lanes = new Map<string, Lane>();
+
+  const laneFor = (name: string) => {
+    let lane = lanes.get(name);
+    if (!lane) {
+      lane = { activeExclusive: false, activeShared: 0, queue: [] };
+      lanes.set(name, lane);
+    }
+    return lane;
+  };
+
+  const drain = (name: string) => {
+    const lane = laneFor(name);
+    if (lane.activeExclusive) return;
+
+    const start = (request: Request) => {
+      if (request.mode === "exclusive") lane.activeExclusive = true;
+      else lane.activeShared += 1;
+
+      const finish = (settle: () => void) => {
+        events.push({ phase: "exit", name, mode: request.mode });
+        if (request.mode === "exclusive") lane.activeExclusive = false;
+        else lane.activeShared -= 1;
+        drain(name);
+        settle();
+      };
+      void Promise.resolve()
+        .then(() => {
+          events.push({ phase: "enter", name, mode: request.mode });
+          return request.callback({ name, mode: request.mode });
+        })
+        .then(
+          (value) => finish(() => request.resolve(value)),
+          (error) => finish(() => request.reject(error)),
+        );
+    };
+
+    if (lane.activeShared > 0) {
+      while (lane.queue[0]?.mode === "shared") start(lane.queue.shift()!);
+      return;
+    }
+    if (lane.queue[0]?.mode === "exclusive") {
+      start(lane.queue.shift()!);
+      return;
+    }
+    while (lane.queue[0]?.mode === "shared") start(lane.queue.shift()!);
+  };
+
   return {
     calls,
+    requestedNames,
+    events,
     request(
       name: string,
-      options: unknown,
-      callback?: (lock: { name: string }) => unknown,
+      options:
+        | { mode?: "exclusive" | "shared" }
+        | ((lock: {
+            name: string;
+            mode: "exclusive" | "shared";
+          }) => unknown),
+      callback?: (lock: {
+        name: string;
+        mode: "exclusive" | "shared";
+      }) => unknown,
     ) {
-      const run =
+      const run = typeof options === "function" ? options : callback!;
+      const mode =
         typeof options === "function"
-          ? (options as (lock: { name: string }) => unknown)
-          : callback!;
+          ? "exclusive"
+          : options.mode ?? "exclusive";
       calls.push(name);
-      const previous = lanes.get(name) ?? Promise.resolve();
-      const current = previous.then(() => run({ name }));
-      lanes.set(
-        name,
-        current.catch(() => undefined),
-      );
-      return current;
+      events.push({ phase: "request", name, mode });
+      const result = new Promise((resolve, reject) => {
+        laneFor(name).queue.push({ mode, callback: run, resolve, reject });
+      });
+      drain(name);
+      return result;
     },
   };
 }
