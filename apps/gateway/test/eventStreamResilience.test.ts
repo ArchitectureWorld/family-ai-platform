@@ -84,6 +84,15 @@ class RecordingSink implements EventStreamSink {
   }
 }
 
+class ThrowingControlSink extends RecordingSink {
+  override write(chunk: string): boolean {
+    if (chunk.startsWith("event: entry-revoked")) {
+      throw new Error("SIMULATED_CONTROL_WRITE_FAILURE");
+    }
+    return super.write(chunk);
+  }
+}
+
 const authenticator: EventStreamAuthenticator = {
   authenticate: (_entrySessionRef, token) => ({
     status: "authenticated",
@@ -105,6 +114,7 @@ describe("PersonEventStreamHub failure isolation", () => {
       cursor: 0,
       entrySessionRef: "entry-session:failing",
       token: "person:failing",
+      authenticationSource: "explicit_authorization",
       sink: failing
     });
     hub.register({
@@ -112,6 +122,7 @@ describe("PersonEventStreamHub failure isolation", () => {
       cursor: 0,
       entrySessionRef: "entry-session:healthy",
       token: "person:healthy",
+      authenticationSource: "explicit_authorization",
       sink: healthy
     });
 
@@ -159,6 +170,7 @@ describe("PersonEventStreamHub failure isolation", () => {
       cursor: 0,
       entrySessionRef: "entry-session:failing",
       token: "person:failing",
+      authenticationSource: "explicit_authorization",
       sink: failing
     });
     hub.register({
@@ -166,6 +178,7 @@ describe("PersonEventStreamHub failure isolation", () => {
       cursor: 0,
       entrySessionRef: "entry-session:healthy",
       token: "person:healthy",
+      authenticationSource: "explicit_authorization",
       sink: healthy
     });
 
@@ -178,6 +191,55 @@ describe("PersonEventStreamHub failure isolation", () => {
       );
       expect(hub.subscriberCount()).toBe(1);
     } finally {
+      await hub.close();
+    }
+  });
+
+  it("isolates a throwing revoke write and still gracefully closes the next Cookie subscriber", async () => {
+    const source: PersonEventSource = {
+      listPersonEvents: () => ({ events: [], nextAfterSequence: null })
+    };
+    const revokedAuthenticator: EventStreamAuthenticator = {
+      authenticate: () => ({ status: "device_revoked" })
+    };
+    const hub = new PersonEventStreamHub(source, revokedAuthenticator, { autoStart: false });
+    const failing = new ThrowingControlSink();
+    const healthy = new RecordingSink();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandledRejections.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      hub.register({
+        personRef: "person:test",
+        cursor: 0,
+        entrySessionRef: "entry-session:failing-cookie",
+        token: "failing-cookie-token",
+        authenticationSource: "entry_cookie",
+        sink: failing
+      });
+      hub.register({
+        personRef: "person:test",
+        cursor: 0,
+        entrySessionRef: "entry-session:healthy-cookie",
+        token: "healthy-cookie-token",
+        authenticationSource: "entry_cookie",
+        sink: healthy
+      });
+
+      await expect(hub.heartbeatAll()).resolves.toBeUndefined();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const controlFrame =
+        "event: entry-revoked\ndata: {\"protocolVersion\":2,\"type\":\"device_revoked\"}\n\n";
+      expect(failing.destroyed).toBe(true);
+      expect(failing.ended).toBe(false);
+      expect(healthy.frames.filter((frame) => frame === controlFrame)).toHaveLength(1);
+      expect(healthy.ended).toBe(true);
+      expect(healthy.destroyed).toBe(false);
+      expect(hub.subscriberCount()).toBe(0);
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
       await hub.close();
     }
   });

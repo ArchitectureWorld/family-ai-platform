@@ -1,10 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
+import { PersonEventStreamHub } from "../src/eventStream.js";
 
 const deviceToken = "event-stream-bootstrap-device-token";
+const deviceCredential = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const bootstrapHeaders = {
   authorization: `Bearer ${deviceToken}`,
   "x-device-ref": "device:test"
@@ -28,6 +30,19 @@ function entryHeaders(entry: EntryCredential): Record<string, string> {
     authorization: `Bearer ${entry.token}`,
     "x-entry-session-ref": entry.entrySessionRef
   };
+}
+
+function cookieHeader(setCookie: string | string[] | undefined): string {
+  const values = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+  return values.map((value) => value.split(";", 1)[0]).join("; ");
+}
+
+function cookieValue(cookie: string, name: string): string {
+  const encoded = cookie.split("; ")
+    .find((pair) => pair.startsWith(`${name}=`))
+    ?.slice(name.length + 1);
+  if (!encoded) throw new Error(`missing ${name}`);
+  return decodeURIComponent(encoded);
 }
 
 function parseFrame(raw: string): SseFrame {
@@ -96,6 +111,7 @@ describe("Chat Work SSE HTTP route", () => {
   let app: Awaited<ReturnType<typeof buildGatewayApp>>;
   let admin: EntryCredential;
   let personal: EntryCredential;
+  let ownerPersonRef = "";
   let origin = "";
   const controllers: AbortController[] = [];
 
@@ -120,8 +136,10 @@ describe("Chat Work SSE HTTP route", () => {
     });
     expect(onboarding.statusCode).toBe(201);
     const body = onboarding.json() as {
+      owner: { personRef: string };
       entries: { admin: EntryCredential; personal: EntryCredential };
     };
+    ownerPersonRef = body.owner.personRef;
     admin = body.entries.admin;
     personal = body.entries.personal;
   });
@@ -149,6 +167,42 @@ describe("Chat Work SSE HTTP route", () => {
       signal: controller.signal
     });
     return { response, controller };
+  }
+
+  async function claimBrowserCookie(): Promise<string> {
+    const pairing = await app.inject({
+      method: "POST",
+      url: `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}/pairing-codes`,
+      headers: {
+        ...entryHeaders(admin),
+        host: "family.example",
+        "x-forwarded-proto": "https"
+      }
+    });
+    expect(pairing.statusCode).toBe(201);
+    const material = pairing.json() as {
+      pairing: { pairingRef: string; code: string };
+    };
+    const claim = await app.inject({
+      method: "POST",
+      url: "/api/v1/web-entry/pairing/claim",
+      headers: { "x-family-ai-web-request": "1" },
+      payload: {
+        protocolVersion: 2,
+        pairingRef: material.pairing.pairingRef,
+        code: material.pairing.code,
+        installationId: "a378ea35-4cab-4bb9-a2ac-fc66320854db",
+        deviceCredential,
+        device: {
+          displayName: "SSE 路由浏览器",
+          browser: "Firefox 142",
+          operatingSystem: "Linux",
+          appVersion: "0.1.0"
+        }
+      }
+    });
+    expect(claim.statusCode).toBe(204);
+    return cookieHeader(claim.headers["set-cookie"]);
   }
 
   it("requires a Personal Entry Session and keeps pre-stream errors in PublicError form", async () => {
@@ -263,5 +317,81 @@ describe("Chat Work SSE HTTP route", () => {
       eventSequence: 2,
       eventType: "work.created"
     });
+  });
+
+  it("keeps an initial revoked Cookie request in the pre-flush HTTP cleanup matrix", async () => {
+    const cookie = await claimBrowserCookie();
+    const deviceRef = cookieValue(cookie, "family_ai_web_device_ref");
+    const revoked = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/admin/devices/${encodeURIComponent(deviceRef)}`,
+      headers: entryHeaders(admin)
+    });
+    expect(revoked.statusCode).toBe(200);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/events/stream",
+      headers: { cookie }
+    });
+    expect(response.statusCode).toBe(403);
+    const body = response.json() as {
+      code?: string;
+      error?: { code?: string };
+    };
+    expect(body.error?.code ?? body.code).toBe("DEVICE_REVOKED");
+    const setCookie = response.headers["set-cookie"];
+    const values = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+    expect(values).toHaveLength(4);
+    expect(values.map((value) => value.split("=", 1)[0])).toEqual([
+      "family_ai_web_device_ref",
+      "family_ai_web_device_credential",
+      "family_ai_web_entry_session_ref",
+      "family_ai_web_entry_token"
+    ]);
+    expect(values.every((value) => value.includes("Max-Age=0"))).toBe(true);
+    expect(response.body).not.toContain("event: entry-revoked");
+    expect(response.headers["content-type"])
+      .not.toContain("text/event-stream");
+
+    const explicit = await app.inject({
+      method: "GET",
+      url: "/api/v1/events/stream",
+      headers: {
+        cookie,
+        authorization: `Bearer ${cookieValue(cookie, "family_ai_web_entry_token")}`,
+        "x-entry-session-ref": cookieValue(cookie, "family_ai_web_entry_session_ref")
+      }
+    });
+    expect(explicit.statusCode).toBe(403);
+    expect(explicit.headers["set-cookie"]).toBeUndefined();
+    expect(explicit.body).not.toContain("event: entry-revoked");
+  });
+
+  it("maps Cookie provenance into subscribers while explicit Authorization wins", async () => {
+    const cookie = await claimBrowserCookie();
+    const registerSpy = vi.spyOn(PersonEventStreamHub.prototype, "register");
+
+    try {
+      const cookieStream = await fetchStream("/api/v1/events/stream", { cookie });
+      const connected = await readFrameUntil(cookieStream.response, (frame) => frame.raw.includes(": connected"));
+      expect(connected.id).toBeNull();
+      expect(registerSpy.mock.calls.at(-1)?.[0]).toMatchObject({ authenticationSource: "entry_cookie" });
+      cookieStream.controller.abort();
+
+      const explicitStream = await fetchStream(
+        "/api/v1/events/stream",
+        {
+          cookie,
+          authorization: `Bearer ${cookieValue(cookie, "family_ai_web_entry_token")}`,
+          "x-entry-session-ref": cookieValue(cookie, "family_ai_web_entry_session_ref")
+        }
+      );
+      await readFrameUntil(explicitStream.response, (frame) => frame.raw.includes(": connected"));
+      expect(registerSpy.mock.calls.at(-1)?.[0]).toMatchObject({ authenticationSource: "explicit_authorization" });
+      explicitStream.controller.abort();
+    } finally {
+      registerSpy.mockRestore();
+    }
   });
 });

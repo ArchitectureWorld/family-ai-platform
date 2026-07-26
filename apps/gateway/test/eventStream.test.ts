@@ -4,6 +4,7 @@ import {
   PersonEventStreamHub,
   formatConnectedFrame,
   formatDomainEventFrame,
+  formatEntryRevokedFrame,
   formatHeartbeatFrame,
   parseEventStreamCursor,
   type EventStreamAuthentication,
@@ -157,6 +158,24 @@ class BackpressureSink extends FakeSink {
   }
 }
 
+class RevokedBackpressureSink extends BackpressureSink {
+  readonly lifecycle: string[] = [];
+
+  override write(chunk: string): boolean {
+    const writable = super.write(chunk);
+    if (chunk.startsWith("event: entry-revoked")) {
+      this.lifecycle.push("control-accepted");
+      return false;
+    }
+    return writable;
+  }
+
+  override end(): void {
+    this.lifecycle.push("end");
+    super.end();
+  }
+}
+
 class MutableAuthenticator implements EventStreamAuthenticator {
   readonly calls: Array<[string, string]> = [];
   private readonly results = new Map<string, EventStreamAuthentication>();
@@ -227,6 +246,17 @@ describe("Chat Work SSE protocol helpers", () => {
     expect(formatConnectedFrame(3000)).not.toContain("id:");
     expect(formatHeartbeatFrame("2026-07-24T12:00:00.000Z")).not.toContain("id:");
   });
+
+  it("formats the exact non-secret Web Entry revoke control frame", () => {
+    const frame = formatEntryRevokedFrame();
+    expect(frame).toBe(
+      "event: entry-revoked\ndata: {\"protocolVersion\":2,\"type\":\"device_revoked\"}\n\n"
+    );
+    expect(frame).not.toMatch(/^id:/m);
+    expect(frame).not.toMatch(/person|deviceRef|entrySessionRef|cursor|cookie|token/i);
+    expect(frame.split("\n").filter((line) => line.startsWith("data: ")))
+      .toHaveLength(1);
+  });
 });
 
 describe("PersonEventStreamHub shared pump", () => {
@@ -241,6 +271,7 @@ describe("PersonEventStreamHub shared pump", () => {
       cursor: 0,
       entrySessionRef: "entry-session:first",
       token: "token-first",
+      authenticationSource: "explicit_authorization",
       sink: first
     });
     hub.register({
@@ -248,6 +279,7 @@ describe("PersonEventStreamHub shared pump", () => {
       cursor: 2,
       entrySessionRef: "entry-session:second",
       token: "token-second",
+      authenticationSource: "explicit_authorization",
       sink: second
     });
     await hub.pumpPerson("person:test");
@@ -281,6 +313,7 @@ describe("PersonEventStreamHub shared pump", () => {
       cursor: 0,
       entrySessionRef: "entry-session:owner",
       token: "owner-token",
+      authenticationSource: "explicit_authorization",
       sink: owner
     });
     hub.register({
@@ -288,6 +321,7 @@ describe("PersonEventStreamHub shared pump", () => {
       cursor: 0,
       entrySessionRef: "entry-session:other",
       token: "other-token",
+      authenticationSource: "explicit_authorization",
       sink: other
     });
     await hub.pumpAll();
@@ -315,6 +349,7 @@ describe("PersonEventStreamHub shared pump", () => {
       cursor: 0,
       entrySessionRef: "entry-session:paged",
       token: "paged-token",
+      authenticationSource: "explicit_authorization",
       sink
     });
 
@@ -340,6 +375,7 @@ describe("PersonEventStreamHub connection protection", () => {
       cursor: 0,
       entrySessionRef: "entry-session:backpressure",
       token: "backpressure-token",
+      authenticationSource: "explicit_authorization",
       sink
     });
 
@@ -366,6 +402,7 @@ describe("PersonEventStreamHub connection protection", () => {
       cursor: 0,
       entrySessionRef: "entry-session:slow",
       token: "slow-token",
+      authenticationSource: "explicit_authorization",
       sink: slow
     });
     hub.register({
@@ -373,6 +410,7 @@ describe("PersonEventStreamHub connection protection", () => {
       cursor: 0,
       entrySessionRef: "entry-session:healthy",
       token: "healthy-token",
+      authenticationSource: "explicit_authorization",
       sink: healthy
     });
 
@@ -409,12 +447,99 @@ describe("PersonEventStreamHub connection protection", () => {
       cursor: 0,
       entrySessionRef: "entry-session:large",
       token: "large-token",
+      authenticationSource: "explicit_authorization",
       sink
     });
 
     await hub.pumpPerson("person:test");
 
     expect(sink.destroyed).toBe(true);
+    expect(hub.subscriberCount()).toBe(0);
+    await hub.close();
+  });
+
+
+  it("notifies Cookie subscribers before gracefully ending a revoked stream", async () => {
+    const source = new FakeEventSource([]);
+    const authenticator = new MutableAuthenticator();
+    authenticator.set("entry-session:web", authenticated("person:test"));
+    const sink = new FakeSink();
+    const hub = new PersonEventStreamHub(source, authenticator, { autoStart: false });
+    hub.register({
+      personRef: "person:test",
+      cursor: 0,
+      entrySessionRef: "entry-session:web",
+      token: "cookie-token",
+      authenticationSource: "entry_cookie",
+      sink
+    });
+
+    authenticator.set("entry-session:web", { status: "device_revoked" });
+    await hub.heartbeatAll();
+
+    const controlFrame =
+      "event: entry-revoked\ndata: {\"protocolVersion\":2,\"type\":\"device_revoked\"}\n\n";
+    expect(sink.frames.filter((frame) => frame === controlFrame)).toHaveLength(1);
+    expect(sink.ended).toBe(true);
+    expect(sink.destroyed).toBe(false);
+    await hub.close();
+  });
+
+  it("keeps explicit Bearer device-revoke closure free of Cookie control frames", async () => {
+    const source = new FakeEventSource([]);
+    const authenticator = new MutableAuthenticator();
+    authenticator.set("entry-session:explicit", authenticated("person:test"));
+    const sink = new FakeSink();
+    const hub = new PersonEventStreamHub(source, authenticator, { autoStart: false });
+    hub.register({
+      personRef: "person:test",
+      cursor: 0,
+      entrySessionRef: "entry-session:explicit",
+      token: "explicit-token",
+      authenticationSource: "explicit_authorization",
+      sink
+    });
+
+    authenticator.set("entry-session:explicit", { status: "device_revoked" });
+    await hub.heartbeatAll();
+
+    expect(sink.frames.join("\n")).not.toContain("event: entry-revoked");
+    expect(sink.ended).toBe(false);
+    expect(sink.destroyed).toBe(true);
+    expect(hub.subscriberCount()).toBe(0);
+    await hub.close();
+  });
+
+  it("accepts one direct revoke control before end while a domain frame waits for drain", async () => {
+    const source = new FakeEventSource([event(1), event(2)]);
+    const authenticator = new MutableAuthenticator();
+    authenticator.set("entry-session:blocked", authenticated("person:test"));
+    const sink = new RevokedBackpressureSink();
+    const hub = new PersonEventStreamHub(source, authenticator, { autoStart: false });
+    hub.register({
+      personRef: "person:test",
+      cursor: 0,
+      entrySessionRef: "entry-session:blocked",
+      token: "cookie-token",
+      authenticationSource: "entry_cookie",
+      sink
+    });
+
+    await hub.pumpPerson("person:test");
+    await sink.waitForDomainEvents(1);
+    expect(sink.domainEventIds()).toEqual([1]);
+
+    authenticator.set("entry-session:blocked", { status: "device_revoked" });
+    await hub.heartbeatAll();
+    await Promise.resolve();
+
+    const controlFrame =
+      "event: entry-revoked\ndata: {\"protocolVersion\":2,\"type\":\"device_revoked\"}\n\n";
+    expect(sink.frames.filter((frame) => frame === controlFrame)).toHaveLength(1);
+    expect(sink.lifecycle).toEqual(["control-accepted", "end"]);
+    expect(sink.domainEventIds()).toEqual([1]);
+    expect(sink.ended).toBe(true);
+    expect(sink.destroyed).toBe(false);
     expect(hub.subscriberCount()).toBe(0);
     await hub.close();
   });
@@ -432,11 +557,13 @@ describe("PersonEventStreamHub connection protection", () => {
     });
     const valid = new FakeSink();
     const expired = new FakeSink();
+    const invalid = new FakeSink();
     const wrongPerson = new FakeSink();
     const admin = new FakeSink();
     for (const [entrySessionRef, token, sink] of [
       ["entry-session:valid", "valid-token", valid],
       ["entry-session:expired", "expired-token", expired],
+      ["entry-session:invalid", "invalid-token", invalid],
       ["entry-session:wrong-person", "wrong-person-token", wrongPerson],
       ["entry-session:admin", "admin-token", admin]
     ] as const) {
@@ -445,6 +572,7 @@ describe("PersonEventStreamHub connection protection", () => {
         cursor: 0,
         entrySessionRef,
         token,
+        authenticationSource: "entry_cookie",
         sink
       });
     }
@@ -455,11 +583,13 @@ describe("PersonEventStreamHub connection protection", () => {
     expect(valid.frames.at(-1)).toBe(": heartbeat 2026-07-24T12:15:00.000Z\n\n");
     expect(valid.destroyed).toBe(false);
     expect(expired.destroyed).toBe(true);
+    expect(invalid.destroyed).toBe(true);
     expect(wrongPerson.destroyed).toBe(true);
     expect(admin.destroyed).toBe(true);
     expect(authenticator.calls).toEqual([
       ["entry-session:valid", "valid-token"],
       ["entry-session:expired", "expired-token"],
+      ["entry-session:invalid", "invalid-token"],
       ["entry-session:wrong-person", "wrong-person-token"],
       ["entry-session:admin", "admin-token"]
     ]);
@@ -476,6 +606,7 @@ describe("PersonEventStreamHub connection protection", () => {
       cursor: 0,
       entrySessionRef: "entry-session:close",
       token: "close-token",
+      authenticationSource: "explicit_authorization",
       sink
     });
 

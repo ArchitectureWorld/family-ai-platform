@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   SYNC_PROTOCOL_VERSION,
   SYNC_SSE_EVENT_NAME,
+  WEB_ENTRY_REVOKED_SSE_EVENT_NAME,
+  webEntryRevokedSseDataSchema,
   syncAckRequestSchema,
   syncAckResponseSchema,
   syncEventsResponseSchema,
@@ -19,6 +21,7 @@ import type { EntrySessionAuthenticator } from "../src/entrySessionAuth.js";
 import {
   PersonEventStreamHub,
   formatDomainEventFrame,
+  formatEntryRevokedFrame,
   type EventStreamSink,
   type PersonEventSource
 } from "../src/eventStream.js";
@@ -286,6 +289,19 @@ describe("Gateway Event Sync SSE contract integration", () => {
     expect(syncSseDataSchema.parse(JSON.parse(data ?? "null"))).toEqual(parsed);
   });
 
+  it("uses the public Web Entry revoke event name and strict v2 data schema without an id", () => {
+    const frame = formatEntryRevokedFrame();
+    const lines = frame.trim().split("\n");
+    const id = lines.find((line) => line.startsWith("id: "));
+    const name = lines.find((line) => line.startsWith("event: "))?.slice(7);
+    const data = lines.find((line) => line.startsWith("data: "))?.slice(6);
+
+    expect(id).toBeUndefined();
+    expect(name).toBe(WEB_ENTRY_REVOKED_SSE_EVENT_NAME);
+    expect(webEntryRevokedSseDataSchema.parse(JSON.parse(data ?? "null")))
+      .toEqual({ protocolVersion: 2, type: "device_revoked" });
+  });
+
   it("refuses to serialize a malformed known event", () => {
     const malformed = {
       ...canonicalMessageEvent,
@@ -329,6 +345,7 @@ describe("Gateway Event Sync SSE contract integration", () => {
       cursor: 0,
       entrySessionRef: "entry-session:alice",
       token: "entry-token-alice",
+      authenticationSource: "explicit_authorization",
       sink
     });
 

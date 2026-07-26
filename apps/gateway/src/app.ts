@@ -285,7 +285,8 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   });
   registerEventStreamRoutes(app, {
     hub: eventStreamHub,
-    entryAuthenticator
+    entryAuthenticator,
+    webAuthenticationSource
   });
   registerDeviceSyncRoutes(app, {
     repository: deviceSyncRepository,

@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { SYNC_SSE_EVENT_NAME, syncSseDataSchema } from "@family-ai/contracts";
+import {
+  SYNC_SSE_EVENT_NAME,
+  WEB_ENTRY_PROTOCOL_VERSION,
+  WEB_ENTRY_REVOKED_SSE_EVENT_NAME,
+  syncSseDataSchema,
+  webEntryRevokedSseDataSchema
+} from "@family-ai/contracts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { DomainEvent, DomainEventPage } from "./domainEvents.js";
@@ -8,6 +14,7 @@ import {
   type EntrySessionAuthenticator
 } from "./entrySessionAuth.js";
 import { GatewayDomainError } from "./service.js";
+import type { WebAuthenticationSource } from "./webEntryCookies.js";
 
 const eventStreamQuerySchema = z
   .object({
@@ -93,6 +100,15 @@ export function formatHeartbeatFrame(timestamp: string): string {
   return `: heartbeat ${timestamp}\n\n`;
 }
 
+export function formatEntryRevokedFrame(): string {
+  const data = webEntryRevokedSseDataSchema.parse({
+    protocolVersion: WEB_ENTRY_PROTOCOL_VERSION,
+    type: "device_revoked"
+  });
+  return `event: ${WEB_ENTRY_REVOKED_SSE_EVENT_NAME}\n` +
+    `data: ${JSON.stringify(data)}\n\n`;
+}
+
 export interface PersonEventSource {
   listPersonEvents(input: {
     personRef: string;
@@ -122,11 +138,16 @@ export interface EventStreamSink {
   destroy(error?: Error): void;
 }
 
+export type EventStreamAuthenticationSource =
+  | "explicit_authorization"
+  | "entry_cookie";
+
 export interface EventStreamSubscriberInput {
   personRef: string;
   cursor: number;
   entrySessionRef: string;
   token: string;
+  authenticationSource: EventStreamAuthenticationSource;
   sink: EventStreamSink;
 }
 
@@ -151,6 +172,7 @@ interface Subscriber {
   scheduledCursor: number;
   entrySessionRef: string;
   token: string;
+  authenticationSource: EventStreamAuthenticationSource;
   sink: EventStreamSink;
   closed: boolean;
   queue: QueuedFrame[];
@@ -202,6 +224,7 @@ export class PersonEventStreamHub {
       scheduledCursor: input.cursor,
       entrySessionRef: input.entrySessionRef,
       token: input.token,
+      authenticationSource: input.authenticationSource,
       sink: input.sink,
       closed: false,
       queue: [],
@@ -279,6 +302,19 @@ export class PersonEventStreamHub {
           this.unregister(subscriber, false);
           continue;
         }
+        if (
+          authentication.status === "device_revoked" &&
+          subscriber.authenticationSource === "entry_cookie"
+        ) {
+          try {
+            subscriber.sink.write(formatEntryRevokedFrame());
+            this.unregister(subscriber, true);
+          } catch {
+            this.unregister(subscriber, false);
+          }
+          continue;
+        }
+
         if (
           authentication.status !== "authenticated" ||
           authentication.context.audience !== "personal" ||
@@ -459,6 +495,7 @@ export function registerEventStreamRoutes(
   input: {
     hub: PersonEventStreamHub;
     entryAuthenticator: EntrySessionAuthenticator;
+    webAuthenticationSource(request: FastifyRequest): WebAuthenticationSource;
   }
 ): void {
   app.get("/api/v1/events/stream", async (request, reply) => {
@@ -494,6 +531,10 @@ export function registerEventStreamRoutes(
         cursor,
         entrySessionRef: credentials.entrySessionRef,
         token: credentials.token,
+        authenticationSource:
+          input.webAuthenticationSource(request) === "entry_cookie"
+            ? "entry_cookie"
+            : "explicit_authorization",
         sink: reply.raw
       });
       if (cleaned) unregister();
