@@ -1,4 +1,8 @@
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const GATEWAY_ERROR_CATEGORIES = new Set([
+  "validation", "permission", "availability", "timeout", "conflict", "internal"
+]);
+const GATEWAY_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/u;
 
 export class GatewayError extends Error {
   constructor(input) {
@@ -20,23 +24,68 @@ function queryPath(path, values = {}) {
   return query ? `${path}?${query}` : path;
 }
 
-function normalizedError(status, body) {
-  const publicError = body?.error ?? body ?? {};
+function localApiError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.category = "internal";
+  error.retryable = false;
+  return error;
+}
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value, expected) {
+  const keys = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    keys.length === sortedExpected.length &&
+    keys.every((key, index) => key === sortedExpected[index])
+  );
+}
+
+function isGatewayErrorEnvelope(body) {
+  if (
+    !isRecord(body) ||
+    !hasExactKeys(body, ["protocolVersion", "error"]) ||
+    body.protocolVersion !== 2 ||
+    !isRecord(body.error) ||
+    !hasExactKeys(body.error, [
+      "code", "category", "message", "retryable", "requestId"
+    ])
+  ) {
+    return false;
+  }
+  const error = body.error;
+  return (
+    typeof error.code === "string" &&
+    GATEWAY_ERROR_CODE_PATTERN.test(error.code) &&
+    typeof error.category === "string" &&
+    GATEWAY_ERROR_CATEGORIES.has(error.category) &&
+    typeof error.message === "string" &&
+    error.message.length >= 1 &&
+    error.message.length <= 500 &&
+    typeof error.retryable === "boolean" &&
+    typeof error.requestId === "string" &&
+    error.requestId.length >= 1
+  );
+}
+
+function normalizedError(status, publicError) {
   return new GatewayError({
     status,
-    code: typeof publicError.code === "string" ? publicError.code : "GATEWAY_UNAVAILABLE",
-    category: typeof publicError.category === "string" ? publicError.category : "internal",
-    message: typeof publicError.message === "string"
-      ? publicError.message
-      : `Gateway 请求失败（HTTP ${status}）。`,
-    retryable: Boolean(publicError.retryable)
+    code: publicError.code,
+    category: publicError.category,
+    message: publicError.message,
+    retryable: publicError.retryable
   });
 }
 
 export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) {
   if (typeof fetchImpl !== "function") throw new Error("FETCH_UNAVAILABLE");
 
-  async function apiRequest(path, options = {}) {
+  async function rawApiRequest(path, options = {}) {
     const method = String(options.method ?? "GET").toUpperCase();
     const headers = new Headers(options.headers ?? {});
     let body;
@@ -51,17 +100,88 @@ export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) 
       headers,
       body,
       credentials: "same-origin",
-      ...(options.signal ? { signal: options.signal } : {})
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.keepalive !== undefined
+        ? { keepalive: options.keepalive }
+        : {})
     });
-    const responseBody = response.status === 204
-      ? null
-      : await response.json().catch(() => null);
-    if (!response.ok) throw normalizedError(response.status, responseBody);
-    return responseBody;
+    return response;
+  }
+
+  async function parseGatewayError(response) {
+    let responseBody;
+    try {
+      responseBody = await response.json();
+    } catch {
+      throw localApiError(
+        "GATEWAY_RESPONSE_INVALID",
+        "Gateway 返回了无效响应。"
+      );
+    }
+    if (!isGatewayErrorEnvelope(responseBody)) {
+      throw localApiError(
+        "GATEWAY_RESPONSE_INVALID",
+        "Gateway 返回了无效响应。"
+      );
+    }
+    return normalizedError(response.status, responseBody.error);
+  }
+
+  async function apiRequest(path, options = {}) {
+    const response = await rawApiRequest(path, options);
+    if (!response.ok) throw await parseGatewayError(response);
+    if (response.status === 204) return null;
+    return response.json().catch(() => null);
   }
 
   return {
     apiRequest,
+    claimWebPairing: async (request, { signal } = {}) => {
+      try {
+        const response = await rawApiRequest(
+          "/api/v1/web-entry/pairing/claim",
+          {
+            method: "POST",
+            body: request,
+            signal,
+            keepalive: false
+          }
+        );
+        if (response.status === 204) return;
+        if (!response.ok) {
+          const error = await parseGatewayError(response);
+          Object.defineProperty(error, "claimOutcome", {
+            value: "rejected",
+            enumerable: false
+          });
+          throw error;
+        }
+        throw localApiError(
+          "ENTRY_CLAIM_RESPONSE_INVALID",
+          "配对响应无效。"
+        );
+      } catch (caught) {
+        const error =
+          caught !== null &&
+          (typeof caught === "object" || typeof caught === "function")
+            ? caught
+            : localApiError(
+              "ENTRY_CLAIM_RESPONSE_INVALID",
+              "配对响应无效。"
+            );
+        if (error.claimOutcome !== "rejected") {
+          Object.defineProperty(error, "claimOutcome", {
+            value: "unknown",
+            enumerable: false
+          });
+        }
+        throw error;
+      }
+    },
+    clearWebEntryCookies: () => apiRequest(
+      "/api/v1/web-entry/cookies/clear",
+      { method: "POST" }
+    ),
     getWebContext: () => apiRequest("/api/v1/web-entry/context"),
     renewWebSession: () => apiRequest("/api/v1/web-entry/session/renew", { method: "POST" }),
     logoutWebSession: () => apiRequest("/api/v1/web-entry/logout", { method: "POST" }),
