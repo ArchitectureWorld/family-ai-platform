@@ -305,6 +305,26 @@ export function createEntryStorage({
     );
   }
 
+  // No-Web-Locks Logout only: ensure one sticky marker, never replace or clear.
+  function ensureStickyLockMarker(installationId) {
+    requireInstallationId(installationId);
+    const current = readLockMarker(installationId);
+    if (current) return current;
+    let marker;
+    try {
+      const wallMillis = now().getTime();
+      if (!Number.isFinite(wallMillis)) throw invalidRecord();
+      marker = {
+        protocolVersion: 2,
+        lockedAt: new Date(wallMillis).toISOString()
+      };
+    } catch {
+      throw invalidRecord();
+    }
+    localStorage.setItem(lockKey(installationId), JSON.stringify(marker));
+    return marker;
+  }
+
   function writeLockMarkerLocked(installationId) {
     requireInstallationId(installationId);
     const current = readLockMarker(installationId);
@@ -560,6 +580,7 @@ export function createEntryStorage({
     readInstallationId,
     rotateInstallationId,
     readLockMarker,
+    ensureStickyLockMarker,
     writeLockMarkerLocked,
     clearLockMarkerLocked,
     readIdentityPointer,

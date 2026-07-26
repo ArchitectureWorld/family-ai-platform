@@ -251,11 +251,15 @@ describe("Member Entry non-secret storage", () => {
     }
   });
 
-  it("exposes synchronous installation and marker RMW only with an explicit locked precondition", () => {
+  it("exposes explicit locked RMW and only one sticky marker capability", () => {
     const { entry } = createFixedEntry();
     expect(entry.getOrCreateInstallationIdLocked).toBeTypeOf("function");
     expect(entry.writeLockMarkerLocked).toBeTypeOf("function");
     expect(entry.clearLockMarkerLocked).toBeTypeOf("function");
+    expect(entry.ensureStickyLockMarker).toBeTypeOf("function");
+    expect(
+      Object.keys(entry).filter((name) => name.includes("Sticky")),
+    ).toEqual(["ensureStickyLockMarker"]);
     expect((entry as any).getOrCreateInstallationId).toBeUndefined();
     expect((entry as any).writeLockMarker).toBeUndefined();
     expect((entry as any).clearLockMarker).toBeUndefined();
@@ -670,6 +674,70 @@ describe("Member Entry non-secret storage", () => {
         expect(storage.getItem(key)).toBe(bytes);
       }
     }
+  });
+
+  it("returns an existing sticky marker canonically without replacing bytes or reading the clock", () => {
+    let writes = 0;
+    const storage = createStorage({
+      onSetItem(key) {
+        if (key === lockKey(INSTALLATION_A)) writes += 1;
+      },
+    });
+    const bytes =
+      '{"lockedAt":"2026-07-25T09:00:00.000Z","protocolVersion":2}';
+    storage.setItem(lockKey(INSTALLATION_A), bytes);
+    writes = 0;
+    let clockReads = 0;
+    const entry = createEntryStorage({
+      localStorage: storage,
+      now() {
+        clockReads += 1;
+        throw new Error("existing marker must not read clock");
+      },
+    });
+
+    expect(entry.ensureStickyLockMarker(INSTALLATION_A)).toEqual({
+      protocolVersion: 2,
+      lockedAt: FIXED_TIME,
+    });
+    expect(storage.getItem(lockKey(INSTALLATION_A))).toBe(bytes);
+    expect(writes).toBe(0);
+    expect(clockReads).toBe(0);
+  });
+
+  it("fails closed for an invalid sticky marker ID, bytes, or clock", () => {
+    const invalidId = createFixedEntry();
+    expect(() =>
+      invalidId.entry.ensureStickyLockMarker("not-an-installation-id"),
+    ).toThrowError(expect.objectContaining({ code: "ENTRY_STORAGE_INVALID" }));
+    expect(invalidId.storage.dump()).toEqual({});
+
+    const malformed = createFixedEntry();
+    const malformedBytes =
+      '{"protocolVersion":1,"lockedAt":"2026-07-25T09:00:00.000Z"}';
+    malformed.storage.setItem(lockKey(INSTALLATION_A), malformedBytes);
+    expect(() =>
+      malformed.entry.ensureStickyLockMarker(INSTALLATION_A),
+    ).toThrowError(expect.objectContaining({ code: "ENTRY_STORAGE_INVALID" }));
+    expect(malformed.storage.getItem(lockKey(INSTALLATION_A))).toBe(
+      malformedBytes,
+    );
+
+    let writes = 0;
+    const invalidClockStorage = createStorage({
+      onSetItem() {
+        writes += 1;
+      },
+    });
+    const invalidClock = createEntryStorage({
+      localStorage: invalidClockStorage,
+      now: () => new Date(Number.NaN),
+    });
+    expect(() =>
+      invalidClock.ensureStickyLockMarker(INSTALLATION_A),
+    ).toThrowError(expect.objectContaining({ code: "ENTRY_STORAGE_INVALID" }));
+    expect(invalidClockStorage.dump()).toEqual({});
+    expect(writes).toBe(0);
   });
 
   it("converts exceptional clear preconditions into controlled errors without erasing bytes", () => {
@@ -1130,8 +1198,17 @@ describe("Member Entry Web Lock coordination", () => {
     ]);
   });
 
-  it("fails closed for installation-init and marker mutation without Web Locks", async () => {
-    const storage = createStorage();
+  it("fails closed without Web Locks but permits one sticky Logout marker write", async () => {
+    let markerWrites = 0;
+    const storage = createStorage({
+      onSetItem(key) {
+        if (key === lockKey(INSTALLATION_A)) markerWrites += 1;
+      },
+    });
+    const entry = createEntryStorage({
+      localStorage: storage,
+      now: () => new Date(FIXED_TIME),
+    });
     const mutation = createEntryMutationLock({ locks: null });
     const callback = vi.fn();
 
@@ -1143,6 +1220,15 @@ describe("Member Entry Web Lock coordination", () => {
     ).rejects.toMatchObject({ code: "ENTRY_MUTATION_LOCK_UNAVAILABLE" });
     expect(callback).not.toHaveBeenCalled();
     expect(storage.dump()).toEqual({});
+
+    const first = entry.ensureStickyLockMarker(INSTALLATION_A);
+    const persistedBytes = storage.getItem(lockKey(INSTALLATION_A));
+    const second = entry.ensureStickyLockMarker(INSTALLATION_A);
+    expect(first).toEqual({ protocolVersion: 2, lockedAt: FIXED_TIME });
+    expect(second).toEqual(first);
+    expect(storage.getItem(lockKey(INSTALLATION_A))).toBe(persistedBytes);
+    expect(markerWrites).toBe(1);
+    expect(Object.keys(storage.dump())).toEqual([lockKey(INSTALLATION_A)]);
   });
 
   it("serializes two mutations under the exact installation lock", async () => {
