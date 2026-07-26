@@ -134,19 +134,20 @@ export function registerWebEntryRoutes(
     );
     const session = input.repository.renewSession(device);
     const context = authenticatedContext(input.entryAuthenticator, session);
-    setCookies(reply, setWebEntryCookieHeaders({
-      deviceRef: device.deviceRef,
-      deviceCredential: cookies.deviceCredential,
-      entrySessionRef: session.entrySessionRef,
-      entryToken: session.entryToken
-    }, input.mode));
-    return webEntryContextResponseSchema.parse({
+    const response = webEntryContextResponseSchema.parse({
       protocolVersion: WEB_ENTRY_PROTOCOL_VERSION,
       context: {
         protocolVersion: 1,
         ...context
       }
     });
+    setCookies(reply, setWebEntryCookieHeaders({
+      deviceRef: device.deviceRef,
+      deviceCredential: cookies.deviceCredential,
+      entrySessionRef: session.entrySessionRef,
+      entryToken: session.entryToken
+    }, input.mode));
+    return response;
   });
 
   app.post("/api/v1/web-entry/logout", async (request, reply) => {

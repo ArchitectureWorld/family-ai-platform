@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { webEntryContextResponseSchema } from "@family-ai/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
 import { WebEntryRepository } from "../src/webEntry.js";
@@ -418,6 +419,40 @@ describe("Web Entry HTTP routes", () => {
       error: { code: "DEVICE_AUTH_INVALID" }
     });
     expect(explicit.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("does not attach positive renew Cookies when strict response validation fails", async () => {
+    const claimed = await claim();
+    const named = cookiesByName(claimed.headers["set-cookie"]);
+    vi.spyOn(webEntryContextResponseSchema, "parse").mockImplementationOnce(() => {
+      throw new Error("forced renew response validation failure");
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/web-entry/session/renew",
+      headers: {
+        cookie: deviceCookie(named),
+        "x-family-ai-web-request": "1"
+      }
+    });
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      protocolVersion: 2,
+      error: { code: "GATEWAY_INTERNAL_ERROR" }
+    });
+
+    const setCookie = response.headers["set-cookie"];
+    const values = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+    const webValues = values.filter((value) =>
+      allWebCookieNames.some((name) => value.startsWith(`${name}=`))
+    );
+    const positive = webValues.filter((value) =>
+      !value.split(";", 1)[0]!.endsWith("=")
+    );
+    const expiry = webValues.filter((value) => value.includes("Max-Age=0"));
+    expect(positive).toEqual([]);
+    expect(expiry).toEqual([]);
   });
 
   it("logs out only the exact authenticated Session and leaves a newer Session active", async () => {
