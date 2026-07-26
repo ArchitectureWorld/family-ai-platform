@@ -404,6 +404,9 @@ export function createMemberDocumentHarness() {
   };
 }
 import { vi } from "vitest";
+import { createEntryMutationLock } from "../../member-public/entry-mutation.js";
+import { createEntryStorage } from "../../member-public/entry-storage.js";
+import { createEntryController } from "../../member-public/entry-lifecycle.js";
 export { D as FakeDocument, E as FakeElement };
 export function createStorage(
   options: {
@@ -485,6 +488,35 @@ export function createDeterministicWebLocks() {
     queue: Request[];
   };
   const lanes = new Map<string, Lane>();
+  const eventWaiters: Array<{
+    phase: "request" | "enter" | "exit";
+    name: string;
+    mode?: "exclusive" | "shared";
+    occurrence: number;
+    resolve: () => void;
+  }> = [];
+
+  const record = (
+    phase: "request" | "enter" | "exit",
+    name: string,
+    mode: "exclusive" | "shared",
+  ) => {
+    events.push({ phase, name, mode });
+    for (let index = eventWaiters.length - 1; index >= 0; index -= 1) {
+      const waiter = eventWaiters[index];
+      if (
+        waiter.phase === phase && waiter.name === name &&
+        (!waiter.mode || waiter.mode === mode) &&
+        events.filter((event) =>
+          event.phase === waiter.phase && event.name === waiter.name &&
+          (!waiter.mode || event.mode === waiter.mode)
+        ).length >= waiter.occurrence
+      ) {
+        eventWaiters.splice(index, 1);
+        waiter.resolve();
+      }
+    }
+  };
 
   const laneFor = (name: string) => {
     let lane = lanes.get(name);
@@ -504,7 +536,7 @@ export function createDeterministicWebLocks() {
       else lane.activeShared += 1;
 
       const finish = (settle: () => void) => {
-        events.push({ phase: "exit", name, mode: request.mode });
+        record("exit", name, request.mode);
         if (request.mode === "exclusive") lane.activeExclusive = false;
         else lane.activeShared -= 1;
         drain(name);
@@ -512,7 +544,7 @@ export function createDeterministicWebLocks() {
       };
       void Promise.resolve()
         .then(() => {
-          events.push({ phase: "enter", name, mode: request.mode });
+          record("enter", name, request.mode);
           return request.callback({ name, mode: request.mode });
         })
         .then(
@@ -534,8 +566,30 @@ export function createDeterministicWebLocks() {
 
   return {
     calls,
+    snapshot(name: string) {
+      const lane = laneFor(name);
+      return {
+        activeExclusive: lane.activeExclusive,
+        activeShared: lane.activeShared,
+        queuedModes: lane.queue.map((request) => request.mode),
+      };
+    },
     requestedNames,
     events,
+    waitForEvent(
+      phase: "request" | "enter" | "exit",
+      name: string,
+      mode?: "exclusive" | "shared",
+      occurrence = 1,
+    ) {
+      if (events.filter((event) =>
+        event.phase === phase && event.name === name &&
+        (!mode || event.mode === mode)
+      ).length >= occurrence) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        eventWaiters.push({ phase, name, mode, occurrence, resolve });
+      });
+    },
     request(
       name: string,
       options:
@@ -555,7 +609,7 @@ export function createDeterministicWebLocks() {
           ? "exclusive"
           : options.mode ?? "exclusive";
       calls.push(name);
-      events.push({ phase: "request", name, mode });
+      record("request", name, mode);
       const result = new Promise((resolve, reject) => {
         laneFor(name).queue.push({ mode, callback: run, resolve, reject });
       });
@@ -706,14 +760,359 @@ export function fakeSync(calls: string[]) {
   };
 }
 export function createEntryControllerHarness(
-  options: Record<string, unknown> = {},
+  options: Record<string, any> = {},
+) {
+  const installationId =
+    options.installationId ?? "00000000-0000-4000-8000-000000000001";
+  const rotatedInstallationId =
+    options.rotatedInstallationId ?? "00000000-0000-4000-8000-000000000002";
+  const fixedNow = options.now ?? (() => new Date("2026-07-25T09:00:00.000Z"));
+  const shared = createSharedEntryBrowserStorage();
+  const locks = options.locks === null
+    ? null
+    : options.locks ?? createDeterministicWebLocks();
+  const channels = createSharedEntryBroadcastChannels();
+  const rootStorage = shared.createTabStorage();
+  rootStorage.setItem("family-ai-web-installation-id", installationId);
+  const seedStorage = createEntryStorage({
+    localStorage: rootStorage,
+    cryptoImpl: { randomUUID: () => rotatedInstallationId },
+    now: fixedNow,
+  });
+  if (options.initialMarker) seedStorage.writeLockMarkerLocked(installationId);
+  if (options.initialLifecycle) {
+    const lifecycle = options.initialLifecycle;
+    for (let revision = 1; revision <= lifecycle.revision; revision += 1) {
+      seedStorage.advanceLifecycle(
+        installationId,
+        revision === lifecycle.revision ? lifecycle.state : "active",
+        lifecycle.transitionId ??
+          `00000000-0000-4000-8000-${String(100 + revision).padStart(12, "0")}`,
+      );
+    }
+  }
+  if (options.initialIdentity) {
+    seedStorage.writeIdentityPointer(installationId, options.initialIdentity);
+  }
+  if (options.initialTombstone) {
+    seedStorage.writeCleanupTombstone(
+      options.initialTombstoneInstallationId ?? installationId,
+      options.initialTombstone,
+    );
+  }
+  if (options.initialClaimIntent) {
+    seedStorage.writeClaimCookieIntent(options.initialClaimIntent);
+  }
+  if (options.initialCookieClearPending) {
+    seedStorage.writeCookieClearPending(options.initialCookieClearPending);
+  }
+
+  let uuidSequence = 1000;
+  const defaultContext = options.context ?? memberContextFixture();
+  const tabs: any[] = [];
+
+  function createTab(tabOptions: Record<string, any> = {}) {
+    const eventTarget = shared.createEventTarget();
+    const localStorage = shared.createTabStorage(eventTarget);
+    let rotationCount = 0;
+    const storage = createEntryStorage({
+      localStorage,
+      cryptoImpl: {
+        randomUUID: () => {
+          rotationCount += 1;
+          return tabOptions.rotatedInstallationId ?? rotatedInstallationId;
+        },
+      },
+      now: tabOptions.now ?? fixedNow,
+    });
+    const mutationLock = createEntryMutationLock({
+      locks: tabOptions.locks === undefined ? locks : tabOptions.locks,
+    });
+    const apiImplementations = {
+      getWebContext: async () => ({ context: defaultContext }),
+      renewWebSession: async () => undefined,
+      claimWebPairing: async () => undefined,
+      logoutWebSession: async () => undefined,
+      revokeWebDevice: async () => undefined,
+      clearWebEntryCookies: async () => undefined,
+      ...(options.api ?? {}),
+      ...(tabOptions.api ?? {}),
+    };
+    const httpEvents: Array<{ phase: "request-bytes"; operation: string }> = [];
+    const requestWaiters = new Map<string, Array<() => void>>();
+    const recordRequest = (operation: string) => {
+      httpEvents.push({ phase: "request-bytes", operation });
+      const waiters = requestWaiters.get(operation) ?? [];
+      requestWaiters.delete(operation);
+      waiters.forEach((resolve) => resolve());
+    };
+    const instrument = (operation: keyof typeof apiImplementations) =>
+      vi.fn((...args: any[]) => {
+        recordRequest(operation);
+        return apiImplementations[operation](...args);
+      });
+    const api = {
+      getWebContext: instrument("getWebContext"),
+      renewWebSession: instrument("renewWebSession"),
+      claimWebPairing: instrument("claimWebPairing"),
+      logoutWebSession: instrument("logoutWebSession"),
+      revokeWebDevice: instrument("revokeWebDevice"),
+      clearWebEntryCookies: instrument("clearWebEntryCookies"),
+    };
+    const http = {
+      events: httpEvents,
+      waitForRequest(operation: string) {
+        if (httpEvents.some((event) => event.operation === operation)) {
+          return Promise.resolve();
+        }
+        return new Promise<void>((resolve) => {
+          const waiters = requestWaiters.get(operation) ?? [];
+          waiters.push(resolve);
+          requestWaiters.set(operation, waiters);
+        });
+      },
+    };
+    const workbench = {
+      start: vi.fn(async () => true),
+      stop: vi.fn(async () => undefined),
+      ...(options.workbench ?? {}),
+      ...(tabOptions.workbench ?? {}),
+    };
+    const cacheLifecycle = {
+      deleteLegacy: vi.fn(async () => undefined),
+      deleteIdentity: vi.fn(async () => undefined),
+      ...(options.cacheLifecycle ?? {}),
+      ...(tabOptions.cacheLifecycle ?? {}),
+    };
+    const pendingClaims = {
+      clear: vi.fn(),
+      isTerminalError: vi.fn((error: any) => [
+        "PAIRING_INVALID",
+        "PAIRING_EXPIRED",
+        "PAIRING_ATTEMPTS_EXCEEDED",
+        "PAIRING_CONSUMED",
+        "DEVICE_AUTH_INVALID",
+        "DEVICE_REVOKED",
+        "PAIRING_TARGET_INACTIVE",
+      ].includes(error?.code)),
+      shouldRetain: vi.fn((error: any) =>
+        error instanceof TypeError || error?.retryable === true ||
+        ["timeout", "availability"].includes(error?.category) ||
+        error?.code === "GATEWAY_UNAVAILABLE"),
+      ...(options.pendingClaims ?? {}),
+      ...(tabOptions.pendingClaims ?? {}),
+    };
+    const states: any[] = [];
+    const view = {
+      states,
+      last: () => states.at(-1),
+    };
+    const deviceDescriptor = tabOptions.deviceDescriptor ??
+      options.deviceDescriptor ?? {
+        displayName: "Alice 的浏览器",
+        browser: "Test Browser",
+        operatingSystem: "Test OS",
+        appVersion: "0.1.0",
+      };
+    const tab: any = {
+      api,
+      http,
+      storage,
+      localStorage,
+      mutationLock,
+      cacheLifecycle,
+      workbench,
+      pendingClaims,
+      deviceDescriptor,
+      eventTarget,
+      view,
+      get rotationCount() {
+        return rotationCount;
+      },
+    };
+    tab.createController = (controllerOptions: Record<string, any> = {}) => {
+      if (tab.controller) return tab.controller;
+      tab.controller = createEntryController({
+        api,
+        storage,
+        mutationLock,
+        cacheLifecycle,
+        workbench,
+        pendingClaims,
+        deviceDescriptor,
+        BroadcastChannelClass: channels.Channel,
+        AbortControllerClass: AbortController,
+        eventTarget,
+        now: tabOptions.now ?? fixedNow,
+        uuid: tabOptions.uuid ?? (() =>
+          `00000000-0000-4000-8000-${String(++uuidSequence).padStart(12, "0")}`),
+        onViewState: (state: unknown) => states.push(structuredClone(state)),
+        ...controllerOptions,
+      });
+      return tab.controller;
+    };
+    tabs.push(tab);
+    return tab;
+  }
+
+  const primary = createTab(options.primary ?? {});
+  return {
+    installationId,
+    rotatedInstallationId,
+    locks,
+    channels,
+    shared,
+    tabs,
+    ...primary,
+    get rotationCount() {
+      return primary.rotationCount;
+    },
+    createController: primary.createController,
+    createTab,
+  };
+}
+
+function storageEvent(
+  key: string,
+  oldValue: string | null,
+  newValue: string | null,
+) {
+  const event = new Event("storage");
+  Object.defineProperties(event, {
+    key: { value: key },
+    oldValue: { value: oldValue },
+    newValue: { value: newValue },
+  });
+  return event;
+}
+
+export function createSharedEntryBrowserStorage() {
+  const values = new Map<string, string>();
+  const targets = new Set<EventTarget>();
+  const pendingDispatches = new Set<Promise<void>>();
+
+  function emit(
+    source: EventTarget | null,
+    key: string,
+    oldValue: string | null,
+    newValue: string | null,
+  ) {
+    for (const target of targets) {
+      if (target === source) continue;
+      const dispatch = Promise.resolve().then(() => {
+        target.dispatchEvent(storageEvent(key, oldValue, newValue));
+      });
+      pendingDispatches.add(dispatch);
+      void dispatch.finally(() => pendingDispatches.delete(dispatch));
+    }
+  }
+
+  return {
+    createEventTarget() {
+      const target = new EventTarget();
+      targets.add(target);
+      return target;
+    },
+    createTabStorage(source: EventTarget | null = null) {
+      return {
+        get length() {
+          return values.size;
+        },
+        key: (index: number) => [...values.keys()][index] ?? null,
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem(key: string, value: string) {
+          const text = String(value);
+          const oldValue = values.get(key) ?? null;
+          if (oldValue === text) return;
+          values.set(key, text);
+          emit(source, key, oldValue, text);
+        },
+        removeItem(key: string) {
+          const oldValue = values.get(key) ?? null;
+          if (oldValue === null) return;
+          values.delete(key);
+          emit(source, key, oldValue, null);
+        },
+        clear() {
+          for (const key of [...values.keys()]) this.removeItem(key);
+        },
+        dump: () => Object.fromEntries(values),
+      };
+    },
+    async whenIdle() {
+      while (pendingDispatches.size > 0) {
+        await Promise.all([...pendingDispatches]);
+      }
+      await Promise.resolve();
+    },
+    dispatchToAll(key: string, oldValue: string | null, newValue: string | null) {
+      for (const target of targets) {
+        target.dispatchEvent(storageEvent(key, oldValue, newValue));
+      }
+    },
+  };
+}
+
+export function createSharedEntryBroadcastChannels() {
+  const channels = new Set<any>();
+  const posted: unknown[] = [];
+  class Channel extends EventTarget {
+    closed = false;
+    constructor(readonly name: string) {
+      super();
+      channels.add(this);
+    }
+    postMessage(data: unknown) {
+      if (this.closed) throw new Error("CHANNEL_CLOSED");
+      posted.push(structuredClone(data));
+      for (const peer of channels) {
+        if (peer === this || peer.closed || peer.name !== this.name) continue;
+        const event = new Event("message");
+        Object.defineProperty(event, "data", {
+          value: structuredClone(data),
+        });
+        peer.dispatchEvent(event);
+      }
+    }
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      channels.delete(this);
+    }
+  }
+  return {
+    Channel,
+    posted,
+    get openCount() {
+      return channels.size;
+    },
+    dispatch(data: unknown) {
+      for (const channel of channels) {
+        const event = new Event("message");
+        Object.defineProperty(event, "data", { value: structuredClone(data) });
+        channel.dispatchEvent(event);
+      }
+    },
+  };
+}
+
+export function entryError(
+  code: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return Object.assign(new Error(code), { code, ...overrides });
+}
+
+export function pendingClaimFixture(
+  installationId = "00000000-0000-4000-8000-000000000001",
+  overrides: Record<string, unknown> = {},
 ) {
   return {
-    document: createMemberDocumentHarness().document,
-    storage: createStorage(),
-    crypto: deterministicUuidCrypto(),
-    locks: createDeterministicWebLocks(),
-    fetch: memberProductFetchFixture(),
-    ...options,
+    protocolVersion: 2,
+    pairingRef: "pairing:web-1",
+    code: "ABCD-EFGH",
+    installationId,
+    deviceCredential: "A".repeat(43),
+    ...overrides,
   };
 }
