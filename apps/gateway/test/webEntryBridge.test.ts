@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
 
 const deviceToken = "web-entry-bridge-bootstrap-device-token-with-enough-length";
+const deviceCredential = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 type EntryCredential = { entrySessionRef: string; token: string };
 
@@ -67,10 +68,11 @@ describe("Web Entry Cookie bridge", () => {
       url: "/api/v1/web-entry/pairing/claim",
       headers: { "x-family-ai-web-request": "1" },
       payload: {
-        protocolVersion: 1,
+        protocolVersion: 2,
         pairingRef: material.pairing.pairingRef,
         code: material.pairing.code,
         installationId: "d8096c57-95e1-45ec-a5fc-64f779ff7c18",
+        deviceCredential,
         device: {
           displayName: "产品工作台浏览器",
           browser: "Firefox 142",
@@ -79,7 +81,8 @@ describe("Web Entry Cookie bridge", () => {
         }
       }
     });
-    expect(claim.statusCode).toBe(201);
+    expect(claim.statusCode).toBe(204);
+    expect(claim.body).toBe("");
     cookie = cookieHeader(claim.headers["set-cookie"]);
   });
 

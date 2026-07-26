@@ -7,7 +7,8 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   EntrySessionAuthenticator,
-  requireEntryRequest
+  requireEntryRequest,
+  requireEntryRequestWithSession
 } from "./entrySessionAuth.js";
 import { GatewayDomainError } from "./service.js";
 import {
@@ -92,20 +93,15 @@ export function registerWebEntryRoutes(
       ...parsed.data,
       ...(existingDevice ? { existingDevice } : {})
     });
-    const context = authenticatedContext(input.entryAuthenticator, claimed);
-    setCookies(reply, setWebEntryCookieHeaders({
+    authenticatedContext(input.entryAuthenticator, claimed);
+    const cookieHeaders = setWebEntryCookieHeaders({
       deviceRef: claimed.deviceRef,
       deviceCredential: claimed.deviceCredential,
       entrySessionRef: claimed.entrySessionRef,
       entryToken: claimed.entryToken
-    }, input.mode));
-    return reply.code(201).send(webEntryContextResponseSchema.parse({
-      protocolVersion: WEB_ENTRY_PROTOCOL_VERSION,
-      context: {
-        protocolVersion: 1,
-        ...context
-      }
-    }));
+    }, input.mode);
+    setCookies(reply, cookieHeaders);
+    return reply.code(204).send();
   });
 
   app.get("/api/v1/web-entry/context", async (request) => {
@@ -145,8 +141,15 @@ export function registerWebEntryRoutes(
   });
 
   app.post("/api/v1/web-entry/logout", async (request, reply) => {
-    const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
-    input.repository.logoutSession(context.entryBindingRef);
+    const authenticated = requireEntryRequestWithSession(
+      request,
+      input.entryAuthenticator,
+      "personal"
+    );
+    input.repository.logoutSession({
+      entrySessionRef: authenticated.entrySessionRef,
+      entryBindingRef: authenticated.context.entryBindingRef
+    });
     setCookies(reply, clearWebSessionCookieHeaders(input.mode));
     return webEntryOperationResponseSchema.parse({
       protocolVersion: WEB_ENTRY_PROTOCOL_VERSION,

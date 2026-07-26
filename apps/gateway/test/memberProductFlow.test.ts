@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
 
 const deviceToken = "member-product-flow-bootstrap-token-with-enough-length";
+const deviceCredential = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const now = () => new Date("2026-07-25T10:00:00.000Z");
 const directories: string[] = [];
 
@@ -54,34 +55,55 @@ async function createClaimedMemberApp() {
   });
   expect(pairing.statusCode).toBe(201);
   const material = pairing.json() as { pairing: { pairingRef: string; code: string } };
-  const claim = await app.inject({
-    method: "POST",
-    url: "/api/v1/web-entry/pairing/claim",
-    headers: {
-      "x-family-ai-web-request": "1",
-      host: "family.example",
-      origin: "https://family.example",
-      "x-forwarded-proto": "https"
-    },
-    payload: {
-      protocolVersion: 1,
-      pairingRef: material.pairing.pairingRef,
-      code: material.pairing.code,
-      installationId: "89be7a40-6173-43b3-8b75-aee8f0ab92e6",
-      device: {
-        displayName: "Alice 的浏览器",
-        browser: "Chrome 140",
-        operatingSystem: "macOS",
-        appVersion: "0.1.0"
+  async function claim() {
+    return app.inject({
+      method: "POST",
+      url: "/api/v1/web-entry/pairing/claim",
+      headers: {
+        "x-family-ai-web-request": "1",
+        host: "family.example",
+        origin: "https://family.example",
+        "x-forwarded-proto": "https"
+      },
+      payload: {
+        protocolVersion: 2,
+        pairingRef: material.pairing.pairingRef,
+        code: material.pairing.code,
+        installationId: "89be7a40-6173-43b3-8b75-aee8f0ab92e6",
+        deviceCredential,
+        device: {
+          displayName: "Alice 的浏览器",
+          browser: "Chrome 140",
+          operatingSystem: "macOS",
+          appVersion: "0.1.0"
+        }
       }
+    });
+  }
+  const initialClaim = await claim();
+  const replayedClaim = await claim();
+  expect(initialClaim.statusCode).toBe(204);
+  expect(replayedClaim.statusCode).toBe(204);
+  expect(initialClaim.body).toBe("");
+  expect(replayedClaim.body).toBe("");
+  expect(cookieHeader(replayedClaim.headers["set-cookie"]))
+    .toBe(cookieHeader(initialClaim.headers["set-cookie"]));
+
+  const cookie = cookieHeader(initialClaim.headers["set-cookie"]);
+  const context = await app.inject({
+    method: "GET",
+    url: "/api/v1/web-entry/context",
+    headers: { cookie }
+  });
+  expect(context.statusCode).toBe(200);
+  expect(context.json()).toMatchObject({
+    protocolVersion: 2,
+    context: {
+      protocolVersion: 1,
+      person: { personRef: initialized.owner.personRef }
     }
   });
-  expect(claim.statusCode).toBe(201);
-  return {
-    app,
-    databasePath,
-    cookie: cookieHeader(claim.headers["set-cookie"])
-  };
+  return { app, databasePath, cookie };
 }
 
 function cookieWriteHeaders(cookie: string) {

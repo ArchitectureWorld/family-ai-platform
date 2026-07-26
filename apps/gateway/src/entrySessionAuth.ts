@@ -81,11 +81,11 @@ export class EntrySessionAuthenticator {
   }
 }
 
-export function requireEntryRequest(
+export function requireEntryRequestWithSession(
   request: FastifyRequest,
   authenticator: EntrySessionAuthenticator,
   expectedAudience?: EntryAudience
-): EntryContext {
+): { context: EntryContext; entrySessionRef: string } {
   const ref = entrySessionRef(request);
   const token = bearerToken(request);
   const result = ref && token
@@ -128,5 +128,13 @@ export function requireEntryRequest(
       "当前入口没有执行家庭管理操作的权限。"
     );
   }
-  return result.context;
+  return { context: result.context, entrySessionRef: ref! };
+}
+
+export function requireEntryRequest(
+  request: FastifyRequest,
+  authenticator: EntrySessionAuthenticator,
+  expectedAudience?: EntryAudience
+): EntryContext {
+  return requireEntryRequestWithSession(request, authenticator, expectedAudience).context;
 }
