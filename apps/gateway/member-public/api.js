@@ -72,14 +72,95 @@ function isGatewayErrorEnvelope(body) {
   );
 }
 
-function normalizedError(status, publicError) {
+function normalizedError(status, body) {
+  const publicError = body?.error ?? body ?? {};
   return new GatewayError({
     status,
-    code: publicError.code,
-    category: publicError.category,
-    message: publicError.message,
-    retryable: publicError.retryable
+    code: typeof publicError.code === "string" ? publicError.code : "GATEWAY_UNAVAILABLE",
+    category: typeof publicError.category === "string" ? publicError.category : "internal",
+    message: typeof publicError.message === "string"
+      ? publicError.message
+      : `Gateway 请求失败（HTTP ${status}）。`,
+    retryable: Boolean(publicError.retryable)
   });
+}
+
+function safeErrorProperty(error, property) {
+  try {
+    return error?.[property];
+  } catch {
+    return undefined;
+  }
+}
+
+function wrappedClaimError(caught) {
+  const sourceMessage = safeErrorProperty(caught, "message");
+  const message = typeof sourceMessage === "string"
+    ? sourceMessage
+    : typeof caught === "string"
+      ? caught
+      : "配对请求失败。";
+  const sourceName = safeErrorProperty(caught, "name");
+  let error;
+  if (caught instanceof TypeError) {
+    error = new TypeError(message);
+  } else if (
+    typeof globalThis.DOMException === "function" &&
+    caught instanceof globalThis.DOMException
+  ) {
+    error = new globalThis.DOMException(
+      message,
+      typeof sourceName === "string" ? sourceName : "Error"
+    );
+  } else {
+    error = new Error(message);
+    if (typeof sourceName === "string" && sourceName !== "") {
+      error.name = sourceName;
+    }
+  }
+  Object.defineProperty(error, "cause", {
+    value: caught,
+    enumerable: false,
+    configurable: true
+  });
+  for (const property of ["code", "category", "retryable", "status"]) {
+    const value = safeErrorProperty(caught, property);
+    if (value !== undefined && !(property in error)) {
+      Object.defineProperty(error, property, {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true
+      });
+    }
+  }
+  return error;
+}
+
+function claimErrorWithOutcome(caught, outcome) {
+  const isObject =
+    caught !== null &&
+    (typeof caught === "object" || typeof caught === "function");
+  if (isObject) {
+    try {
+      if (Object.isExtensible(caught) && !("claimOutcome" in caught)) {
+        Object.defineProperty(caught, "claimOutcome", {
+          value: outcome,
+          enumerable: false
+        });
+        return caught;
+      }
+    } catch {
+      // A hostile or non-extensible foreign error is wrapped below.
+    }
+  }
+
+  const error = wrappedClaimError(caught);
+  Object.defineProperty(error, "claimOutcome", {
+    value: outcome,
+    enumerable: false
+  });
+  return error;
 }
 
 export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) {
@@ -108,7 +189,7 @@ export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) 
     return response;
   }
 
-  async function parseGatewayError(response) {
+  async function parseStrictGatewayError(response) {
     let responseBody;
     try {
       responseBody = await response.json();
@@ -124,7 +205,12 @@ export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) 
         "Gateway 返回了无效响应。"
       );
     }
-    return normalizedError(response.status, responseBody.error);
+    return normalizedError(response.status, responseBody);
+  }
+
+  async function parseGatewayError(response) {
+    const responseBody = await response.json().catch(() => null);
+    return normalizedError(response.status, responseBody);
   }
 
   async function apiRequest(path, options = {}) {
@@ -137,8 +223,9 @@ export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) 
   return {
     apiRequest,
     claimWebPairing: async (request, { signal } = {}) => {
+      let response;
       try {
-        const response = await rawApiRequest(
+        response = await rawApiRequest(
           "/api/v1/web-entry/pairing/claim",
           {
             method: "POST",
@@ -147,36 +234,28 @@ export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) 
             keepalive: false
           }
         );
-        if (response.status === 204) return;
-        if (!response.ok) {
-          const error = await parseGatewayError(response);
-          Object.defineProperty(error, "claimOutcome", {
-            value: "rejected",
-            enumerable: false
-          });
-          throw error;
+      } catch (caught) {
+        throw claimErrorWithOutcome(caught, "unknown");
+      }
+
+      if (response.status === 204) return;
+      if (!response.ok) {
+        let error;
+        try {
+          error = await parseStrictGatewayError(response);
+        } catch (caught) {
+          throw claimErrorWithOutcome(caught, "unknown");
         }
-        throw localApiError(
+        throw claimErrorWithOutcome(error, "rejected");
+      }
+
+      throw claimErrorWithOutcome(
+        localApiError(
           "ENTRY_CLAIM_RESPONSE_INVALID",
           "配对响应无效。"
-        );
-      } catch (caught) {
-        const error =
-          caught !== null &&
-          (typeof caught === "object" || typeof caught === "function")
-            ? caught
-            : localApiError(
-              "ENTRY_CLAIM_RESPONSE_INVALID",
-              "配对响应无效。"
-            );
-        if (error.claimOutcome !== "rejected") {
-          Object.defineProperty(error, "claimOutcome", {
-            value: "unknown",
-            enumerable: false
-          });
-        }
-        throw error;
-      }
+        ),
+        "unknown"
+      );
     },
     clearWebEntryCookies: () => apiRequest(
       "/api/v1/web-entry/cookies/clear",

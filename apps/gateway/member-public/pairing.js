@@ -3,6 +3,12 @@ const PAIRING_REF_PATTERN = /^pairing:[a-z0-9][a-z0-9._:-]{1,126}$/u;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/u;
 const DEVICE_CREDENTIAL_PATTERN =
   /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u;
+const STANDARD_INSTALLATION_ID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/u;
+const SPECIAL_INSTALLATION_IDS = new Set([
+  "00000000-0000-0000-0000-000000000000",
+  "ffffffff-ffff-ffff-ffff-ffffffffffff",
+]);
 const TERMINAL_PAIRING_CODES = new Set([
   "PAIRING_INVALID",
   "PAIRING_EXPIRED",
@@ -24,6 +30,26 @@ function credentialUnavailable() {
     "PAIRING_CREDENTIAL_UNAVAILABLE",
     "当前浏览器无法安全建立入口。",
   );
+}
+
+function installationIdIsValid(value) {
+  return (
+    typeof value === "string" &&
+    (STANDARD_INSTALLATION_ID_PATTERN.test(value) ||
+      SPECIAL_INSTALLATION_IDS.has(value))
+  );
+}
+
+function storageOperation(storage, method, ...args) {
+  try {
+    const operation = storage?.[method];
+    if (typeof operation !== "function") {
+      throw new TypeError(`SessionStorage.${method} is unavailable`);
+    }
+    return operation.apply(storage, args);
+  } catch {
+    throw credentialUnavailable();
+  }
 }
 
 export function normalizePairingCode(value) {
@@ -60,17 +86,14 @@ export function preparePendingClaim(input) {
   const hasPairingRef = input.pairingRef !== undefined;
   if (
     (hasPairingRef && !PAIRING_REF_PATTERN.test(input.pairingRef)) ||
-    !PAIRING_CODE_PATTERN.test(input.code)
+    !PAIRING_CODE_PATTERN.test(input.code) ||
+    !installationIdIsValid(input.installationId)
   ) {
     throw localPairingError(
       "PAIRING_FRAGMENT_INVALID",
       "配对链接无效，请重新生成。",
     );
   }
-  if (typeof input.sessionStorage?.setItem !== "function") {
-    throw credentialUnavailable();
-  }
-
   const deviceCredential = createDeviceCredential(input.cryptoImpl);
   const pending = {
     protocolVersion: 2,
@@ -79,18 +102,17 @@ export function preparePendingClaim(input) {
     installationId: input.installationId,
     deviceCredential,
   };
-  try {
-    input.sessionStorage.setItem(PENDING_CLAIM_KEY, JSON.stringify(pending));
-  } catch {
-    throw credentialUnavailable();
-  }
+  storageOperation(
+    input.sessionStorage,
+    "setItem",
+    PENDING_CLAIM_KEY,
+    JSON.stringify(pending),
+  );
   return pending;
 }
 
 export function clearPendingClaim(sessionStorage) {
-  if (typeof sessionStorage?.removeItem === "function") {
-    sessionStorage.removeItem(PENDING_CLAIM_KEY);
-  }
+  storageOperation(sessionStorage, "removeItem", PENDING_CLAIM_KEY);
 }
 
 function storedPendingClaimIsValid(value, expectedInstallationId) {
@@ -112,6 +134,8 @@ function storedPendingClaimIsValid(value, expectedInstallationId) {
   return (
     value.protocolVersion === 2 &&
     PAIRING_CODE_PATTERN.test(value.code) &&
+    installationIdIsValid(value.installationId) &&
+    installationIdIsValid(expectedInstallationId) &&
     value.installationId === expectedInstallationId &&
     DEVICE_CREDENTIAL_PATTERN.test(value.deviceCredential) &&
     (!Object.hasOwn(value, "pairingRef") ||
@@ -120,13 +144,7 @@ function storedPendingClaimIsValid(value, expectedInstallationId) {
 }
 
 export function readPendingClaim(sessionStorage, expectedInstallationId) {
-  if (typeof sessionStorage?.getItem !== "function") return null;
-  let stored;
-  try {
-    stored = sessionStorage.getItem(PENDING_CLAIM_KEY);
-  } catch {
-    return null;
-  }
+  const stored = storageOperation(sessionStorage, "getItem", PENDING_CLAIM_KEY);
   if (stored === null) return null;
 
   try {

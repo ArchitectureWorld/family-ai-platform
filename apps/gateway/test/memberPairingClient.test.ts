@@ -2,6 +2,7 @@ import {
   pairingCodeSchema,
   pairingRefSchema,
   webDeviceCredentialSchema,
+  webPairingClaimRequestSchema,
 } from "@family-ai/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -143,6 +144,38 @@ describe("Member Web pairing Credential", () => {
       );
     },
   );
+
+  it("rejects a non-Contracts installation UUID before generating or storing material", () => {
+    const getRandomValues = vi.fn((bytes: Uint8Array) => bytes);
+    const sessionStorage = createStorage();
+    const invalidInstallationId =
+      "b53f0490-99f1-0d6c-9a95-921a3d76a8c3";
+    expect(webPairingClaimRequestSchema.safeParse({
+      protocolVersion: 2,
+      code: "ABCD-EFGH",
+      installationId: invalidInstallationId,
+      deviceCredential: "A".repeat(43),
+      device: {
+        displayName: "Alice 的浏览器",
+        browser: "Chrome",
+        operatingSystem: "Linux",
+        appVersion: "0.1.0",
+      },
+    }).success).toBe(false);
+
+    expect(() =>
+      preparePendingClaim({
+        code: "ABCD-EFGH",
+        installationId: invalidInstallationId,
+        sessionStorage,
+        cryptoImpl: { getRandomValues },
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: "PAIRING_FRAGMENT_INVALID" }),
+    );
+    expect(getRandomValues).not.toHaveBeenCalled();
+    expect(sessionStorage.length).toBe(0);
+  });
 });
 
 describe("Member Web pairing fragment capture", () => {
@@ -393,6 +426,114 @@ describe("Member Web pending Claim storage", () => {
     sessionStorage.setItem(pendingClaimKey, "{not-json");
 
     expect(readPendingClaim(sessionStorage, installationId)).toBeNull();
+    expect(sessionStorage.getItem(pendingClaimKey)).toBeNull();
+  });
+
+  it.each(["missing", "throwing"])(
+    "maps a %s SessionStorage getItem to PAIRING_CREDENTIAL_UNAVAILABLE",
+    (failure) => {
+      const sessionStorage = failure === "missing"
+        ? {
+          removeItem: vi.fn(),
+        }
+        : {
+          getItem() {
+            throw new DOMException("storage denied", "SecurityError");
+          },
+          removeItem: vi.fn(),
+        };
+
+      expect(() =>
+        readPendingClaim(sessionStorage, installationId),
+      ).toThrowError(
+        expect.objectContaining({ code: "PAIRING_CREDENTIAL_UNAVAILABLE" }),
+      );
+    },
+  );
+
+  it.each(["missing", "throwing"])(
+    "maps a %s SessionStorage removeItem to PAIRING_CREDENTIAL_UNAVAILABLE",
+    (failure) => {
+      const sessionStorage = failure === "missing"
+        ? {}
+        : {
+          removeItem() {
+            throw new DOMException("storage denied", "SecurityError");
+          },
+        };
+
+      expect(() => clearPendingClaim(sessionStorage)).toThrowError(
+        expect.objectContaining({ code: "PAIRING_CREDENTIAL_UNAVAILABLE" }),
+      );
+    },
+  );
+
+  it.each([
+    [
+      "malformed JSON with throwing removeItem",
+      "{not-json",
+      installationId,
+      () => {
+        throw new DOMException("storage denied", "SecurityError");
+      },
+    ],
+    [
+      "installation mismatch with missing removeItem",
+      JSON.stringify({
+        protocolVersion: 2,
+        code: "ABCD-EFGH",
+        installationId: "9cf14c6b-a53f-4705-9455-8905dcae78ec",
+        deviceCredential: "A".repeat(43),
+      }),
+      installationId,
+      undefined,
+    ],
+  ])(
+    "maps cleanup failure for %s to the single storage-unavailable code",
+    (_label, stored, expectedInstallationId, removeItem) => {
+      const sessionStorage = {
+        getItem: () => stored,
+        ...(removeItem ? { removeItem } : {}),
+      };
+
+      expect(() =>
+        readPendingClaim(sessionStorage, expectedInstallationId),
+      ).toThrowError(
+        expect.objectContaining({ code: "PAIRING_CREDENTIAL_UNAVAILABLE" }),
+      );
+    },
+  );
+
+  it.each([
+    [
+      "invalid expectedInstallationId against a valid stored UUID",
+      {
+        protocolVersion: 2,
+        code: "ABCD-EFGH",
+        installationId,
+        deviceCredential: "A".repeat(43),
+      },
+      "not-a-uuid",
+    ],
+    [
+      "matching invalid installation strings",
+      {
+        protocolVersion: 2,
+        code: "ABCD-EFGH",
+        installationId: "not-a-uuid",
+        deviceCredential: "A".repeat(43),
+      },
+      "not-a-uuid",
+    ],
+  ])("clears %s instead of retaining malformed installation identity", (
+    _label,
+    stored,
+    expectedInstallationId,
+  ) => {
+    const sessionStorage = createStorage();
+    sessionStorage.setItem(pendingClaimKey, JSON.stringify(stored));
+
+    expect(readPendingClaim(sessionStorage, expectedInstallationId)).toBeNull();
     expect(sessionStorage.getItem(pendingClaimKey)).toBeNull();
   });
 });

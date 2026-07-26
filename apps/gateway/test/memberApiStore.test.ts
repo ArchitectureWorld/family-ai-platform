@@ -25,6 +25,14 @@ async function rejectionOf(promise: Promise<unknown>) {
   );
 }
 
+function expectClaimOutcome(error: Record<string, unknown>, outcome: string) {
+  expect(error.claimOutcome).toBe(outcome);
+  expect(Object.getOwnPropertyDescriptor(error, "claimOutcome")).toMatchObject({
+    value: outcome,
+    enumerable: false
+  });
+}
+
 describe("Member Web API client", () => {
   it("uses same-origin Cookie requests and adds the browser safety header only to unsafe methods", async () => {
     const requests: Array<{ path: string; init: RequestInit }> = [];
@@ -82,14 +90,11 @@ describe("Member Web API client", () => {
 
   it("normalizes PublicError responses without exposing internal bodies", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocolVersion: 2,
-      error: {
-        code: "PROVIDER_FAILED",
-        category: "availability",
-        message: "回复失败，可以重试。",
-        retryable: true,
-        requestId: "request:public-1"
-      }
+      code: "PROVIDER_FAILED",
+      category: "availability",
+      message: "回复失败，可以重试。",
+      retryable: true,
+      internalStack: "must-not-leak"
     }), { status: 502, headers: { "x-internal-trace": "must-not-leak" } }));
     const api = createApiClient(fetchImpl as typeof fetch);
 
@@ -111,14 +116,10 @@ describe("Member Web API client", () => {
 
   it("returns null for a Work that has no progress snapshot", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocolVersion: 2,
-      error: {
-        code: "WORK_PROGRESS_NOT_FOUND",
-        category: "permission",
-        message: "没有进度。",
-        retryable: false,
-        requestId: "request:progress-1"
-      }
+      code: "WORK_PROGRESS_NOT_FOUND",
+      category: "permission",
+      message: "没有进度。",
+      retryable: false
     }), { status: 404 }));
     const api = createApiClient(fetchImpl as typeof fetch);
     await expect(api.getWorkProgress("work:0001")).resolves.toBeNull();
@@ -226,6 +227,69 @@ describe("Member Web pairing API client", () => {
     expect(JSON.stringify(error)).not.toContain("claimOutcome");
   });
 
+  it.each([
+    ["frozen network", Object.freeze(new TypeError("Failed to fetch"))],
+    ["frozen abort", Object.freeze(new DOMException("Claim aborted", "AbortError"))]
+  ])("safely wraps a %s failure while preserving cause and recognizable semantics", async (kind, failure) => {
+    const api = createApiClient(vi.fn(async () => {
+      throw failure;
+    }) as typeof fetch);
+
+    const error = await rejectionOf(api.claimWebPairing(webPairingRequest));
+
+    expect(error).not.toBe(failure);
+    expect(error.cause).toBe(failure);
+    expectClaimOutcome(error, "unknown");
+    if (kind === "frozen network") expect(error).toBeInstanceOf(TypeError);
+    else expect(error).toMatchObject({ name: "AbortError" });
+  });
+
+  it("wraps a sealed error instead of masking it with a defineProperty TypeError", async () => {
+    const failure = Object.seal(new Error("sealed network failure"));
+    const api = createApiClient(vi.fn(async () => {
+      throw failure;
+    }) as typeof fetch);
+
+    const error = await rejectionOf(api.claimWebPairing(webPairingRequest));
+
+    expect(error).not.toBe(failure);
+    expect(error.cause).toBe(failure);
+    expect(error.message).toBe("sealed network failure");
+    expectClaimOutcome(error, "unknown");
+  });
+
+  it("wraps a primitive failure and preserves it as cause", async () => {
+    const api = createApiClient(vi.fn(async () => {
+      throw "primitive network failure";
+    }) as typeof fetch);
+
+    const error = await rejectionOf(api.claimWebPairing(webPairingRequest));
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.cause).toBe("primitive network failure");
+    expectClaimOutcome(error, "unknown");
+  });
+
+  it.each(["own", "inherited"])(
+    "does not trust a spoofed %s claimOutcome property",
+    async (propertyKind) => {
+      const failure = propertyKind === "own"
+        ? Object.assign(new Error("spoofed outcome"), { claimOutcome: "rejected" })
+        : Object.assign(Object.create({ claimOutcome: "rejected" }), {
+          message: "spoofed inherited outcome"
+        });
+      const api = createApiClient(vi.fn(async () => {
+        throw failure;
+      }) as typeof fetch);
+
+      const error = await rejectionOf(api.claimWebPairing(webPairingRequest));
+
+      expect(error).not.toBe(failure);
+      expect(error.cause).toBe(failure);
+      expectClaimOutcome(error, "unknown");
+    }
+  );
+
   it("marks a malformed non-2xx envelope unknown instead of treating it as a rejection", async () => {
     const response = new Response(JSON.stringify({
       protocolVersion: 2,
@@ -266,17 +330,18 @@ describe("Member Web pairing API client", () => {
     expect(json).not.toHaveBeenCalled();
   });
 
-  it("uses the same strict v2 parser for ordinary API error responses", async () => {
+  it("keeps ordinary Chat and Work errors tolerant without weakening strict Claim parsing", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       code: "PROVIDER_FAILED",
       category: "availability",
-      message: "legacy unversioned error",
+      message: "ordinary unwrapped error",
       retryable: true
     }), { status: 502 }));
     const api = createApiClient(fetchImpl as typeof fetch);
 
     await expect(api.listWorks()).rejects.toMatchObject({
-      code: "GATEWAY_RESPONSE_INVALID"
+      code: "PROVIDER_FAILED",
+      retryable: true
     });
   });
 });
