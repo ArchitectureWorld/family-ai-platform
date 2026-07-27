@@ -2361,6 +2361,120 @@ describe("Member Entry second-review destroy RED inventory", () => {
     expect(env.workbench.start).not.toHaveBeenCalled();
     expect(env.channels.posted).toHaveLength(0);
   });
+
+  it("keeps a queued Claim intent untouched after destroy before Product drain", async () => {
+    const env = createEntryControllerHarness({ initialMarker: true });
+    const lease = await env.mutationLock.acquireProductFlight(I1);
+    const controller = env.createController();
+    const operation = controller.claim(pendingClaimFixture());
+    await env.locks.waitForEvent(
+      "request",
+      `family-ai-member-product-flight:${I1}`,
+      "exclusive",
+    );
+    const intent = env.storage.readClaimCookieIntent();
+    expect(intent).not.toBeNull();
+
+    const destroying = controller.destroy();
+    const newerLifecycle = env.storage.advanceLifecycle(I1, "active", T2);
+    const afterDestroy = {
+      storage: env.localStorage.dump(),
+      posted: env.channels.posted.length,
+      views: env.view.states.length,
+    };
+    await lease.release();
+    await Promise.all([operation, destroying]);
+
+    expect(env.api.claimWebPairing).not.toHaveBeenCalled();
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.pendingClaims.clear).not.toHaveBeenCalled();
+    expect(env.storage.readClaimCookieIntent()).toEqual(intent);
+    expect(env.storage.readLifecycle(I1)).toEqual(newerLifecycle);
+    expect(env.localStorage.dump()).toEqual(afterDestroy.storage);
+    expect(env.channels.posted).toHaveLength(afterDestroy.posted);
+    expect(env.view.states).toHaveLength(afterDestroy.views);
+  });
+
+  it("keeps queued Bootstrap inert when destroy wins before Cookie entry", async () => {
+    const cookieEntered = deferred<void>();
+    const releaseCookie = deferred<void>();
+    const env = createEntryControllerHarness();
+    const holder = env.mutationLock.runCookieMutation(async () => {
+      cookieEntered.resolve(undefined);
+      await releaseCookie.promise;
+    });
+    await cookieEntered.promise;
+    const controller = env.createController();
+    const operation = controller.bootstrap();
+    await env.locks.waitForEvent(
+      "request",
+      "family-ai-member-cookie-mutation",
+      "exclusive",
+      2,
+    );
+
+    await controller.destroy();
+    const afterDestroy = {
+      storage: env.localStorage.dump(),
+      posted: env.channels.posted.length,
+      views: env.view.states.length,
+    };
+    releaseCookie.resolve(undefined);
+    await Promise.all([holder, operation]);
+
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.api.renewWebSession).not.toHaveBeenCalled();
+    expect(env.workbench.start).not.toHaveBeenCalled();
+    expect(env.localStorage.dump()).toEqual(afterDestroy.storage);
+    expect(env.channels.posted).toHaveLength(afterDestroy.posted);
+    expect(env.view.states).toHaveLength(afterDestroy.views);
+  });
+
+  it("keeps a queued active receiver inert after destroy", async () => {
+    const cookieEntered = deferred<void>();
+    const releaseCookie = deferred<void>();
+    const env = createEntryControllerHarness({
+      initialLifecycle: { state: "active", revision: 1, transitionId: T1 },
+    });
+    const holder = env.mutationLock.runCookieMutation(async () => {
+      cookieEntered.resolve(undefined);
+      await releaseCookie.promise;
+    });
+    await cookieEntered.promise;
+    const controller = env.createController();
+    env.channels.dispatch({
+      protocolVersion: 2,
+      type: "session-restored",
+      installationId: I1,
+      transitionId: T1,
+      revision: 1,
+      occurredAt: FIXED,
+    });
+    await env.channels.whenIdle();
+    await env.locks.waitForEvent(
+      "request",
+      "family-ai-member-cookie-mutation",
+      "exclusive",
+      2,
+    );
+
+    await controller.destroy();
+    const afterDestroy = {
+      storage: env.localStorage.dump(),
+      posted: env.channels.posted.length,
+      views: env.view.states.length,
+    };
+    releaseCookie.resolve(undefined);
+    await holder;
+    await controller.whenIdle();
+
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.api.renewWebSession).not.toHaveBeenCalled();
+    expect(env.workbench.start).not.toHaveBeenCalled();
+    expect(env.localStorage.dump()).toEqual(afterDestroy.storage);
+    expect(env.channels.posted).toHaveLength(afterDestroy.posted);
+    expect(env.view.states).toHaveLength(afterDestroy.views);
+  });
 });
 
 describe("Member Entry second-review cleanup RED inventory", () => {

@@ -641,6 +641,7 @@ export function createEntryController(input) {
         const intent = persistClaimCookieIntent(installationId);
         if (destroyed || abort.signal.aborted) return;
         await mutationLock.runProductDrain(installationId, async () => {
+          if (destroyed || abort.signal.aborted) return;
           const latestMarker = storage.readLockMarker(installationId);
           if (!sameRecord(latestMarker, activationState.expectedMarker)) {
             clearExactClaimCookieIntent(intent);
@@ -1533,6 +1534,7 @@ export function createEntryController(input) {
       const expectedLifecycle = snapshotLifecycle(lifecycle);
       try {
         await runCookieAndEntry(installationId, async () => {
+          if (destroyed) return;
           if (
             storage.readInstallationId() !== installationId ||
             !lifecycleMatches(installationId, expectedLifecycle) ||
@@ -1719,6 +1721,7 @@ export function createEntryController(input) {
       if (lifecycle?.state !== "active") return;
       let ticket = null;
       const result = await runCookieAndEntry(installationId, async () => {
+        if (destroyed) return "handled";
         if (
           storage.readInstallationId() !== installationId ||
           !lifecycleMatches(installationId, expectedLifecycle) ||
