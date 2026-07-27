@@ -4,9 +4,324 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+member_handoff_scan() {
+  local scan_root="$1"
+  node --input-type=module - "$scan_root" <<'NODE'
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, join, relative } from "node:path";
+
+const scanRoot = process.argv[2];
+const fail = message => {
+  process.stderr.write(`${message}\n`);
+  process.exit(1);
+};
+const read = path => readFileSync(path, "utf8");
+const exists = path => {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const walk = (directory, predicate, excluded = new Set()) => {
+  if (!exists(directory)) return [];
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".git") continue;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (!excluded.has(entry.name)) files.push(...walk(path, predicate, excluded));
+    } else if (predicate(path)) {
+      files.push(path);
+    }
+  }
+  return files;
+};
+const scriptFiles = walk(
+  join(scanRoot, "scripts"),
+  path => /\.(?:sh|mjs|cjs|js)$/.test(path) && basename(path) !== "static-check.sh"
+);
+const describe = path => relative(scanRoot, path);
+const handoffMarker = /(?:\bMEMBER_WEB_URL(?:_FILE)?\b|member-web-url)/;
+
+for (const path of scriptFiles) {
+  const source = read(path);
+  const logicalSource = source
+    .replace(/\\\r?\n/g, " ")
+    .replace(/\|\s*\r?\n\s*/g, "| ")
+    .replace(/\r?\n\s*\|/g, " |");
+  const logicalCommands = logicalSource.split(/\r?\n/);
+
+  if (/\/member\/\?pairingRef=/.test(source)) {
+    fail(`Formal Member Web handoffs must use a fragment: ${describe(path)}`);
+  }
+  if (/\bACCEPTANCE_URL\s*=/.test(source)) {
+    fail(`Executable scripts must not construct acceptance URLs: ${describe(path)}`);
+  }
+  if (/#token=/.test(source)) {
+    fail(`Executable scripts must not contain legacy Token handoffs: ${describe(path)}`);
+  }
+  if (
+    /\b(?:xdg-open|gio\s+open|open)\b[^\n]{0,400}(?:#token=|pairingRef=|\bMEMBER_WEB_URL(?:_FILE)?\b|member-web-url)/.test(
+      logicalSource
+    )
+  ) {
+      fail(`Executable scripts must not open secret-bearing handoffs: ${describe(path)}`);
+  }
+  if (
+    /\$\(\s*<\s*[^)]*(?:MEMBER_WEB_URL(?:_FILE)?|member-web-url)/.test(
+      logicalSource
+    )
+  ) {
+    fail(`Executable scripts must not load handoff bytes through command substitution: ${describe(path)}`);
+  }
+
+  for (const command of logicalCommands) {
+    if (!handoffMarker.test(command)) continue;
+    if (/\btee\b/.test(command)) {
+      fail(`Formal scripts must not tee handoff bytes: ${describe(path)}`);
+    }
+    if (
+      /\b(?:read|readarray|mapfile)\b/.test(command) &&
+      /(?:<|--file|-f)[^;\n]*(?:MEMBER_WEB_URL(?:_FILE)?|member-web-url)/.test(command)
+    ) {
+      fail(`Formal scripts must not load handoff bytes into shell variables: ${describe(path)}`);
+    }
+    if (
+      /\b(?:cp|install)\b/.test(command) &&
+      /(?:\/dev\/(?:stdout|stderr|fd\/[12])|\/proc\/self\/fd\/[12])/.test(command)
+    ) {
+      fail(`Formal scripts must not copy handoff bytes to output devices: ${describe(path)}`);
+    }
+    if (
+      /\b(?:cat|head|tail|sed|awk|grep|dd)\b/.test(command) &&
+      !/(?:^|[\s;])(?:1?>|&>)\s*\/dev\/null(?:[\s;]|$)/.test(command) &&
+      !/\bdd\b[^;\n]*\bof=\/dev\/null(?:[\s;]|$)/.test(command)
+    ) {
+      fail(`Formal scripts must not print handoff bytes: ${describe(path)}`);
+    }
+  }
+
+  const javascriptSource = source.replace(/\s+/g, " ");
+  const readsHandoff = expression =>
+    /\b(?:readFileSync|readFile|createReadStream)\s*\(/.test(expression) &&
+    handoffMarker.test(expression);
+  const containsIdentifier = (expression, identifier) => {
+    const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const withoutQuotedLiterals = expression
+      .replace(/"(?:\\.|[^"\\])*"/g, "")
+      .replace(/'(?:\\.|[^'\\])*'/g, "");
+    return new RegExp(`(^|[^\\w$])${escaped}(?![\\w$])`).test(
+      withoutQuotedLiterals
+    );
+  };
+  const taintedIdentifiers = new Set();
+  const handoffTextPattern =
+    "(?:MEMBER_WEB_URL(?:_FILE)?|member-web-url)";
+  const identifierPattern = "([A-Za-z_$][\\w$]*)";
+  const callbackReadPattern = new RegExp(
+    `\\breadFile\\s*\\([^;]{0,1000}${handoffTextPattern}[^;]{0,1000}?` +
+      `\\(\\s*${identifierPattern}\\s*,\\s*${identifierPattern}\\s*\\)\\s*=>`,
+    "g"
+  );
+  for (const callbackRead of javascriptSource.matchAll(callbackReadPattern)) {
+    taintedIdentifiers.add(callbackRead[2]);
+  }
+  const promiseReadPattern = new RegExp(
+    `\\breadFile\\s*\\([^;]{0,1000}${handoffTextPattern}[^;]{0,1000}?\\)` +
+      `\\s*\\.then\\s*\\(\\s*(?:async\\s*)?\\(?\\s*${identifierPattern}\\s*\\)?\\s*=>`,
+    "g"
+  );
+  for (const promiseRead of javascriptSource.matchAll(promiseReadPattern)) {
+    taintedIdentifiers.add(promiseRead[1]);
+  }
+  const assignments = [
+    ...javascriptSource.matchAll(
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;]+)/g
+    ),
+    ...javascriptSource.matchAll(
+      /(?:^|;)\s*([A-Za-z_$][\w$]*)\s*=\s*([^;]+)/g
+    )
+  ];
+  for (let pass = 0; pass <= assignments.length; pass += 1) {
+    let changed = false;
+    for (const assignment of assignments) {
+      const identifier = assignment[1];
+      const expression = assignment[2];
+      if (
+        readsHandoff(expression) ||
+        [...taintedIdentifiers].some(tainted =>
+          containsIdentifier(expression, tainted)
+        )
+      ) {
+        if (!taintedIdentifiers.has(identifier)) {
+          taintedIdentifiers.add(identifier);
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  const leaksTaintedBytes = expression =>
+    readsHandoff(expression) ||
+    [...taintedIdentifiers].some(tainted =>
+      containsIdentifier(expression, tainted)
+    );
+  const sinkPattern =
+    /(?:process\.(?:stdout|stderr)\.write|console\.(?:log|info|error|warn|debug))\s*\((.*?)\)\s*\)*\s*(?:;|$)/g;
+  for (const sink of javascriptSource.matchAll(sinkPattern)) {
+    if (leaksTaintedBytes(sink[1])) {
+      fail(`Executable JavaScript must not write handoff file bytes: ${describe(path)}`);
+    }
+  }
+  for (const statement of javascriptSource.split(";")) {
+    if (
+      /\.pipe\s*\(\s*process\.(?:stdout|stderr)\s*\)/.test(statement) &&
+      leaksTaintedBytes(statement)
+    ) {
+      fail(`Executable JavaScript must not pipe handoff file bytes: ${describe(path)}`);
+    }
+  }
+
+  for (const command of logicalCommands) {
+    if (
+      /acceptance-onboarding\.sh/.test(command) &&
+      (/\|\s*(?:[^|]*\s)?tee\b/.test(command) ||
+        /\btee\b[^|]*\|\s*[^|]*acceptance-onboarding\.sh/.test(command))
+    ) {
+      fail(`Formal onboarding output must not be piped through tee: ${describe(path)}`);
+    }
+  }
+}
+
+const proxyPattern = /(?:member-preview-claim-loss-proxy|response-loss-proxy)/;
+for (const rootName of ["apps", "packages"]) {
+  const sourceFiles = walk(
+    join(scanRoot, rootName),
+    path =>
+      /\.(?:js|mjs|cjs|ts|tsx)$/.test(path) &&
+      !/\.(?:test|spec)\.[^.]+$/.test(path),
+    new Set(["test", "tests"])
+  );
+  for (const path of sourceFiles) {
+    if (proxyPattern.test(read(path))) {
+      fail(`Response-loss proxy code reached a production module: ${describe(path)}`);
+    }
+  }
+}
+
+const productionFiles = [];
+for (const name of ["Dockerfile", "compose.yaml", "package.json"]) {
+  const path = join(scanRoot, name);
+  if (exists(path)) productionFiles.push(path);
+}
+productionFiles.push(
+  ...walk(
+    scanRoot,
+    path => basename(path) === "package.json" && !path.includes(`${join(scanRoot, "node_modules")}`)
+  ),
+  ...scriptFiles.filter(path => {
+    const name = basename(path);
+    return !name.startsWith("test-") && !name.startsWith("member-preview-");
+  })
+);
+for (const path of new Set(productionFiles)) {
+  if (proxyPattern.test(read(path))) {
+    fail(`Response-loss proxy code reached a production build input: ${describe(path)}`);
+  }
+}
+NODE
+}
+
+if [[ "${1:-}" == "--member-handoff-scan" ]]; then
+  [[ "$#" -eq 2 ]] || {
+    printf 'usage: static-check.sh --member-handoff-scan ROOT\n' >&2
+    exit 2
+  }
+  member_handoff_scan "$2"
+  exit 0
+fi
+[[ "$#" -eq 0 ]] || {
+  printf 'static-check.sh does not accept these arguments.\n' >&2
+  exit 2
+}
+
+member_handoff_scan "$ROOT_DIR"
+
 for script in scripts/*.sh; do
   bash -n "$script"
 done
+
+executable_scripts=()
+for script in scripts/*.sh; do
+  [[ "$script" == scripts/static-check.sh ]] || executable_scripts+=("$script")
+done
+formal_handoff_files=(
+  "${executable_scripts[@]}"
+  docs/development/2026-07-25-member-web-product-workbench.md
+)
+
+if grep -Fq '/member/?pairingRef=' "${formal_handoff_files[@]}"; then
+  printf 'Formal Member Web handoffs must use a fragment, never pairing query parameters.\n' >&2
+  exit 1
+fi
+
+if grep -Eq 'ACCEPTANCE_URL[[:space:]]*=' "${executable_scripts[@]}"; then
+  printf 'Executable scripts must not construct a secret-bearing acceptance URL.\n' >&2
+  exit 1
+fi
+
+if grep -Fq '#token=' "${executable_scripts[@]}"; then
+  printf 'Executable scripts must not contain legacy Token fragment handoffs.\n' >&2
+  exit 1
+fi
+
+if grep -Eq '(xdg-open|gio[[:space:]]+open|(^|[[:space:]])open[[:space:]])[^[:cntrl:]]*(#token=|pairingRef=|MEMBER_WEB_URL|member-web-url)' "${executable_scripts[@]}"; then
+  printf 'Executable scripts must not open secret-bearing handoff URLs.\n' >&2
+  exit 1
+fi
+
+if grep -R -Eq \
+  --include='*.sh' \
+  --exclude='static-check.sh' \
+  'acceptance-onboarding\.sh[^[:cntrl:]]*\|[^[:cntrl:]]*tee|tee[^[:cntrl:]]*\|?[^[:cntrl:]]*acceptance-onboarding\.sh' \
+  scripts; then
+  printf 'Formal onboarding output must not be piped through tee.\n' >&2
+  exit 1
+fi
+
+if [[ -n "$(git ls-files -- '.runtime-preview/**' '.runtime-preview')" ]]; then
+  printf 'Runtime preview artifacts must never be tracked.\n' >&2
+  exit 1
+fi
+
+response_loss_proxy_pattern='((import|export)[[:space:]].*from[[:space:]]*|import[[:space:]]*\(|require[[:space:]]*\()[^[:cntrl:]]*(member-preview-claim-loss-proxy|response-loss-proxy)'
+if grep -R -Eq \
+  --include='*.js' \
+  --include='*.mjs' \
+  --include='*.cjs' \
+  --include='*.ts' \
+  --include='*.tsx' \
+  --exclude-dir=test \
+  --exclude-dir=tests \
+  "$response_loss_proxy_pattern" \
+  apps packages; then
+  printf 'Response-loss proxy code must not be imported by application or package modules.\n' >&2
+  exit 1
+fi
+
+production_build_files=(Dockerfile compose.yaml package.json)
+for script in scripts/*; do
+  case "$script" in
+    scripts/static-check.sh|scripts/test-*|scripts/member-preview-*) ;;
+    *) production_build_files+=("$script") ;;
+  esac
+done
+if grep -Eq '(member-preview-claim-loss-proxy|response-loss-proxy)' "${production_build_files[@]}"; then
+  printf 'Response-loss proxy code must not be imported by production build scripts.\n' >&2
+  exit 1
+fi
 
 grep -Fq '127.0.0.1:8790:8790' compose.yaml || {
   printf 'compose.yaml must publish Gateway on loopback only.\n' >&2

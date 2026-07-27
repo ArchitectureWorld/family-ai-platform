@@ -111,9 +111,15 @@ The pairing explanation has its own DOM target and cannot overwrite the product 
 
 ## One-command product handoff
 
-`./scripts/verify-foundation.sh` now leaves the verified Family state running and prints a real `/member/?pairingRef=...&code=...` link. It does not reset the data after generating the link and does not open a dedicated acceptance page.
+`./scripts/verify-foundation.sh` leaves the verified Family state running and writes the real Member Web pairing handoff to an atomic local file with mode `0600`. Formal output reveals only that file's path; it never prints, logs or opens the secret-bearing URL.
 
-The generated URL and runtime logs stay in Git-ignored local paths. Pairing codes, credentials and Session tokens are not committed to documentation.
+The handoff file contains a fragment URL in this shape:
+
+```text
+http://127.0.0.1:8790/member/#pairingRef=pairing%3Aexample&code=ABCD-EFGH
+```
+
+Pairing data never appears in the query string. Do not inspect the handoff with `cat`, pipe it through `tee`, paste it into a shell command, or include it in a report. A controlled browser workflow consumes the ignored local file directly. Pairing codes, credentials and Session tokens are not committed to documentation.
 
 ## Verification summary
 

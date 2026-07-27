@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+{ set +x; } 2>/dev/null
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_DIR="$ROOT_DIR/.runtime"
 LOG_DIR="$ROOT_DIR/docs/acceptance/runtime/logs"
@@ -39,13 +41,43 @@ printf '\n[4/6] Verifying the message kernel...\n'
 ./scripts/acceptance.sh 2>&1 | tee "$LOG_DIR/foundation-verification.log"
 
 printf '\n[5/6] Verifying Family identity, permissions, restart recovery, and product handoff...\n'
-bash ./scripts/acceptance-onboarding.sh 2>&1 | tee "$LOG_DIR/onboarding-verification.log"
+bash ./scripts/acceptance-onboarding.sh
 
 printf '\n[6/6] Keeping the verified Family state running for the real product workbench...\n'
 [[ -f "$MEMBER_WEB_URL_FILE" ]] || fail "未生成真实个人工作台的配对链接。"
-MEMBER_WEB_URL="$(cat "$MEMBER_WEB_URL_FILE")"
-[[ "$MEMBER_WEB_URL" == http://127.0.0.1:8790/member/\?pairingRef=* ]] \
-  || fail "真实个人工作台链接格式不正确。"
+[[ "$(stat -c '%a' "$MEMBER_WEB_URL_FILE")" == "600" ]] \
+  || fail "真实个人工作台交接文件权限必须为 0600。"
+docker compose --env-file "$RUNTIME_DIR/config/compose.env" exec -T gateway node -e '
+  let input = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", chunk => input += chunk);
+  process.stdin.on("end", () => {
+    if (!input.endsWith("\n") || input.indexOf("\n") !== input.length - 1) process.exit(1);
+    let url;
+    try {
+      url = new URL(input.slice(0, -1));
+    } catch {
+      process.exit(1);
+    }
+    const parameters = new URLSearchParams(url.hash.slice(1));
+    const keys = [...parameters.keys()];
+    if (
+      url.origin !== "http://127.0.0.1:8790" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.pathname !== "/member/" ||
+      url.search !== "" ||
+      keys.length !== 2 ||
+      keys[0] !== "pairingRef" ||
+      keys[1] !== "code" ||
+      !parameters.get("pairingRef") ||
+      !parameters.get("code")
+    ) {
+      process.exit(1);
+    }
+  });
+' < "$MEMBER_WEB_URL_FILE" >/dev/null 2>&1 \
+  || fail "真实个人工作台交接文件格式不正确。"
 
 cat <<EOF
 
@@ -66,9 +98,8 @@ Family AI automated verification: PASS
 - Chat、Work、显式补拉、累计 ACK 与 SSE 所使用的正式产品接口。
 
 Gateway 保留刚刚通过验证的真实 Family 状态并继续运行。
-打开下面的地址，直接进入真实个人工作台：
-
-$MEMBER_WEB_URL
+配对材料只保存在权限为 0600 的本地交接文件中，不会打印到终端或日志。
+Member Web handoff: $MEMBER_WEB_URL_FILE
 
 浏览器会通过正式配对建立个人设备，随后进入普通用户日常使用的 Chat / Work 工作台。
 请直接通过正常产品行为完成体验：

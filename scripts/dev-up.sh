@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+{ set +x; } 2>/dev/null
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_DIR="$ROOT_DIR/.runtime"
 CONFIG_DIR="$RUNTIME_DIR/config"
@@ -83,14 +85,9 @@ if [[ "$healthy" != true ]]; then
   fail "8790 端口不是当前 Gateway Foundation，或服务未在 60 秒内启动。"
 fi
 
-ACCEPTANCE_URL="$BASE_URL/#token=$DEVICE_TOKEN&device=device%3Atest"
-
 cat <<EOF
 
 Family AI Gateway Foundation 已启动。
-
-家庭初始化与双入口验收页面：
-$ACCEPTANCE_URL
 
 完整一键验收：
 ./scripts/verify-foundation.sh
@@ -107,11 +104,3 @@ bash ./scripts/acceptance-onboarding.sh
 清空一次性开发数据：
 ./scripts/dev-reset.sh
 EOF
-
-if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-  if command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$ACCEPTANCE_URL" >/dev/null 2>&1 || true
-  elif command -v gio >/dev/null 2>&1; then
-    gio open "$ACCEPTANCE_URL" >/dev/null 2>&1 || true
-  fi
-fi

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+{ set +x; } 2>/dev/null
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_DIR="$ROOT_DIR/.runtime"
 TOKEN_FILE="$RUNTIME_DIR/config/device-token"
@@ -9,6 +11,19 @@ MEMBER_WEB_URL_FILE="$RUNTIME_DIR/config/member-web-url"
 REPORT_DIR="$ROOT_DIR/docs/acceptance/runtime"
 BASE_URL="http://127.0.0.1:8790"
 DEVICE_REF="device:test"
+SENSITIVE_TEMP_FILES=()
+
+cleanup_sensitive_files() {
+  local path
+  for path in "${SENSITIVE_TEMP_FILES[@]}"; do
+    [[ -n "$path" ]] && rm -f -- "$path"
+  done
+}
+
+trap cleanup_sensitive_files EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fail() {
   printf 'ONBOARDING ACCEPTANCE FAILED: %s\n' "$1" >&2
@@ -35,15 +50,19 @@ json_get() {
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", chunk => input += chunk);
     process.stdin.on("end", () => {
-      const value = process.argv[1].split(".").reduce((current, key) => current?.[key], JSON.parse(input));
+      let value;
+      try {
+        const parsed = JSON.parse(input);
+        value = process.argv[1]
+          .split(".")
+          .reduce((current, key) => current?.[key], parsed);
+      } catch {
+        process.exit(2);
+      }
       if (value === undefined || value === null) process.exit(2);
       process.stdout.write(typeof value === "object" ? JSON.stringify(value) : String(value));
     });
   ' "$path"
-}
-
-urlencode() {
-  compose exec -T gateway node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$1"
 }
 
 request() {
@@ -53,23 +72,30 @@ request() {
   local payload="${4:-}"
   local auth_kind="${5:-public}"
   local body_file
+  local config_file
   body_file="$(mktemp)"
+  config_file="$(mktemp)"
+  SENSITIVE_TEMP_FILES+=("$body_file" "$config_file")
+  chmod 600 "$body_file" "$config_file"
   local args=(--silent --show-error --max-time 15 --output "$body_file" --write-out '%{http_code}' --request "$method" "$BASE_URL$path")
 
   case "$auth_kind" in
     public)
       ;;
     bootstrap)
-      args+=(--header "Authorization: Bearer $DEVICE_TOKEN" --header "X-Device-Ref: $DEVICE_REF")
+      printf 'header = "Authorization: Bearer %s"\nheader = "X-Device-Ref: %s"\n' \
+        "$DEVICE_TOKEN" "$DEVICE_REF" > "$config_file"
       ;;
     admin)
-      args+=(--header "Authorization: Bearer $ADMIN_TOKEN" --header "X-Entry-Session-Ref: $ADMIN_SESSION_REF")
+      printf 'header = "Authorization: Bearer %s"\nheader = "X-Entry-Session-Ref: %s"\n' \
+        "$ADMIN_TOKEN" "$ADMIN_SESSION_REF" > "$config_file"
       ;;
     personal)
-      args+=(--header "Authorization: Bearer $PERSONAL_TOKEN" --header "X-Entry-Session-Ref: $PERSONAL_SESSION_REF")
+      printf 'header = "Authorization: Bearer %s"\nheader = "X-Entry-Session-Ref: %s"\n' \
+        "$PERSONAL_TOKEN" "$PERSONAL_SESSION_REF" > "$config_file"
       ;;
     *)
-      rm -f "$body_file"
+      rm -f "$body_file" "$config_file"
       fail "unknown auth kind: $auth_kind"
       ;;
   esac
@@ -77,7 +103,9 @@ request() {
   if [[ -n "$payload" ]]; then
     args+=(--header 'Content-Type: application/json' --data "$payload")
   fi
-  RESPONSE_STATUS="$(curl "${args[@]}")" || { rm -f "$body_file"; fail "curl failed for $method $path"; }
+  RESPONSE_STATUS="$(curl --config "$config_file" "${args[@]}")" \
+    || { rm -f "$body_file" "$config_file"; fail "curl failed for $method $path"; }
+  rm -f "$config_file"
   RESPONSE_BODY="$(cat "$body_file")"
   rm -f "$body_file"
   [[ "$RESPONSE_STATUS" == "$expected" ]] || fail "$method $path expected HTTP $expected"
@@ -162,11 +190,15 @@ record "Restart recovery" "both entry sessions restored"
 request POST "/api/v1/admin/members/$PERSON_REF/pairing-codes" 201 "" admin
 PAIRING_REF="$(json_get "$RESPONSE_BODY" pairing.pairingRef)"
 PAIRING_CODE="$(json_get "$RESPONSE_BODY" pairing.code)"
-PAIRING_EXPIRES_AT="$(json_get "$RESPONSE_BODY" pairing.expiresAt)"
-MEMBER_WEB_URL="$BASE_URL/member/?pairingRef=$(urlencode "$PAIRING_REF")&code=$(urlencode "$PAIRING_CODE")"
-umask 077
-printf '%s\n' "$MEMBER_WEB_URL" > "$MEMBER_WEB_URL_FILE"
-chmod 600 "$MEMBER_WEB_URL_FILE"
+printf '%s\0%s\0%s\0' "$BASE_URL" "$PAIRING_REF" "$PAIRING_CODE" \
+  | compose run --quiet --rm -T --no-deps \
+      --volume "$ROOT_DIR/scripts/write-member-handoff.mjs:/member-handoff/write-member-handoff.mjs:ro" \
+      --volume "$RUNTIME_DIR/config:/member-handoff-output" \
+      gateway \
+      node \
+      /member-handoff/write-member-handoff.mjs \
+      /member-handoff-output/member-web-url \
+  || fail "could not write the Member Web handoff"
 record "Normal product workbench handoff" "real Web Device pairing link generated"
 
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -183,7 +215,7 @@ FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$REPORT_FILE"
 
 printf '\nVerified Family state is ready in the real Member Web product.\n'
-printf 'Product URL (expires %s):\n%s\n' "$PAIRING_EXPIRES_AT" "$MEMBER_WEB_URL"
+printf 'Member Web handoff: %s\n' "$MEMBER_WEB_URL_FILE"
 printf 'Runtime report: %s\n' "$REPORT_FILE"
 
-unset ADMIN_TOKEN PERSONAL_TOKEN DEVICE_TOKEN PAIRING_CODE
+unset ADMIN_TOKEN PERSONAL_TOKEN DEVICE_TOKEN PAIRING_REF PAIRING_CODE
