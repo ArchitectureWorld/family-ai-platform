@@ -50,6 +50,40 @@ describe("Member Entry cold start and Claim", () => {
     expect(env.view.last()).toMatchObject({ showResume: true });
   });
 
+  it.each(["DEVICE_AUTH_INVALID", "DEVICE_REVOKED"])(
+    "formally revokes a cold bootstrap whose Product start rejects %s",
+    async (code) => {
+      const env = createEntryControllerHarness({
+        initialIdentity: IDENTITY,
+        workbench: {
+          start: vi.fn(async () => {
+            throw entryError(code);
+          }),
+        },
+      });
+      const controller = env.createController();
+
+      await controller.bootstrap();
+
+      expect(env.workbench.start).toHaveBeenCalledOnce();
+      expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+      expect(env.cacheLifecycle.deleteIdentity).toHaveBeenCalledWith(
+        IDENTITY,
+        expect.any(Object),
+      );
+      expect(env.storage.readIdentityPointer(I1)).toBeNull();
+      expect(env.storage.readInstallationId()).toBe(I2);
+      expect(env.storage.readLifecycle(I1)).toMatchObject({
+        state: "revoked",
+      });
+      expect(controller.getState().name).toBe("unpaired");
+
+      await controller.retry();
+      expect(env.workbench.start).toHaveBeenCalledOnce();
+      expect(env.api.getWebContext).toHaveBeenCalledOnce();
+    },
+  );
+
   it("claims the exact pending material plus device and clears it only after 204", async () => {
     const response = deferred<void>();
     const requestStarted = deferred<void>();

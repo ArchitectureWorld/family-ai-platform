@@ -1583,12 +1583,17 @@ export function createEntryController(input) {
         return;
       }
       if (!ticket) return;
-      const started = await startWithContext(
-        ticket.context,
-        ticket.installationId,
-        ticket.expectedLifecycle
-      );
-      if (started) transition("active");
+      try {
+        const started = await startWithContext(
+          ticket.context,
+          ticket.installationId,
+          ticket.expectedLifecycle
+        );
+        if (started) transition("active");
+      } catch (error) {
+        if (!isInvalidatingError(error)) throw error;
+        await revoke(error, installationId);
+      }
     } catch (error) {
       await stopTrackedWorkbench().catch(() => undefined);
       transition("recoverable_error", {
