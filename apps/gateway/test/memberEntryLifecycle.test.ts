@@ -2052,3 +2052,558 @@ describe("Member Entry review race regressions", () => {
     otherName.close();
   });
 });
+
+describe("Member Entry second-review RED inventory", () => {
+  it("blocks Claim bytes when the exact lifecycle baseline changes behind Product", async () => {
+    const env = createEntryControllerHarness({ initialMarker: true });
+    const marker = env.storage.readLockMarker(I1);
+    const lease = await env.mutationLock.acquireProductFlight(I1);
+    const controller = env.createController();
+    const operation = controller.claim(pendingClaimFixture());
+    await env.locks.waitForEvent(
+      "request",
+      `family-ai-member-product-flight:${I1}`,
+      "exclusive",
+    );
+    expect(env.storage.readClaimCookieIntent()).not.toBeNull();
+
+    const newerLifecycle = env.storage.advanceLifecycle(I1, "active", T2);
+    await lease.release();
+    await operation;
+
+    expect(env.api.claimWebPairing).not.toHaveBeenCalled();
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.pendingClaims.clear).not.toHaveBeenCalled();
+    expect(env.storage.readLifecycle(I1)).toEqual(newerLifecycle);
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.workbench.start).not.toHaveBeenCalled();
+    expect(controller.getState().name).not.toBe("active");
+  });
+
+  it("does not fetch Claim Context after the lifecycle baseline changes post-204", async () => {
+    const response = deferred<void>();
+    const env = createEntryControllerHarness({
+      initialMarker: true,
+      api: { claimWebPairing: vi.fn(() => response.promise) },
+    });
+    const marker = env.storage.readLockMarker(I1);
+    const controller = env.createController();
+    const operation = controller.claim(pendingClaimFixture());
+    await env.http.waitForRequest("claimWebPairing");
+
+    const newerLifecycle = env.storage.advanceLifecycle(I1, "active", T2);
+    response.resolve(undefined);
+    await operation;
+
+    expect(env.api.claimWebPairing).toHaveBeenCalledOnce();
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.pendingClaims.clear).toHaveBeenCalledOnce();
+    expect(env.storage.readClaimCookieIntent()).toBeNull();
+    expect(env.storage.readLifecycle(I1)).toEqual(newerLifecycle);
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.workbench.start).not.toHaveBeenCalled();
+
+    await controller.retry();
+    expect(env.api.claimWebPairing).toHaveBeenCalledOnce();
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.storage.readLifecycle(I1)).toEqual(newerLifecycle);
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+  });
+
+  it.each(["retained", "replaced"])(
+    "rejects a successful Claim intent clear whose backing is %s",
+    async (mode) => {
+      const env = createEntryControllerHarness();
+      const baseStorage = env.storage;
+      const replacement = owner(I1, T2);
+      const lyingStorage = new Proxy(baseStorage, {
+        get(target, property, receiver) {
+          if (property !== "clearClaimCookieIntent") {
+            return Reflect.get(target, property, receiver);
+          }
+          return () => {
+            if (mode === "replaced") {
+              env.localStorage.setItem(
+                "family-ai-member-claim-cookie-intent",
+                JSON.stringify(replacement),
+              );
+            }
+            return true;
+          };
+        },
+      });
+      const controller = env.createController({ storage: lyingStorage });
+
+      await controller.claim(pendingClaimFixture());
+
+      expect(env.api.claimWebPairing).toHaveBeenCalledOnce();
+      expect(env.storage.readClaimCookieIntent()).toEqual(
+        mode === "replaced"
+          ? replacement
+          : expect.objectContaining({ installationId: I1 }),
+      );
+      expect(env.pendingClaims.clear).not.toHaveBeenCalled();
+      expect(env.api.getWebContext).not.toHaveBeenCalled();
+      expect(env.storage.readLifecycle(I1)).toBeNull();
+      expect(env.workbench.start).not.toHaveBeenCalled();
+      expect(controller.getState()).toMatchObject({
+        name: "recoverable_error",
+        code: "ENTRY_CLAIM_INTENT_CHANGED",
+      });
+    },
+  );
+
+  it("fails closed when its own successful Claim lifecycle is deleted", async () => {
+    const env = createEntryControllerHarness();
+    const controller = env.createController();
+    await controller.claim(pendingClaimFixture());
+    expect(env.storage.readLifecycle(I1)).toMatchObject({
+      state: "active",
+      revision: 1,
+    });
+    expect(controller.getState().name).toBe("active");
+    env.workbench.stop.mockClear();
+
+    const peer = env.createTab();
+    peer.localStorage.removeItem(`family-ai-member-entry-state:${I1}`);
+    await env.shared.whenIdle();
+    await controller.whenIdle();
+
+    expect(env.workbench.stop).toHaveBeenCalled();
+    expect(controller.getState()).toMatchObject({
+      name: "recoverable_error",
+      code: "ENTRY_LIFECYCLE_MISSING",
+    });
+    expect(controller.getState().name).not.toBe("active");
+  });
+});
+
+describe("Member Entry second-review destroy RED inventory", () => {
+  it("keeps no-lock Logout inert when destroy wins during the initial stop", async () => {
+    const stopEntered = deferred<void>();
+    const releaseStop = deferred<void>();
+    const env = createEntryControllerHarness({
+      locks: null,
+      workbench: {
+        stop: vi.fn(() => {
+          stopEntered.resolve(undefined);
+          return releaseStop.promise;
+        }),
+      },
+    });
+    const controller = env.createController();
+    const operation = controller.logout();
+    await stopEntered.promise;
+    const marker = env.storage.readLockMarker(I1);
+    expect(marker).not.toBeNull();
+
+    const destroying = controller.destroy();
+    const afterDestroy = {
+      storage: env.localStorage.dump(),
+      posted: env.channels.posted.length,
+      views: env.view.states.length,
+    };
+    releaseStop.resolve(undefined);
+    await Promise.all([operation, destroying]);
+
+    expect(env.api.logoutWebSession).not.toHaveBeenCalled();
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.storage.readLifecycle(I1)).toBeNull();
+    expect(env.localStorage.dump()).toEqual(afterDestroy.storage);
+    expect(env.channels.posted).toHaveLength(afterDestroy.posted);
+    expect(env.view.states).toHaveLength(afterDestroy.views);
+  });
+
+  it("cancels supported Logout queued on Cookie when destroy wins", async () => {
+    const cookieEntered = deferred<void>();
+    const releaseCookie = deferred<void>();
+    const env = createEntryControllerHarness();
+    const holder = env.mutationLock.runCookieMutation(async () => {
+      cookieEntered.resolve(undefined);
+      await releaseCookie.promise;
+    });
+    await cookieEntered.promise;
+    const controller = env.createController();
+    const operation = controller.logout();
+    await env.locks.waitForEvent(
+      "request",
+      "family-ai-member-cookie-mutation",
+      "exclusive",
+      2,
+    );
+    const marker = env.storage.readLockMarker(I1);
+    const lifecycle = env.storage.readLifecycle(I1);
+    await controller.destroy();
+    const afterDestroy = {
+      posted: env.channels.posted.length,
+      views: env.view.states.length,
+    };
+
+    releaseCookie.resolve(undefined);
+    await Promise.all([holder, operation]);
+
+    expect(env.api.logoutWebSession).not.toHaveBeenCalled();
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.storage.readLifecycle(I1)).toEqual(lifecycle);
+    expect(env.channels.posted).toHaveLength(afterDestroy.posted);
+    expect(env.view.states).toHaveLength(afterDestroy.views);
+  });
+
+  it("cancels durable owner bootstrap cleanup queued on Cookie after destroy", async () => {
+    const cookieEntered = deferred<void>();
+    const releaseCookie = deferred<void>();
+    const initialOwner = owner();
+    const env = createEntryControllerHarness({
+      initialClaimIntent: initialOwner,
+    });
+    const holder = env.mutationLock.runCookieMutation(async () => {
+      cookieEntered.resolve(undefined);
+      await releaseCookie.promise;
+    });
+    await cookieEntered.promise;
+    const controller = env.createController();
+    const operation = controller.bootstrap();
+    await env.locks.waitForEvent(
+      "request",
+      "family-ai-member-cookie-mutation",
+      "exclusive",
+      2,
+    );
+    await controller.destroy();
+
+    releaseCookie.resolve(undefined);
+    await Promise.all([holder, operation]);
+
+    expect(env.api.clearWebEntryCookies).not.toHaveBeenCalled();
+    expect(env.storage.readClaimCookieIntent()).toEqual(initialOwner);
+    expect(env.pendingClaims.clear).not.toHaveBeenCalled();
+    expect(env.storage.readLifecycle(I1)).toBeNull();
+    expect(env.storage.readCleanupTombstone(I1)).toBeNull();
+    expect(env.rotationCount).toBe(0);
+  });
+
+  it("keeps destroy pending on an AbortSignal-ignoring Claim request", async () => {
+    const response = deferred<void>();
+    const env = createEntryControllerHarness({
+      api: { claimWebPairing: vi.fn(() => response.promise) },
+    });
+    const controller = env.createController();
+    const operation = controller.claim(pendingClaimFixture());
+    await env.http.waitForRequest("claimWebPairing");
+    const intent = env.storage.readClaimCookieIntent();
+    expect(intent).not.toBeNull();
+
+    const destroying = controller.destroy();
+    const destroyOutcome = await Promise.race([
+      destroying.then(() => "settled"),
+      new Promise<string>((resolve) =>
+        setTimeout(() => resolve("pending"), 0)
+      ),
+    ]);
+    expect(destroyOutcome).toBe("pending");
+
+    response.resolve(undefined);
+    await Promise.all([operation, destroying]);
+
+    expect(env.api.claimWebPairing).toHaveBeenCalledOnce();
+    expect(env.storage.readClaimCookieIntent()).toEqual(intent);
+    expect(env.pendingClaims.clear).not.toHaveBeenCalled();
+    expect(env.api.getWebContext).not.toHaveBeenCalled();
+    expect(env.storage.readLifecycle(I1)).toBeNull();
+    expect(env.workbench.start).not.toHaveBeenCalled();
+  });
+
+  it("keeps Resume marker and locked lifecycle after destroy during Context", async () => {
+    const context = deferred<any>();
+    const env = createEntryControllerHarness({
+      initialMarker: true,
+      initialLifecycle: { state: "locked", revision: 1, transitionId: T1 },
+      api: { getWebContext: vi.fn(() => context.promise) },
+    });
+    const controller = env.createController();
+    const operation = controller.resume();
+    await env.http.waitForRequest("getWebContext");
+    const marker = env.storage.readLockMarker(I1);
+    const lifecycle = env.storage.readLifecycle(I1);
+
+    const destroying = controller.destroy();
+    context.resolve({ context: memberContextFixture() });
+    await Promise.all([operation, destroying]);
+
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.storage.readLifecycle(I1)).toEqual(lifecycle);
+    expect(env.api.renewWebSession).not.toHaveBeenCalled();
+    expect(env.workbench.start).not.toHaveBeenCalled();
+    expect(env.channels.posted).toHaveLength(0);
+  });
+
+  it("keeps committed Claim activation evidence unchanged after destroy during Context", async () => {
+    const context = deferred<any>();
+    const env = createEntryControllerHarness({
+      initialMarker: true,
+      api: { getWebContext: vi.fn(() => context.promise) },
+    });
+    const controller = env.createController();
+    const operation = controller.claim(pendingClaimFixture());
+    await env.http.waitForRequest("getWebContext");
+    expect(env.api.claimWebPairing).toHaveBeenCalledOnce();
+    expect(env.storage.readClaimCookieIntent()).toBeNull();
+    expect(env.pendingClaims.clear).toHaveBeenCalledOnce();
+    const marker = env.storage.readLockMarker(I1);
+    const lifecycle = env.storage.readLifecycle(I1);
+
+    const destroying = controller.destroy();
+    context.resolve({ context: memberContextFixture() });
+    await Promise.all([operation, destroying]);
+
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.storage.readLifecycle(I1)).toEqual(lifecycle);
+    expect(env.workbench.start).not.toHaveBeenCalled();
+    expect(env.channels.posted).toHaveLength(0);
+  });
+});
+
+describe("Member Entry second-review cleanup RED inventory", () => {
+  it("stops Revoke after a pending identity delete settles post-destroy", async () => {
+    const deletionStarted = deferred<void>();
+    const deletion = deferred<void>();
+    const env = createEntryControllerHarness({
+      initialIdentity: IDENTITY,
+      cacheLifecycle: {
+        deleteIdentity: vi.fn(() => {
+          deletionStarted.resolve(undefined);
+          return deletion.promise;
+        }),
+      },
+    });
+    const controller = env.createController();
+    const operation = controller.revoke(entryError("DEVICE_REVOKED"), I1);
+    await deletionStarted.promise;
+    const marker = env.storage.readLockMarker(I1);
+    const target = env.storage.readCleanupTombstone(I1);
+    const lifecycle = env.storage.readLifecycle(I1);
+    const pointer = env.storage.readIdentityPointer(I1);
+    expect(target).toMatchObject({
+      phase: "deleting",
+      cookiesCleared: true,
+      identity: IDENTITY,
+    });
+
+    await controller.destroy();
+    const afterDestroy = {
+      posted: env.channels.posted.length,
+      views: env.view.states.length,
+    };
+    deletion.resolve(undefined);
+    await operation;
+
+    expect(env.storage.readIdentityPointer(I1)).toEqual(pointer);
+    expect(env.storage.readCleanupTombstone(I1)).toEqual(target);
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.storage.readLifecycle(I1)).toEqual(lifecycle);
+    expect(env.storage.readInstallationId()).toBe(I1);
+    expect(env.rotationCount).toBe(0);
+    expect(env.channels.posted).toHaveLength(afterDestroy.posted);
+    expect(env.view.states).toHaveLength(afterDestroy.views);
+  });
+
+  it("retains Revoke marker and tombstone when destroy wins its queued marker clear", async () => {
+    const deletionStarted = deferred<void>();
+    const deletion = deferred<void>();
+    const markerEntered = deferred<void>();
+    const releaseMarker = deferred<void>();
+    const env = createEntryControllerHarness({
+      initialIdentity: IDENTITY,
+      cacheLifecycle: {
+        deleteIdentity: vi.fn(() => {
+          deletionStarted.resolve(undefined);
+          return deletion.promise;
+        }),
+      },
+    });
+    const controller = env.createController();
+    const operation = controller.revoke(entryError("DEVICE_REVOKED"), I1);
+    await deletionStarted.promise;
+    const marker = env.storage.readLockMarker(I1);
+
+    const holder = env.mutationLock.runMarkerMutation(I1, async () => {
+      markerEntered.resolve(undefined);
+      await releaseMarker.promise;
+    });
+    await markerEntered.promise;
+    deletion.resolve(undefined);
+    await env.locks.waitForEvent(
+      "request",
+      `family-ai-member-entry-marker:${I1}`,
+      "exclusive",
+      3,
+    );
+    const target = env.storage.readCleanupTombstone(I1);
+    const lifecycle = env.storage.readLifecycle(I1);
+    expect(env.storage.readIdentityPointer(I1)).toBeNull();
+
+    await controller.destroy();
+    releaseMarker.resolve(undefined);
+    await Promise.all([holder, operation]);
+
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.storage.readCleanupTombstone(I1)).toEqual(target);
+    expect(env.storage.readLifecycle(I1)).toEqual(lifecycle);
+    expect(env.storage.readInstallationId()).toBe(I1);
+    expect(env.rotationCount).toBe(0);
+  });
+
+  it("cancels authoritative Remove completion after destroy", async () => {
+    const response = deferred<void>();
+    const env = createEntryControllerHarness({
+      initialIdentity: IDENTITY,
+      api: { revokeWebDevice: vi.fn(() => response.promise) },
+    });
+    const controller = env.createController();
+    const operation = controller.removeDevice();
+    await env.http.waitForRequest("revokeWebDevice");
+    const marker = env.storage.readLockMarker(I1);
+    const pointer = env.storage.readIdentityPointer(I1);
+    expect(env.storage.readCleanupTombstone(I1)).toBeNull();
+    expect(env.storage.readLifecycle(I1)).toBeNull();
+
+    await controller.destroy();
+    response.resolve(undefined);
+    await operation;
+
+    expect(env.api.revokeWebDevice).toHaveBeenCalledOnce();
+    expect(env.api.clearWebEntryCookies).not.toHaveBeenCalled();
+    expect(env.cacheLifecycle.deleteIdentity).not.toHaveBeenCalled();
+    expect(env.storage.readIdentityPointer(I1)).toEqual(pointer);
+    expect(env.storage.readCleanupTombstone(I1)).toBeNull();
+    expect(env.storage.readLifecycle(I1)).toBeNull();
+    expect(env.storage.readLockMarker(I1)).toEqual(marker);
+    expect(env.storage.readInstallationId()).toBe(I1);
+    expect(env.rotationCount).toBe(0);
+  });
+
+  it("checkpoints one Revoke clear across a monotonic M2 takeover", async () => {
+    const clear = deferred<void>();
+    const writes: Array<{ actor: "A" | "B"; record: any }> = [];
+    const env = createEntryControllerHarness({
+      initialIdentity: IDENTITY,
+      api: { clearWebEntryCookies: vi.fn(() => clear.promise) },
+    });
+    const observeWrites = (baseStorage: any, actor: "A" | "B") =>
+      new Proxy(baseStorage, {
+        get(target, property, receiver) {
+          if (property !== "writeCleanupTombstone") {
+            return Reflect.get(target, property, receiver);
+          }
+          return (installationId: string, record: any) => {
+            const written = target.writeCleanupTombstone(
+              installationId,
+              record,
+            );
+            writes.push({ actor, record: structuredClone(written) });
+            return written;
+          };
+        },
+      });
+    const first = env.createController({
+      storage: observeWrites(env.storage, "A"),
+    });
+    const firstOperation = first.revoke(entryError("DEVICE_REVOKED"), I1);
+    await env.http.waitForRequest("clearWebEntryCookies");
+    const markerM1 = env.storage.readLockMarker(I1);
+    expect(env.storage.readCleanupTombstone(I1)).toMatchObject({
+      phase: "closing",
+      cookiesCleared: false,
+    });
+
+    const peer = env.createTab({
+      now: () => new Date("2026-07-25T09:00:01.000Z"),
+    });
+    const second = peer.createController({
+      storage: observeWrites(peer.storage, "B"),
+    });
+    const secondOperation = second.revoke(entryError("DEVICE_REVOKED"), I1);
+    await env.locks.waitForEvent(
+      "request",
+      "family-ai-member-cookie-mutation",
+      "exclusive",
+      2,
+    );
+    const markerM2 = env.storage.readLockMarker(I1);
+    expect(markerM2).not.toEqual(markerM1);
+
+    clear.resolve(undefined);
+    await Promise.all([firstOperation, secondOperation]);
+
+    expect(
+      env.api.clearWebEntryCookies.mock.calls.length +
+        peer.api.clearWebEntryCookies.mock.calls.length,
+    ).toBe(1);
+    expect(writes).toContainEqual({
+      actor: "A",
+      record: expect.objectContaining({
+        phase: "closing",
+        cookiesCleared: true,
+      }),
+    });
+    expect(
+      env.cacheLifecycle.deleteIdentity.mock.calls.length +
+        peer.cacheLifecycle.deleteIdentity.mock.calls.length,
+    ).toBe(1);
+    expect(env.storage.readLockMarker(I1)).toBeNull();
+    expect(env.storage.readCleanupTombstone(I1)).toBeNull();
+    expect(env.storage.readIdentityPointer(I1)).toBeNull();
+    expect(env.storage.readInstallationId()).toBe(I2);
+    expect(env.rotationCount + peer.rotationCount).toBe(1);
+  });
+});
+
+describe("Member Entry second-review rejected Claim RED inventory", () => {
+  it.each(["retained", "replaced"])(
+    "rejects a rejected Claim intent clear whose backing is %s",
+    async (mode) => {
+      const rejected = Object.assign(entryError("PAIRING_INVALID"), {
+        claimOutcome: "rejected",
+      });
+      const env = createEntryControllerHarness({
+        api: { claimWebPairing: vi.fn(async () => { throw rejected; }) },
+      });
+      const baseStorage = env.storage;
+      const replacement = owner(I1, T2);
+      const lyingStorage = new Proxy(baseStorage, {
+        get(target, property, receiver) {
+          if (property !== "clearClaimCookieIntent") {
+            return Reflect.get(target, property, receiver);
+          }
+          return () => {
+            if (mode === "replaced") {
+              env.localStorage.setItem(
+                "family-ai-member-claim-cookie-intent",
+                JSON.stringify(replacement),
+              );
+            }
+            return true;
+          };
+        },
+      });
+      const controller = env.createController({ storage: lyingStorage });
+
+      await controller.claim(pendingClaimFixture());
+
+      expect(env.api.claimWebPairing).toHaveBeenCalledOnce();
+      expect(env.storage.readClaimCookieIntent()).toEqual(
+        mode === "replaced"
+          ? replacement
+          : expect.objectContaining({ installationId: I1 }),
+      );
+      expect(env.pendingClaims.clear).not.toHaveBeenCalled();
+      expect(env.api.getWebContext).not.toHaveBeenCalled();
+      expect(env.storage.readLifecycle(I1)).toBeNull();
+      expect(env.workbench.start).not.toHaveBeenCalled();
+      expect(controller.getState()).toMatchObject({
+        name: "recoverable_error",
+        code: "ENTRY_CLAIM_INTENT_CHANGED",
+      });
+    },
+  );
+});
