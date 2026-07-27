@@ -249,6 +249,99 @@ fi
 
 member_handoff_scan "$ROOT_DIR"
 
+preview_scripts=(
+  scripts/member-preview-up.sh
+  scripts/member-preview-pair.mjs
+  scripts/member-preview-revoke.mjs
+  scripts/member-preview-secret-audit.mjs
+  scripts/member-preview-down.sh
+  scripts/member-preview-claim-loss-proxy.mjs
+)
+for preview_script in "${preview_scripts[@]}"; do
+  [[ -f "$preview_script" && ! -L "$preview_script" ]] || {
+    printf 'Missing protected Preview entrypoint: %s\n' "$preview_script" >&2
+    exit 1
+  }
+done
+
+for ignore_file in .gitignore .dockerignore; do
+  [[ "$(grep -Fxc '.runtime-preview/' "$ignore_file")" -eq 1 ]] || {
+    printf '%s must contain exactly one .runtime-preview/ entry.\n' "$ignore_file" >&2
+    exit 1
+  }
+done
+
+preview_static_home="$(printf '/%s/%s/' home youran)"
+if grep -Fq "$preview_static_home" "${preview_scripts[@]}"; then
+  printf 'Preview scripts must derive the approved home dynamically.\n' >&2
+  exit 1
+fi
+if grep -Fq '0.0.0.0' "${preview_scripts[@]}"; then
+  printf 'Preview listeners must remain loopback-only.\n' >&2
+  exit 1
+fi
+if grep -Fq 'GATEWAY_PORT=8790' scripts/member-preview-up.sh; then
+  printf 'Preview Gateway must never claim the existing service port.\n' >&2
+  exit 1
+fi
+if grep -Eq 'docker[[:space:]]+compose|dev-(up|reset)|verify-foundation' \
+  scripts/member-preview-up.sh scripts/member-preview-down.sh; then
+  printf 'Preview lifecycle must remain compose-free and isolated.\n' >&2
+  exit 1
+fi
+if grep -Eq '8790|docker|pkill|killall|fuser' scripts/member-preview-down.sh; then
+  printf 'Preview down must be PID-scoped and must not inspect production controls.\n' >&2
+  exit 1
+fi
+if grep -Eq '(^|[^[:alnum:]_])kill[[:space:]]+-TERM([^[:alnum:]_]|$)' \
+  scripts/member-preview-up.sh scripts/member-preview-down.sh; then
+  printf 'Preview lifecycle TERM must use a validated pidfd.\n' >&2
+  exit 1
+fi
+for required in \
+  'hostname -s' \
+  'id -un' \
+  'getent passwd' \
+  'fix/member-web-entry-hardening' \
+  'umask 077' \
+  '127.0.0.1:8791' \
+  'memberPublicSha256' \
+  'configSha256' \
+  'start.lock' \
+  'gateway.pid.json'; do
+  grep -Fq "$required" scripts/member-preview-up.sh || {
+    printf 'Preview up is missing required lifecycle contract: %s\n' "$required" >&2
+    exit 1
+  }
+done
+for required in \
+  '/proc/' \
+  'starttime' \
+  'ss -H -ltnp' \
+  'os.pidfd_open' \
+  'signal.pidfd_send_signal' \
+  'select.poll' \
+  'gateway.pid.json' \
+  'claim-loss-proxy.pid.json'; do
+  grep -Fq "$required" scripts/member-preview-down.sh || {
+    printf 'Preview down is missing required ownership contract: %s\n' "$required" >&2
+    exit 1
+  }
+done
+if grep -Eq 'set[[:space:]]+-x|#token=|/member/\?pairingRef=' "${preview_scripts[@]}"; then
+  printf 'Preview scripts contain a secret-bearing output pattern.\n' >&2
+  exit 1
+fi
+if grep -Eq '(cat|head|tail)[[:space:]][^[:cntrl:]]*(device-token|admin-entry|member-web-url)' \
+  "${preview_scripts[@]}"; then
+  printf 'Preview scripts must not print protected handoff or credential files.\n' >&2
+  exit 1
+fi
+if [[ -n "$(git ls-files -- '.runtime-preview' '.runtime-preview/**')" ]]; then
+  printf 'Runtime preview artifacts must never be tracked.\n' >&2
+  exit 1
+fi
+
 for script in scripts/*.sh; do
   bash -n "$script"
 done
@@ -391,7 +484,7 @@ while IFS= read -r tracked; do
   esac
 done < <(git ls-files)
 
-for forbidden in 'agent-control-center.sqlite' '/home/youran/' 'family-ai-platform-legacy/data'; do
+for forbidden in 'agent-control-center.sqlite' "$preview_static_home" 'family-ai-platform-legacy/data'; do
   if grep -R \
     --exclude-dir=.git \
     --exclude-dir=node_modules \
