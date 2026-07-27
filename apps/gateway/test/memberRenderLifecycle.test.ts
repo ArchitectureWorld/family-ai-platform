@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRenderer } from "../member-public/render.js";
 import { createStore } from "../member-public/store.js";
 import {
   createMemberDocumentHarness,
+  deferred,
   memberActions,
   memberState,
 } from "./helpers/memberBrowserHarness.js";
@@ -255,5 +256,137 @@ describe("Member Web render lifecycle", () => {
     expect(harness.elements.createWorkGoalInput.value).toBe("");
     expect(harness.elements.chatToWorkTitleInput.value).toBe("");
     expect(harness.elements.chatToWorkGoalInput.value).toBe("");
+  });
+  it("leaves a stale create Work submission open without a success effect", async () => {
+    const pending = deferred<undefined>();
+    const setTimeoutFn = vi.fn(() => 1);
+    const harness = createMemberDocumentHarness();
+    const actions = memberActions({
+      createWork: vi.fn(() => pending.promise),
+    });
+    const renderer = createRenderer({
+      store: createStore(memberState()),
+      actions,
+      documentRef: harness.document,
+      setTimeoutFn,
+      clearTimeoutFn: vi.fn(),
+    });
+    harness.elements.createWorkDialog.showModal();
+    harness.elements.createWorkTitleInput.value = "保留标题";
+    harness.elements.createWorkGoalInput.value = "保留目标";
+
+    harness.submit("createWorkForm");
+    await Promise.resolve();
+    expect(actions.createWork).toHaveBeenCalledOnce();
+    expect(harness.elements.createWorkTitleInput.disabled).toBe(true);
+
+    pending.resolve(undefined);
+    await harness.whenIdle();
+
+    expect(harness.elements.createWorkTitleInput.value).toBe("保留标题");
+    expect(harness.elements.createWorkGoalInput.value).toBe("保留目标");
+    expect(harness.elements.createWorkDialog.open).toBe(true);
+    expect(harness.elements.createWorkDialog.closeCalls).toBe(0);
+    expect(harness.elements.productToast.textContent).toBe("");
+    expect(setTimeoutFn).not.toHaveBeenCalled();
+    expect(harness.elements.createWorkTitleInput.disabled).toBe(false);
+    expect(harness.elements.createWorkGoalInput.disabled).toBe(false);
+    renderer.destroy();
+  });
+  it("leaves a stale Chat conversion open without a success effect", async () => {
+    const pending = deferred<undefined>();
+    const setTimeoutFn = vi.fn(() => 1);
+    const harness = createMemberDocumentHarness();
+    const actions = memberActions({
+      convertChatToWork: vi.fn(() => pending.promise),
+    });
+    const renderer = createRenderer({
+      store: createStore(memberState()),
+      actions,
+      documentRef: harness.document,
+      setTimeoutFn,
+      clearTimeoutFn: vi.fn(),
+    });
+    harness.elements.chatToWorkDialog.showModal();
+    harness.elements.chatToWorkTitleInput.value = "保留转换标题";
+    harness.elements.chatToWorkGoalInput.value = "保留转换目标";
+
+    harness.submit("chatToWorkForm");
+    await Promise.resolve();
+    expect(actions.convertChatToWork).toHaveBeenCalledOnce();
+    expect(harness.elements.chatToWorkTitleInput.disabled).toBe(true);
+
+    pending.resolve(undefined);
+    await harness.whenIdle();
+
+    expect(harness.elements.chatToWorkTitleInput.value).toBe("保留转换标题");
+    expect(harness.elements.chatToWorkGoalInput.value).toBe("保留转换目标");
+    expect(harness.elements.chatToWorkDialog.open).toBe(true);
+    expect(harness.elements.chatToWorkDialog.closeCalls).toBe(0);
+    expect(harness.elements.productToast.textContent).toBe("");
+    expect(setTimeoutFn).not.toHaveBeenCalled();
+    expect(harness.elements.chatToWorkTitleInput.disabled).toBe(false);
+    expect(harness.elements.chatToWorkGoalInput.disabled).toBe(false);
+    renderer.destroy();
+  });
+  it("completes a non-stale create Work submission", async () => {
+    const setTimeoutFn = vi.fn(() => 1);
+    const harness = createMemberDocumentHarness();
+    const actions = memberActions({
+      createWork: vi.fn(async () => ({ workConversationRef: "work:new" })),
+    });
+    const renderer = createRenderer({
+      store: createStore(memberState()),
+      actions,
+      documentRef: harness.document,
+      setTimeoutFn,
+      clearTimeoutFn: vi.fn(),
+    });
+    harness.elements.createWorkDialog.showModal();
+    harness.elements.createWorkTitleInput.value = "新 Work";
+    harness.elements.createWorkGoalInput.value = "新目标";
+
+    harness.submit("createWorkForm");
+    await harness.whenIdle();
+
+    expect(harness.elements.createWorkTitleInput.value).toBe("");
+    expect(harness.elements.createWorkGoalInput.value).toBe("");
+    expect(harness.elements.createWorkDialog.open).toBe(false);
+    expect(harness.elements.createWorkDialog.closeCalls).toBe(1);
+    expect(harness.elements.productToast.textContent).toBe("Work 已创建。");
+    expect(setTimeoutFn).toHaveBeenCalledOnce();
+    renderer.destroy();
+  });
+  it("completes a non-stale Chat conversion", async () => {
+    const setTimeoutFn = vi.fn(() => 1);
+    const harness = createMemberDocumentHarness();
+    const actions = memberActions({
+      convertChatToWork: vi.fn(async () => ({
+        conversation: { workConversationRef: "work:converted" },
+      })),
+    });
+    const renderer = createRenderer({
+      store: createStore(memberState()),
+      actions,
+      documentRef: harness.document,
+      setTimeoutFn,
+      clearTimeoutFn: vi.fn(),
+    });
+    harness.elements.chatToWorkDialog.showModal();
+    harness.elements.chatToWorkTitleInput.value = "转换 Work";
+    harness.elements.chatToWorkGoalInput.value = "转换目标";
+
+    harness.submit("chatToWorkForm");
+    await harness.whenIdle();
+
+    expect(harness.elements.chatToWorkTitleInput.value).toBe("");
+    expect(harness.elements.chatToWorkGoalInput.value).toBe("");
+    expect(harness.elements.chatToWorkDialog.open).toBe(false);
+    expect(harness.elements.chatToWorkDialog.closeCalls).toBe(1);
+    expect(harness.elements.productToast.textContent).toBe(
+      "已从 Chat 创建 Work。",
+    );
+    expect(setTimeoutFn).toHaveBeenCalledOnce();
+    renderer.destroy();
   });
 });

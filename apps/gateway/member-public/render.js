@@ -274,10 +274,11 @@ export function createRenderer(input) {
     const dialog = $(documentRef, "createWorkDialog");
     setDialogBusy(dialog, true);
     try {
-      await actions.createWork({
+      const result = await actions.createWork({
         title: $(documentRef, "createWorkTitleInput").value,
         goal: $(documentRef, "createWorkGoalInput").value
       });
+      if (result == null) return;
       event.target.reset();
       dialog.close();
       showToast("Work 已创建。");
@@ -293,10 +294,11 @@ export function createRenderer(input) {
     const dialog = $(documentRef, "chatToWorkDialog");
     setDialogBusy(dialog, true);
     try {
-      await actions.convertChatToWork({
+      const result = await actions.convertChatToWork({
         title: $(documentRef, "chatToWorkTitleInput").value,
         goal: $(documentRef, "chatToWorkGoalInput").value
       });
+      if (result == null) return;
       event.target.reset();
       dialog.close();
       showToast("已从 Chat 创建 Work。");
