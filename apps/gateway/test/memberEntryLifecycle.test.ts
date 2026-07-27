@@ -84,6 +84,144 @@ describe("Member Entry cold start and Claim", () => {
     },
   );
 
+  it.each(["DEVICE_AUTH_INVALID", "DEVICE_REVOKED"])(
+    "preserves %s through a failing Product stop prelude and formally revokes",
+    async (code) => {
+      const invalidation = entryError(code, {
+        cause: { secret: "HOSTILE_INVALIDATION_CAUSE" },
+      });
+      invalidation.message =
+        "token=HOSTILE_INVALIDATION cookie=HOSTILE_INVALIDATION family:private";
+      const stopFailure = entryError("STOP_FAILED", {
+        cause: { secret: "HOSTILE_STOP_CAUSE" },
+      });
+      stopFailure.message =
+        "token=HOSTILE_STOP cookie=HOSTILE_STOP family:private";
+      const env = createEntryControllerHarness({
+        initialIdentity: IDENTITY,
+        workbench: {
+          start: vi.fn(async () => {
+            throw invalidation;
+          }),
+          stop: vi.fn()
+            .mockRejectedValueOnce(stopFailure)
+            .mockResolvedValue(undefined),
+        },
+      });
+      const controller = env.createController();
+
+      await controller.bootstrap();
+      await env.channels.whenIdle();
+
+      expect(env.workbench.start).toHaveBeenCalledOnce();
+      expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+      expect(env.cacheLifecycle.deleteIdentity).toHaveBeenCalledOnce();
+      expect(env.storage.readIdentityPointer(I1)).toBeNull();
+      expect(env.storage.readInstallationId()).toBe(I2);
+      expect(env.rotationCount).toBe(1);
+      expect(controller.getState().name).toBe("unpaired");
+
+      const publicBoundaries = JSON.stringify({
+        view: env.view.states,
+        channel: env.channels.posted,
+        storage: env.localStorage.dump(),
+      });
+      expect(publicBoundaries).not.toMatch(
+        /HOSTILE|token=|cookie=|family:private|cause|secret/iu,
+      );
+    },
+  );
+
+  it.each(["DEVICE_AUTH_INVALID", "DEVICE_REVOKED"])(
+    "retries a failed formal %s revoke instead of bootstrapping into locked",
+    async (code) => {
+      const stopFailure = entryError("STOP_FAILED");
+      const env = createEntryControllerHarness({
+        initialIdentity: IDENTITY,
+        workbench: {
+          start: vi.fn(async () => {
+            throw entryError(code);
+          }),
+          stop: vi.fn()
+            .mockResolvedValueOnce(undefined)
+            .mockRejectedValueOnce(stopFailure)
+            .mockResolvedValue(undefined),
+        },
+      });
+      const controller = env.createController();
+
+      await controller.bootstrap();
+
+      expect(controller.getState()).toMatchObject({
+        name: "recoverable_error",
+        showRetry: true,
+      });
+      expect(env.storage.readLockMarker(I1)).not.toBeNull();
+      expect(env.api.clearWebEntryCookies).not.toHaveBeenCalled();
+
+      await controller.retry();
+
+      expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+      expect(env.cacheLifecycle.deleteIdentity).toHaveBeenCalledOnce();
+      expect(env.storage.readIdentityPointer(I1)).toBeNull();
+      expect(env.storage.readInstallationId()).toBe(I2);
+      expect(env.rotationCount).toBe(1);
+      expect(controller.getState().name).toBe("unpaired");
+    },
+  );
+
+  it.each(["DEVICE_AUTH_INVALID", "DEVICE_REVOKED"])(
+    "single-flights Product callback plus matching %s startup rejection",
+    async (code) => {
+      const clear = deferred<void>();
+      const invalidation = entryError(code);
+      let callbackCalls = 0;
+      let callback: Promise<boolean> | undefined;
+      const env = createEntryControllerHarness({
+        initialIdentity: IDENTITY,
+        api: {
+          clearWebEntryCookies: vi.fn(() => clear.promise),
+        },
+        workbench: {
+          start: vi.fn(async () => {
+            callbackCalls += 1;
+            callback = env.controller.handleEntryFailure(invalidation, I1);
+            throw invalidation;
+          }),
+        },
+      });
+      const controller = env.createController();
+      env.controller = controller;
+
+      const operation = controller.bootstrap();
+      await env.http.waitForRequest("clearWebEntryCookies");
+
+      expect(callbackCalls).toBe(1);
+      expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+      clear.resolve(undefined);
+      await Promise.all([operation, callback!]);
+      await env.channels.whenIdle();
+
+      expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+      expect(env.cacheLifecycle.deleteIdentity).toHaveBeenCalledOnce();
+      expect(env.rotationCount).toBe(1);
+      expect(env.storage.readInstallationId()).toBe(I2);
+      expect(
+        env.channels.posted.filter(
+          (message: any) => message.type === "device-revoke-preparing",
+        ),
+      ).toHaveLength(1);
+      expect(
+        env.channels.posted.filter(
+          (message: any) => message.type === "device-revoke-complete",
+        ),
+      ).toHaveLength(1);
+      expect(
+        env.view.states.filter((view: any) => view.name === "unpaired"),
+      ).toHaveLength(1);
+    },
+  );
+
   it("claims the exact pending material plus device and clears it only after 204", async () => {
     const response = deferred<void>();
     const requestStarted = deferred<void>();

@@ -272,7 +272,13 @@ export function createEntryController(input) {
       lastAppliedRevisions.set(installationId, expectedLifecycle.revision);
       return true;
     } catch (error) {
-      await stopTrackedWorkbench();
+      try {
+        await stopTrackedWorkbench();
+      } catch (stopError) {
+        if (!isInvalidatingError(error)) {
+          throw stopError;
+        }
+      }
       if (
         error?.code === "ENTRY_LIFECYCLE_CHANGED_DURING_START" ||
         error?.code === "ENTRY_INSTALLATION_CHANGED" ||
@@ -1591,8 +1597,10 @@ export function createEntryController(input) {
         );
         if (started) transition("active");
       } catch (error) {
-        if (!isInvalidatingError(error)) throw error;
-        await revoke(error, installationId);
+        const handled = await handleEntryFailure(error, installationId);
+        if (!handled) {
+          throw error;
+        }
       }
     } catch (error) {
       await stopTrackedWorkbench().catch(() => undefined);
