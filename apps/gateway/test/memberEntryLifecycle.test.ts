@@ -222,6 +222,71 @@ describe("Member Entry cold start and Claim", () => {
     },
   );
 
+  it.each([
+    ["DEVICE_AUTH_INVALID", "marker"],
+    ["DEVICE_AUTH_INVALID", "stop"],
+    ["DEVICE_REVOKED", "marker"],
+    ["DEVICE_REVOKED", "stop"],
+  ])(
+    "retries Context %s through a failed revoke %s prelude",
+    async (code, prelude) => {
+      const invalidation = entryError(code);
+      const stopFailure = entryError("STOP_FAILED");
+      const env = createEntryControllerHarness({
+        initialIdentity: IDENTITY,
+        api: {
+          getWebContext: vi.fn()
+            .mockRejectedValueOnce(invalidation)
+            .mockResolvedValue({
+              context: memberContextFixture(),
+            }),
+        },
+        workbench: prelude === "stop"
+          ? {
+              stop: vi.fn()
+                .mockRejectedValueOnce(stopFailure)
+                .mockResolvedValue(undefined),
+            }
+          : undefined,
+      });
+      const baseStorage = env.storage;
+      let markerAttempts = 0;
+      const storage = prelude === "marker"
+        ? new Proxy(baseStorage, {
+            get(target, property, receiver) {
+              if (property !== "writeLockMarkerLocked") {
+                return Reflect.get(target, property, receiver);
+              }
+              return (...args: any[]) => {
+                markerAttempts += 1;
+                if (markerAttempts === 1) throw stopFailure;
+                return target.writeLockMarkerLocked(...args);
+              };
+            },
+          })
+        : baseStorage;
+      const controller = env.createController({ storage });
+
+      await controller.bootstrap();
+
+      expect(controller.getState()).toMatchObject({
+        name: "recoverable_error",
+        showRetry: true,
+      });
+      expect(env.api.clearWebEntryCookies).not.toHaveBeenCalled();
+
+      await controller.retry();
+
+      expect(env.api.getWebContext).toHaveBeenCalledOnce();
+      expect(env.api.clearWebEntryCookies).toHaveBeenCalledOnce();
+      expect(env.cacheLifecycle.deleteIdentity).toHaveBeenCalledOnce();
+      expect(env.storage.readIdentityPointer(I1)).toBeNull();
+      expect(env.storage.readInstallationId()).toBe(I2);
+      expect(env.rotationCount).toBe(1);
+      expect(controller.getState().name).toBe("unpaired");
+    },
+  );
+
   it("claims the exact pending material plus device and clears it only after 204", async () => {
     const response = deferred<void>();
     const requestStarted = deferred<void>();

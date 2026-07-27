@@ -1564,7 +1564,7 @@ export function createEntryController(input) {
         });
       } catch (error) {
         if (isInvalidatingError(error)) {
-          await revoke(error, installationId);
+          await handleEntryFailure(error, installationId);
           return;
         }
         if (isSessionError(error)) {
