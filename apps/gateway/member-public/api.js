@@ -163,8 +163,60 @@ function claimErrorWithOutcome(caught, outcome) {
   return error;
 }
 
-export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) {
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  if (signal.reason !== undefined) throw signal.reason;
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  throw error;
+}
+
+function mergeAbortSignals(defaultSignal, requestSignal) {
+  const signals = [...new Set([defaultSignal, requestSignal].filter(Boolean))];
+  if (signals.length < 2) {
+    return { signal: signals[0], dispose: () => {} };
+  }
+
+  const controller = new AbortController();
+  const listeners = new Map();
+  let disposed = false;
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    for (const [signal, listener] of listeners) {
+      signal.removeEventListener("abort", listener);
+    }
+    listeners.clear();
+  }
+  const abortFrom = (signal) => {
+    if (!controller.signal.aborted) controller.abort(signal.reason);
+    dispose();
+  };
+  for (const signal of signals) {
+    if (signal.aborted) {
+      abortFrom(signal);
+      break;
+    }
+    const listener = () => abortFrom(signal);
+    listeners.set(signal, listener);
+    signal.addEventListener("abort", listener, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    dispose
+  };
+}
+
+export function createApiClient(
+  fetchImpl = globalThis.fetch?.bind(globalThis),
+  { defaultSignal, onRequest } = {}
+) {
   if (typeof fetchImpl !== "function") throw new Error("FETCH_UNAVAILABLE");
+
+  function throwIfRequestAborted(requestSignal) {
+    throwIfAborted(defaultSignal);
+    if (requestSignal !== defaultSignal) throwIfAborted(requestSignal);
+  }
 
   async function rawApiRequest(path, options = {}) {
     const method = String(options.method ?? "GET").toUpperCase();
@@ -176,24 +228,38 @@ export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) 
     }
     if (!SAFE_METHODS.has(method)) headers.set("x-family-ai-web-request", "1");
 
-    const response = await fetchImpl(path, {
-      method,
-      headers,
-      body,
-      credentials: "same-origin",
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.keepalive !== undefined
-        ? { keepalive: options.keepalive }
-        : {})
-    });
-    return response;
+    const merged = mergeAbortSignals(defaultSignal, options.signal);
+    throwIfRequestAborted(options.signal);
+    try {
+      const rawFetchPromise = Promise.resolve(fetchImpl(path, {
+        method,
+        headers,
+        body,
+        credentials: "same-origin",
+        ...(merged.signal ? { signal: merged.signal } : {}),
+        ...(options.keepalive !== undefined
+          ? { keepalive: options.keepalive }
+          : {})
+      }));
+      onRequest?.(rawFetchPromise);
+      const response = await rawFetchPromise;
+      throwIfRequestAborted(options.signal);
+      return response;
+    } finally {
+      merged.dispose();
+    }
   }
 
-  async function parseStrictGatewayError(response) {
+  async function parseStrictGatewayError(response, requestSignal) {
     let responseBody;
+    let parseFailed = false;
     try {
       responseBody = await response.json();
     } catch {
+      parseFailed = true;
+    }
+    throwIfRequestAborted(requestSignal);
+    if (parseFailed) {
       throw localApiError(
         "GATEWAY_RESPONSE_INVALID",
         "Gateway 返回了无效响应。"
@@ -208,16 +274,22 @@ export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) 
     return normalizedError(response.status, responseBody);
   }
 
-  async function parseGatewayError(response) {
+  async function parseGatewayError(response, requestSignal) {
     const responseBody = await response.json().catch(() => null);
+    throwIfRequestAborted(requestSignal);
     return normalizedError(response.status, responseBody);
   }
 
   async function apiRequest(path, options = {}) {
     const response = await rawApiRequest(path, options);
-    if (!response.ok) throw await parseGatewayError(response);
+    throwIfRequestAborted(options.signal);
+    if (!response.ok) {
+      throw await parseGatewayError(response, options.signal);
+    }
     if (response.status === 204) return null;
-    return response.json().catch(() => null);
+    const responseBody = await response.json().catch(() => null);
+    throwIfRequestAborted(options.signal);
+    return responseBody;
   }
 
   return {
@@ -242,7 +314,7 @@ export function createApiClient(fetchImpl = globalThis.fetch?.bind(globalThis)) 
       if (!response.ok) {
         let error;
         try {
-          error = await parseStrictGatewayError(response);
+          error = await parseStrictGatewayError(response, signal);
         } catch (caught) {
           throw claimErrorWithOutcome(caught, "unknown");
         }

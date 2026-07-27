@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MEMBER_CACHE_STORES,
   applyEventTransaction,
@@ -66,6 +66,22 @@ describe("Member Web cache model", () => {
     request.emit("success");
     await expect(opening).resolves.toMatchObject({ close: expect.any(Function) });
   });
+
+  it.each([undefined, "", 42])(
+    "rejects the invalid cache name %j before IndexedDB is touched",
+    async (databaseName) => {
+      const indexedDBImpl = { open: vi.fn() };
+
+      await expect(
+        openMemberCache(databaseName as string, { indexedDBImpl })
+      ).rejects.toMatchObject({
+        code: "MEMBER_CACHE_NAME_REQUIRED",
+        message: "Member cache name is required."
+      });
+
+      expect(indexedDBImpl.open).not.toHaveBeenCalled();
+    }
+  );
 
   it("commits event writes and localAppliedSequence in one transaction", async () => {
     const cache = createMemoryCache();

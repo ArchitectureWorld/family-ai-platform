@@ -64,6 +64,7 @@ function errorProjection(error) {
 
 export function createSyncController(input) {
   const { api, cache, store, applyEvent } = input;
+  const onEntryRevoked = input.onEntryRevoked ?? (() => undefined);
   const EventSourceClass = input.EventSourceClass ?? globalThis.EventSource;
   const BroadcastChannelClass = input.BroadcastChannelClass ?? globalThis.BroadcastChannel;
   const setTimeoutFn = input.setTimeoutFn ?? globalThis.setTimeout.bind(globalThis);
@@ -73,13 +74,48 @@ export function createSyncController(input) {
     : null;
 
   let stopped = false;
+  let revoked = false;
   let source = null;
   let reconnectTimer = null;
   let reconnectAttempt = 0;
   let lane = Promise.resolve();
+  let revokeCallbackScheduled = false;
+  let revokeStopBarrier = Promise.resolve();
+  let revokeCallbackPromise = Promise.resolve();
 
   function reportError(error) {
     input.onError?.(error);
+  }
+
+  function cancelReconnect() {
+    if (reconnectTimer !== null) clearTimeoutFn(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  function isRevocationControl(target) {
+    if (target === null || typeof target !== "object" || Array.isArray(target)) return false;
+    try {
+      if (Object.getPrototypeOf(target) !== Object.prototype) return false;
+      const descriptors = Object.getOwnPropertyDescriptors(target);
+      const keys = Reflect.ownKeys(descriptors);
+      if (
+        keys.length !== 2 ||
+        !keys.includes("protocolVersion") ||
+        !keys.includes("type")
+      ) return false;
+      const protocolVersion = descriptors.protocolVersion;
+      const type = descriptors.type;
+      return (
+        protocolVersion?.enumerable === true &&
+        type?.enumerable === true &&
+        Object.hasOwn(protocolVersion, "value") &&
+        Object.hasOwn(type, "value") &&
+        protocolVersion.value === 2 &&
+        type.value === "device_revoked"
+      );
+    } catch {
+      return false;
+    }
   }
 
   function updateSync(patch) {
@@ -98,11 +134,16 @@ export function createSyncController(input) {
 
   async function ensureLocalBaseline(sequence) {
     const local = await snapshotSequence();
-    if (sequence > local) await saveMeta(cache, "localAppliedSequence", sequence);
+    if (stopped || revoked) return local;
+    if (sequence > local) {
+      await saveMeta(cache, "localAppliedSequence", sequence);
+      if (stopped || revoked) return local;
+    }
     return Math.max(local, sequence);
   }
 
   async function catchUp() {
+    if (stopped || revoked) return null;
     updateSync({ status: "syncing", error: null });
     try {
       let explicitAfter;
@@ -113,20 +154,32 @@ export function createSyncController(input) {
           ...(explicitAfter === undefined ? {} : { afterSequence: explicitAfter }),
           limit: 200
         });
+        if (stopped || revoked) return null;
         latestSequence = response.sync.latestSequence;
         acknowledgedSequence = response.sync.acknowledgedSequence;
         await ensureLocalBaseline(response.sync.requestedAfterSequence);
-        for (const target of response.events) await applyEvent(target);
+        if (stopped || revoked) return null;
+        for (const target of response.events) {
+          if (stopped || revoked) return null;
+          await applyEvent(target);
+          if (stopped || revoked) return null;
+        }
+        if (stopped || revoked) return null;
         if (response.events.length > 0) {
           const last = response.events.at(-1);
+          if (stopped || revoked) return null;
           await api.ackSyncEvent(last);
+          if (stopped || revoked) return null;
           acknowledgedSequence = last.eventSequence;
+          if (stopped || revoked) return null;
           channel?.postMessage({ type: "cache-updated", eventSequence: last.eventSequence });
         }
         if (response.nextAfterSequence === null) break;
         explicitAfter = response.nextAfterSequence;
       }
+      if (stopped || revoked) return null;
       const localAppliedSequence = await snapshotSequence();
+      if (stopped || revoked) return null;
       updateSync({
         status: "online",
         localAppliedSequence,
@@ -137,6 +190,7 @@ export function createSyncController(input) {
       reconnectAttempt = 0;
       return localAppliedSequence;
     } catch (error) {
+      if (stopped || revoked) return null;
       updateSync({ status: "degraded", error: errorProjection(error) });
       reportError(error);
       throw error;
@@ -144,9 +198,13 @@ export function createSyncController(input) {
   }
 
   async function applyRealtimeEvent(target) {
+    if (stopped || revoked) return null;
     await applyEvent(target);
+    if (stopped || revoked) return null;
     await api.ackSyncEvent(target);
+    if (stopped || revoked) return null;
     const localAppliedSequence = await snapshotSequence();
+    if (stopped || revoked) return null;
     updateSync({
       status: "online",
       localAppliedSequence,
@@ -160,13 +218,16 @@ export function createSyncController(input) {
       ),
       error: null
     });
+    if (stopped || revoked) return null;
     channel?.postMessage({ type: "cache-updated", eventSequence: target.eventSequence });
   }
 
   function enqueueRealtime(target) {
+    if (stopped || revoked) return lane;
     lane = lane
       .then(() => applyRealtimeEvent(target))
       .catch((error) => {
+        if (stopped || revoked) return;
         updateSync({ status: "degraded", error: errorProjection(error) });
         reportError(error);
         scheduleReconnect();
@@ -175,18 +236,21 @@ export function createSyncController(input) {
   }
 
   async function connect() {
-    if (stopped || typeof EventSourceClass !== "function") return null;
+    if (stopped || revoked || typeof EventSourceClass !== "function") return null;
     source?.close();
     const afterSequence = await snapshotSequence();
+    if (stopped || revoked) return null;
     const eventSource = new EventSourceClass(
       `/api/v1/events/stream?afterSequence=${encodeURIComponent(String(afterSequence))}`
     );
     source = eventSource;
     eventSource.onopen = () => {
+      if (stopped || revoked || source !== eventSource) return;
       reconnectAttempt = 0;
       updateSync({ status: "online", error: null });
     };
     eventSource.addEventListener("domain-event", (message) => {
+      if (stopped || revoked || source !== eventSource) return;
       try {
         const target = JSON.parse(message.data);
         if (
@@ -202,8 +266,32 @@ export function createSyncController(input) {
         scheduleReconnect();
       }
     });
+    eventSource.addEventListener("entry-revoked", (message) => {
+      let target;
+      try { target = JSON.parse(message.data); } catch { return undefined; }
+      if (!isRevocationControl(target)) return undefined;
+      if (revokeCallbackScheduled) return lane;
+      if (stopped || revoked || source !== eventSource) return undefined;
+      revoked = true;
+      stopped = true;
+      revokeCallbackScheduled = true;
+      cancelReconnect();
+      eventSource.close();
+      source = null;
+      const beforeRevokeCallback = lane;
+      revokeStopBarrier = beforeRevokeCallback.then(
+        () => undefined,
+        (error) => reportError(error)
+      );
+      revokeCallbackPromise = Promise.resolve()
+        .then(() => onEntryRevoked())
+        .catch((error) => reportError(error));
+      lane = Promise.all([revokeStopBarrier, revokeCallbackPromise])
+        .then(() => undefined);
+      return lane;
+    });
     eventSource.onerror = () => {
-      if (stopped || source !== eventSource) return;
+      if (stopped || revoked || source !== eventSource) return;
       eventSource.close();
       updateSync({ status: "offline", error: null });
       scheduleReconnect();
@@ -212,27 +300,36 @@ export function createSyncController(input) {
   }
 
   function scheduleReconnect() {
-    if (stopped || reconnectTimer !== null) return;
+    if (stopped || revoked || reconnectTimer !== null) return;
     const delay = nextReconnectDelay(reconnectAttempt);
     reconnectAttempt += 1;
     reconnectTimer = setTimeoutFn(() => {
       reconnectTimer = null;
       lane = lane
         .then(async () => {
+          if (stopped || revoked) return;
           await catchUp();
+          if (stopped || revoked) return;
           await connect();
         })
         .catch(() => scheduleReconnect());
     }, delay);
   }
 
-  async function start() {
+  function start() {
+    if (revoked) return lane;
     stopped = false;
-    await catchUp();
-    await connect();
+    lane = lane.then(async () => {
+      if (stopped || revoked) return;
+      await catchUp();
+      if (stopped || revoked) return;
+      await connect();
+    });
+    return lane;
   }
 
   function reconnectNow() {
+    if (stopped || revoked) return lane;
     if (reconnectTimer !== null) {
       clearTimeoutFn(reconnectTimer);
       reconnectTimer = null;
@@ -240,7 +337,9 @@ export function createSyncController(input) {
     source?.close();
     lane = lane
       .then(async () => {
+        if (stopped || revoked) return;
         await catchUp();
+        if (stopped || revoked) return;
         await connect();
       })
       .catch(() => scheduleReconnect());
@@ -251,13 +350,14 @@ export function createSyncController(input) {
     stopped = true;
     source?.close();
     source = null;
-    if (reconnectTimer !== null) clearTimeoutFn(reconnectTimer);
-    reconnectTimer = null;
+    cancelReconnect();
     channel?.close();
+    return revokeCallbackScheduled ? revokeStopBarrier : lane;
   }
 
   if (channel) {
     channel.onmessage = (message) => {
+      if (stopped || revoked) return;
       if (message.data?.type !== "cache-updated") return;
       const sequence = Number(message.data.eventSequence);
       if (!Number.isSafeInteger(sequence)) return;
@@ -267,7 +367,18 @@ export function createSyncController(input) {
           sequence
         )
       });
-      input.onCacheUpdated?.(sequence);
+      const beforeCallback = lane;
+      let callbackResult;
+      try {
+        callbackResult = input.onCacheUpdated?.(sequence);
+      } catch (error) {
+        reportError(error);
+        return;
+      }
+      const callbackPromise = Promise.resolve(callbackResult)
+        .catch((error) => reportError(error));
+      lane = Promise.all([beforeCallback, callbackPromise])
+        .then(() => undefined);
     };
   }
 

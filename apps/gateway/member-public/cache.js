@@ -138,9 +138,14 @@ function createIndexedTransaction(transaction) {
 }
 
 export async function openMemberCache(
-  databaseName = LEGACY_DATABASE_NAME,
+  databaseName,
   { indexedDBImpl = globalThis.indexedDB } = {}
 ) {
+  if (typeof databaseName !== "string" || databaseName.length === 0) {
+    const error = new Error("Member cache name is required.");
+    error.code = "MEMBER_CACHE_NAME_REQUIRED";
+    throw error;
+  }
   if (!indexedDBImpl) throw new Error("INDEXED_DB_UNAVAILABLE");
   const request = indexedDBImpl.open(databaseName, DATABASE_VERSION);
   request.addEventListener("upgradeneeded", () => {

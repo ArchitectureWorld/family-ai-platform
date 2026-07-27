@@ -67,6 +67,139 @@ describe("Member Web API client", () => {
     expect(headers.get("content-type")).toBe("application/json");
   });
 
+  it("reports the raw fetch Promise synchronously before awaiting transport settlement", async () => {
+    let resolveFetch!: (response: Response) => void;
+    const rawFetchPromise = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchImpl = vi.fn(() => rawFetchPromise);
+    const observed: Promise<Response>[] = [];
+    const api = createApiClient(fetchImpl as typeof fetch, {
+      onRequest(request) {
+        observed.push(request);
+      }
+    });
+
+    const request = api.listWorks();
+
+    expect(observed).toEqual([rawFetchPromise]);
+    resolveFetch(new Response(JSON.stringify({ conversations: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    await expect(request).resolves.toEqual({ conversations: [] });
+  });
+
+  it("tracks only raw transport settlement instead of response parsing", async () => {
+    let resolveBody!: (value: string) => void;
+    const body = new Promise<string>((resolve) => {
+      resolveBody = resolve;
+    });
+    const rawFetchPromise = Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => body.then((text) => JSON.parse(text))
+    } as Response);
+    const observedSettled = vi.fn();
+    const api = createApiClient(vi.fn(() => rawFetchPromise) as typeof fetch, {
+      onRequest(request) {
+        void request.then(observedSettled);
+      }
+    });
+
+    const request = api.listWorks();
+    await rawFetchPromise;
+    await Promise.resolve();
+
+    expect(observedSettled).toHaveBeenCalledOnce();
+    let requestSettled = false;
+    void request.finally(() => {
+      requestSettled = true;
+    });
+    await Promise.resolve();
+    expect(requestSettled).toBe(false);
+
+    resolveBody(JSON.stringify({ conversations: [] }));
+    await expect(request).resolves.toEqual({ conversations: [] });
+  });
+
+  it.each(["default", "request"])(
+    "merges default and request-local AbortSignals when the %s signal aborts",
+    async (source) => {
+      const defaultAbort = new AbortController();
+      const requestAbort = new AbortController();
+      let receivedSignal: AbortSignal | undefined;
+      const fetchImpl = vi.fn((_path: string, init: RequestInit) => {
+        receivedSignal = init.signal ?? undefined;
+        return new Promise<Response>(() => undefined);
+      });
+      const api = createApiClient(fetchImpl as typeof fetch, {
+        defaultSignal: defaultAbort.signal
+      });
+
+      void api.claimWebPairing(webPairingRequest, { signal: requestAbort.signal });
+      expect(receivedSignal).toBeDefined();
+      expect(receivedSignal).not.toBe(defaultAbort.signal);
+      expect(receivedSignal).not.toBe(requestAbort.signal);
+
+      (source === "default" ? defaultAbort : requestAbort).abort();
+      expect(receivedSignal?.aborted).toBe(true);
+    }
+  );
+
+  it("deduplicates an identical default/request signal and blocks an ignored transport response after abort", async () => {
+    let resolveFetch!: (response: Response) => void;
+    const rawFetch = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const abort = new AbortController();
+    const add = vi.spyOn(abort.signal, "addEventListener");
+    const remove = vi.spyOn(abort.signal, "removeEventListener");
+    const api = createApiClient(vi.fn(() => rawFetch) as typeof fetch, {
+      defaultSignal: abort.signal
+    });
+
+    const request = api.apiRequest("/ignored-abort", { signal: abort.signal });
+    abort.abort();
+    resolveFetch(Response.json({ mustNotContinue: true }));
+
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    expect(add).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("removes merged-signal listeners immediately on abort before an ignoring transport settles", async () => {
+    let resolveFetch!: (response: Response) => void;
+    const rawFetch = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const defaultAbort = new AbortController();
+    const requestAbort = new AbortController();
+    const defaultAdd = vi.spyOn(defaultAbort.signal, "addEventListener");
+    const defaultRemove = vi.spyOn(defaultAbort.signal, "removeEventListener");
+    const requestAdd = vi.spyOn(requestAbort.signal, "addEventListener");
+    const requestRemove = vi.spyOn(requestAbort.signal, "removeEventListener");
+    const api = createApiClient(vi.fn(() => rawFetch) as typeof fetch, {
+      defaultSignal: defaultAbort.signal
+    });
+
+    const request = api.apiRequest("/ignored-abort", {
+      signal: requestAbort.signal
+    });
+    defaultAbort.abort();
+    await Promise.resolve();
+
+    expect(defaultAdd).toHaveBeenCalledOnce();
+    expect(requestAdd).toHaveBeenCalledOnce();
+    expect(defaultRemove).toHaveBeenCalledOnce();
+    expect(requestRemove).toHaveBeenCalledOnce();
+
+    resolveFetch(Response.json({ mustNotContinue: true }));
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+    expect(defaultRemove).toHaveBeenCalledOnce();
+    expect(requestRemove).toHaveBeenCalledOnce();
+  });
+
   it("builds encoded Chat, Thread, Work and Sync requests", async () => {
     const paths: string[] = [];
     const fetchImpl = vi.fn(async (path: string) => {
