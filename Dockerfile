@@ -18,6 +18,7 @@ RUN printf '%s\n' \
     '.git' \
     '.github' \
     '.runtime' \
+    '.runtime-preview/' \
     'node_modules' \
     '**/node_modules' \
     '**/dist' \
@@ -53,7 +54,7 @@ COPY scripts scripts
 COPY packages packages
 COPY apps apps
 
-RUN npm run check \
+RUN npm run build \
   && npm prune --omit=dev
 
 FROM node:22.16.0-bookworm-slim AS runtime

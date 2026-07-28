@@ -179,12 +179,10 @@ describe("Agent management repository", () => {
       now: "2026-07-28T10:00:00.000Z"
     };
     const workers = [
-      new Worker(new URL("./fixtures/agentManagementMountWorker.ts", import.meta.url), {
-        execArgv: ["--import", "tsx"],
+      new Worker(new URL("./fixtures/agentManagementMountWorker.mjs", import.meta.url), {
         workerData: workerInput
       }),
-      new Worker(new URL("./fixtures/agentManagementMountWorker.ts", import.meta.url), {
-        execArgv: ["--import", "tsx"],
+      new Worker(new URL("./fixtures/agentManagementMountWorker.mjs", import.meta.url), {
         workerData: workerInput
       })
     ];

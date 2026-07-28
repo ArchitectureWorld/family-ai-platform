@@ -1,24 +1,17 @@
 import { parentPort, workerData } from "node:worker_threads";
-import { AgentManagementRepository } from "../../src/agentManagement.js";
-import { openGatewayDatabase } from "../../src/database.js";
-
-type WorkerInput = {
-  databasePath: string;
-  familyRef: string;
-  personRef: string;
-  agentRef: string;
-  now: string;
-};
+import { tsImport } from "tsx/esm/api";
+const { AgentManagementRepository } = await tsImport("../../src/agentManagement.ts", import.meta.url);
+const { openGatewayDatabase } = await tsImport("../../src/database.ts", import.meta.url);
 
 const port = parentPort;
 if (!port) throw new Error("Agent mount worker requires a parent port");
 
-const input = workerData as WorkerInput;
+const input = workerData;
 const db = openGatewayDatabase(input.databasePath);
 const repository = new AgentManagementRepository(db, () => new Date(input.now));
 
 port.postMessage({ type: "ready" });
-port.once("message", (message: unknown) => {
+port.once("message", (message) => {
   if (
     typeof message !== "object" ||
     message === null ||
@@ -37,11 +30,10 @@ port.once("message", (message: unknown) => {
     });
     port.postMessage({ type: "result", mount });
   } catch (error) {
-    const sqliteError = error as Error & { code?: string };
     port.postMessage({
       type: "error",
-      code: sqliteError.code ?? "UNKNOWN",
-      message: sqliteError.message
+      code: error?.code ?? "UNKNOWN",
+      message: error instanceof Error ? error.message : "unknown mount failure"
     });
   } finally {
     db.close();
