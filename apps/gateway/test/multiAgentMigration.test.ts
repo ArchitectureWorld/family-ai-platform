@@ -131,6 +131,49 @@ describe("Gateway V7 multi-Agent migration", () => {
        SELECT 'assignment:second', ?, 'agent:second', provider_profile_ref, 'active', ?, NULL
        FROM assistant_assignments WHERE person_ref = ? LIMIT 1`
     ).run(family.owner.personRef, appliedAt, family.owner.personRef)).not.toThrow();
+    expect(() => db!.prepare(
+      `INSERT INTO assistant_assignments
+       (assignment_ref, person_ref, agent_ref, provider_profile_ref, status, effective_from, effective_to)
+       SELECT 'assignment:second-duplicate', ?, 'agent:second', provider_profile_ref, 'active', ?, NULL
+       FROM assistant_assignments WHERE person_ref = ? LIMIT 1`
+    ).run(family.owner.personRef, appliedAt, family.owner.personRef)).toThrow(/UNIQUE constraint failed/);
+    const v7State = {
+      migration: db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get(),
+      snapshot: snapshotMigrationState(db),
+      mounts: db.prepare(
+        `SELECT assignment_ref, person_ref, agent_ref, provider_profile_ref, status,
+                effective_from, effective_to, is_default
+         FROM assistant_assignments ORDER BY assignment_ref`
+      ).all()
+    };
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    db.close();
+    db = openGatewayDatabase(databasePath);
+    expect({
+      migration: db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get(),
+      snapshot: snapshotMigrationState(db),
+      mounts: db.prepare(
+        `SELECT assignment_ref, person_ref, agent_ref, provider_profile_ref, status,
+                effective_from, effective_to, is_default
+         FROM assistant_assignments ORDER BY assignment_ref`
+      ).all()
+    }).toEqual(v7State);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+
+    new DomainEventStore(db, () => new Date("2026-07-28T00:01:00.000Z"));
+    expect(db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'domain_event_work_created'"
+    ).get()).toEqual({ name: "domain_event_work_created" });
+    new ChatWorkDomainRepository(db, () => new Date("2026-07-28T00:01:00.000Z"))
+      .createWorkConversation({
+        personRef: family.owner.personRef,
+        title: "V7 触发器恢复",
+        goal: "验证新的 Work 事件和 Outbox"
+      });
+    const recovered = snapshotMigrationState(db);
+    expect(recovered.events.slice(0, snapshot.events.length)).toEqual(snapshot.events);
+    expect(recovered.events).toHaveLength(snapshot.events.length + 1);
+    expect(recovered.outbox).toHaveLength(snapshot.outbox.length + 1);
     expect(db.pragma("foreign_key_check")).toEqual([]);
   }, 30_000);
 
