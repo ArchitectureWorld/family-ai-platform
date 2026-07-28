@@ -667,8 +667,18 @@ export class ChatWorkDomainRepository {
 
     const create = this.db.transaction(() => {
       const homeChat = this.db.prepare(
-        `SELECT thread_ref, agent_ref FROM home_chat_streams
-         WHERE home_chat_stream_ref = ? AND person_ref = ? AND status = 'active'`
+        `SELECT h.thread_ref, h.agent_ref
+         FROM home_chat_streams h
+         JOIN interaction_threads t
+           ON t.thread_ref = h.thread_ref
+          AND t.person_ref = h.person_ref
+          AND t.agent_ref = h.agent_ref
+          AND t.entry_audience = h.entry_audience
+          AND t.thread_kind = 'home_chat'
+         WHERE h.home_chat_stream_ref = ?
+           AND h.person_ref = ?
+           AND h.entry_audience = 'personal'
+           AND h.status = 'active'`
       ).get(
         input.source.homeChatStreamRef,
         input.personRef
@@ -755,29 +765,59 @@ export class ChatWorkDomainRepository {
     personRef: string,
     conversionRef: string
   ): ChatWorkConversionRecord | null {
-    const row = this.db.prepare(
-      `SELECT conversion_ref, home_chat_stream_ref, daily_episode_ref,
-              work_conversation_ref, decisions_json, open_questions_json, created_at
-       FROM chat_work_conversions
-       WHERE conversion_ref = ? AND person_ref = ?`
-    ).get(conversionRef, personRef) as Record<string, unknown> | undefined;
-    if (!row) return null;
+    const read = this.db.transaction(() => {
+      const row = this.db.prepare(
+        `SELECT c.conversion_ref, c.home_chat_stream_ref, c.daily_episode_ref,
+                c.work_conversation_ref, c.decisions_json, c.open_questions_json,
+                c.created_at, h.thread_ref AS source_thread_ref, h.agent_ref
+         FROM chat_work_conversions c
+         JOIN home_chat_streams h
+           ON h.home_chat_stream_ref = c.home_chat_stream_ref
+          AND h.person_ref = c.person_ref
+          AND h.entry_audience = 'personal'
+         JOIN interaction_threads source_thread
+           ON source_thread.thread_ref = h.thread_ref
+          AND source_thread.person_ref = h.person_ref
+          AND source_thread.agent_ref = h.agent_ref
+          AND source_thread.entry_audience = h.entry_audience
+          AND source_thread.thread_kind = 'home_chat'
+         JOIN work_conversations w
+           ON w.work_conversation_ref = c.work_conversation_ref
+          AND w.person_ref = c.person_ref
+          AND w.agent_ref = h.agent_ref
+          AND w.entry_audience = 'personal'
+         JOIN interaction_threads work_thread
+           ON work_thread.thread_ref = w.thread_ref
+          AND work_thread.person_ref = w.person_ref
+          AND work_thread.agent_ref = w.agent_ref
+          AND work_thread.entry_audience = w.entry_audience
+          AND work_thread.thread_kind = 'work'
+         WHERE c.conversion_ref = ? AND c.person_ref = ?`
+      ).get(conversionRef, personRef) as Record<string, unknown> | undefined;
+      if (!row) return null;
 
-    const messageRows = this.db.prepare(
-      `SELECT message_ref FROM chat_work_conversion_messages
-       WHERE conversion_ref = ?
-       ORDER BY source_order`
-    ).all(conversionRef) as Array<{ message_ref: string }>;
-    return {
-      conversionRef: String(row.conversion_ref),
-      homeChatStreamRef: String(row.home_chat_stream_ref),
-      dailyEpisodeRef: nullableString(row.daily_episode_ref),
-      sourceMessageRefs: messageRows.map((item) => String(item.message_ref)),
-      workConversationRef: String(row.work_conversation_ref),
-      createdAt: String(row.created_at),
-      decisions: parseStringArray(row.decisions_json),
-      openQuestions: parseStringArray(row.open_questions_json)
-    };
+      this.agentManagement.requireActiveMount(personRef, String(row.agent_ref));
+      const messageRows = this.db.prepare(
+        `SELECT conversion_message.message_ref
+         FROM chat_work_conversion_messages conversion_message
+         JOIN thread_messages message
+           ON message.message_ref = conversion_message.message_ref
+          AND message.thread_ref = ?
+         WHERE conversion_message.conversion_ref = ?
+         ORDER BY conversion_message.source_order`
+      ).all(row.source_thread_ref, conversionRef) as Array<{ message_ref: string }>;
+      return {
+        conversionRef: String(row.conversion_ref),
+        homeChatStreamRef: String(row.home_chat_stream_ref),
+        dailyEpisodeRef: nullableString(row.daily_episode_ref),
+        sourceMessageRefs: messageRows.map((item) => String(item.message_ref)),
+        workConversationRef: String(row.work_conversation_ref),
+        createdAt: String(row.created_at),
+        decisions: parseStringArray(row.decisions_json),
+        openQuestions: parseStringArray(row.open_questions_json)
+      };
+    });
+    return read();
   }
 
   saveWorkProgressSnapshot(input: {
@@ -829,19 +869,28 @@ export class ChatWorkDomainRepository {
     personRef: string,
     workConversationRef: string
   ): WorkProgressSnapshot | null {
-    const row = this.db.prepare(
-      `SELECT p.work_conversation_ref, p.status, p.phase_summary, w.agent_ref,
-              p.incomplete_tasks_json, p.risks_json, p.pending_confirmations_json,
-              p.deadlines_json, p.updated_at
-       FROM work_progress_snapshots p
-       JOIN work_conversations w
-         ON w.work_conversation_ref = p.work_conversation_ref
-       WHERE p.work_conversation_ref = ? AND w.person_ref = ?`
-    ).get(workConversationRef, personRef) as Record<string, unknown> | undefined;
-    if (row) {
+    const read = this.db.transaction(() => {
+      const row = this.db.prepare(
+        `SELECT p.work_conversation_ref, p.status, p.phase_summary, w.agent_ref,
+                p.incomplete_tasks_json, p.risks_json, p.pending_confirmations_json,
+                p.deadlines_json, p.updated_at
+         FROM work_progress_snapshots p
+         JOIN work_conversations w
+           ON w.work_conversation_ref = p.work_conversation_ref
+          AND w.entry_audience = 'personal'
+         JOIN interaction_threads t
+           ON t.thread_ref = w.thread_ref
+          AND t.person_ref = w.person_ref
+          AND t.agent_ref = w.agent_ref
+          AND t.entry_audience = w.entry_audience
+          AND t.thread_kind = 'work'
+         WHERE p.work_conversation_ref = ? AND w.person_ref = ?`
+      ).get(workConversationRef, personRef) as Record<string, unknown> | undefined;
+      if (!row) return null;
       this.agentManagement.requireActiveMount(personRef, String(row.agent_ref));
-    }
-    return row ? mapWorkProgressSnapshot(row) : null;
+      return mapWorkProgressSnapshot(row);
+    });
+    return read();
   }
 
   resolveThreadAgent(input: {
@@ -1003,9 +1052,16 @@ export class ChatWorkDomainRepository {
     workConversationRef: string
   ): string | null {
     const row = this.db.prepare(
-      `SELECT agent_ref FROM work_conversations
-       WHERE work_conversation_ref = ? AND person_ref = ?
-         AND entry_audience = 'personal'`
+      `SELECT w.agent_ref
+       FROM work_conversations w
+       JOIN interaction_threads t
+         ON t.thread_ref = w.thread_ref
+        AND t.person_ref = w.person_ref
+        AND t.agent_ref = w.agent_ref
+        AND t.entry_audience = w.entry_audience
+        AND t.thread_kind = 'work'
+       WHERE w.work_conversation_ref = ? AND w.person_ref = ?
+         AND w.entry_audience = 'personal'`
     ).get(workConversationRef, personRef) as { agent_ref: string } | undefined;
     if (!row) return null;
     const agentRef = String(row.agent_ref);

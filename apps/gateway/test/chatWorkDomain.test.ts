@@ -339,6 +339,150 @@ describe("Chat Work domain foundation", () => {
     expect(JSON.stringify(stored)).not.toContain("第二个来源消息");
   });
 
+  it("rejects mismatched or admin Chat authority and hides admin conversion state", () => {
+    const agents = new AgentManagementRepository(db, () => currentNow);
+    agents.reconcileRuntimeCatalog([{
+      agentRef: "agent:second",
+      displayName: "第二助理",
+      providerProfileRef: "provider-profile:second",
+      providerKind: "fake"
+    }]);
+    agents.mountMemberAgent({
+      familyRef,
+      personRef: ownerPersonRef,
+      agentRef: "agent:second"
+    });
+    const chat = repository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const source = repository.appendThreadMessage(
+      ownerMessageInput(chat.chat.threadRef, "owner-chat-authority-source", "权限来源")
+    );
+    const command = {
+      personRef: ownerPersonRef,
+      title: "权限隔离",
+      goal: "拒绝不一致来源",
+      source: {
+        homeChatStreamRef: chat.chat.homeChatStreamRef,
+        dailyEpisodeRef: chat.currentEpisode!.dailyEpisodeRef,
+        messageRefs: [source.messageRef]
+      },
+      decisions: [],
+      openQuestions: []
+    };
+
+    db.prepare(
+      "UPDATE home_chat_streams SET agent_ref = ? WHERE home_chat_stream_ref = ?"
+    ).run("agent:second", chat.chat.homeChatStreamRef);
+    expect(() => repository.createWorkFromChat(command)).toThrowError(
+      expect.objectContaining({ code: "CHAT_SOURCE_INVALID" })
+    );
+    db.prepare(
+      "UPDATE home_chat_streams SET agent_ref = ? WHERE home_chat_stream_ref = ?"
+    ).run("agent:personal-assistant", chat.chat.homeChatStreamRef);
+
+    const stored = repository.createWorkFromChat(command);
+    repository.saveWorkProgressSnapshot({
+      personRef: ownerPersonRef,
+      snapshot: {
+        workConversationRef: stored.conversation.workConversationRef,
+        status: "active",
+        phaseSummary: "仍属个人 audience",
+        incompleteTasks: [],
+        risks: [],
+        pendingConfirmations: [],
+        deadlines: [],
+        updatedAt: currentNow.toISOString()
+      }
+    });
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE interaction_threads
+         SET family_ref = ?, entry_audience = 'family_admin'
+         WHERE thread_ref IN (?, ?)`
+      ).run(familyRef, chat.chat.threadRef, stored.conversation.threadRef);
+      db.prepare(
+        `UPDATE home_chat_streams SET entry_audience = 'family_admin'
+         WHERE home_chat_stream_ref = ?`
+      ).run(chat.chat.homeChatStreamRef);
+      db.prepare(
+        `UPDATE work_conversations SET entry_audience = 'family_admin'
+         WHERE work_conversation_ref = ?`
+      ).run(stored.conversation.workConversationRef);
+    })();
+
+    expect(() => repository.createWorkFromChat(command)).toThrowError(
+      expect.objectContaining({ code: "CHAT_SOURCE_INVALID" })
+    );
+    expect(repository.getChatWorkConversion(
+      ownerPersonRef,
+      stored.conversion.conversionRef
+    )).toBeNull();
+    expect(repository.getWorkProgressSnapshot(
+      ownerPersonRef,
+      stored.conversation.workConversationRef
+    )).toBeNull();
+  });
+
+  it("blocks conversion and progress reads after unmount without deleting durable rows", () => {
+    const chat = repository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const source = repository.appendThreadMessage(
+      ownerMessageInput(chat.chat.threadRef, "owner-chat-unmount-source", "卸载后保留")
+    );
+    const stored = repository.createWorkFromChat({
+      personRef: ownerPersonRef,
+      title: "卸载隔离",
+      goal: "保留数据但拒绝访问",
+      source: {
+        homeChatStreamRef: chat.chat.homeChatStreamRef,
+        dailyEpisodeRef: chat.currentEpisode!.dailyEpisodeRef,
+        messageRefs: [source.messageRef]
+      },
+      decisions: [],
+      openQuestions: []
+    });
+    repository.saveWorkProgressSnapshot({
+      personRef: ownerPersonRef,
+      snapshot: {
+        workConversationRef: stored.conversation.workConversationRef,
+        status: "active",
+        phaseSummary: "持久化进度",
+        incompleteTasks: [],
+        risks: [],
+        pendingConfirmations: [],
+        deadlines: [],
+        updatedAt: currentNow.toISOString()
+      }
+    });
+
+    new AgentManagementRepository(db, () => currentNow).unmountMemberAgent({
+      familyRef,
+      personRef: ownerPersonRef,
+      agentRef: "agent:personal-assistant"
+    });
+
+    expect(() => repository.getChatWorkConversion(
+      ownerPersonRef,
+      stored.conversion.conversionRef
+    )).toThrowError(expect.objectContaining({ code: "AGENT_NOT_MOUNTED" }));
+    expect(() => repository.getWorkProgressSnapshot(
+      ownerPersonRef,
+      stored.conversation.workConversationRef
+    )).toThrowError(expect.objectContaining({ code: "AGENT_NOT_MOUNTED" }));
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM chat_work_conversions WHERE conversion_ref = ?"
+    ).get(stored.conversion.conversionRef)).toEqual({ count: 1 });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM work_progress_snapshots WHERE work_conversation_ref = ?"
+    ).get(stored.conversation.workConversationRef)).toEqual({ count: 1 });
+  });
+
   it("rolls back the Work when any Chat source reference is invalid", () => {
     const chat = repository.ensureHomeChat({
       personRef: ownerPersonRef,

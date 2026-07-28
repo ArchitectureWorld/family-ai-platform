@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AgentManagementRepository } from "../src/agentManagement.js";
 import { buildGatewayApp } from "../src/app.js";
 import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
 import { openGatewayDatabase, sha256 } from "../src/database.js";
@@ -435,6 +436,158 @@ describe("Chat Work HTTP route security", () => {
     expect(hiddenProgress.statusCode).toBe(404);
     expectPublicError(hiddenProgress, {
       code: "WORK_PROGRESS_NOT_FOUND",
+      category: "permission",
+      retryable: false
+    });
+  });
+
+  it("hides admin conversion state and blocks durable personal progress after unmount", async () => {
+    await app.close();
+    let db = openGatewayDatabase(databasePath);
+    const repository = new ChatWorkDomainRepository(db, () => testNow);
+    const chat = repository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-24"
+    });
+    const source = repository.appendThreadMessage({
+      personRef: ownerPersonRef,
+      threadRef: chat.chat.threadRef,
+      clientMessageId: "security-admin-source-0001",
+      actor: { type: "person", personRef: ownerPersonRef },
+      origin: {
+        deviceRef: ownerDeviceRef,
+        connectionRef: null,
+        entryAudience: "personal"
+      },
+      content: { type: "text", text: "不应从管理 audience 转换" },
+      occurredAt: testNow.toISOString()
+    });
+    const adminState = repository.createWorkFromChat({
+      personRef: ownerPersonRef,
+      title: "管理态转换",
+      goal: "验证 Personal API 不可见",
+      source: {
+        homeChatStreamRef: chat.chat.homeChatStreamRef,
+        dailyEpisodeRef: chat.currentEpisode!.dailyEpisodeRef,
+        messageRefs: [source.messageRef]
+      },
+      decisions: [],
+      openQuestions: []
+    });
+    repository.saveWorkProgressSnapshot({
+      personRef: ownerPersonRef,
+      snapshot: {
+        workConversationRef: adminState.conversation.workConversationRef,
+        status: "active",
+        phaseSummary: "管理态进度",
+        incompleteTasks: [],
+        risks: [],
+        pendingConfirmations: [],
+        deadlines: [],
+        updatedAt: testNow.toISOString()
+      }
+    });
+    const personalWork = repository.createWorkConversation({
+      personRef: ownerPersonRef,
+      agentRef: "agent:personal-assistant",
+      title: "卸载后不可见",
+      goal: "验证当前挂载"
+    });
+    repository.saveWorkProgressSnapshot({
+      personRef: ownerPersonRef,
+      snapshot: {
+        workConversationRef: personalWork.workConversationRef,
+        status: "active",
+        phaseSummary: "持久化个人进度",
+        incompleteTasks: [],
+        risks: [],
+        pendingConfirmations: [],
+        deadlines: [],
+        updatedAt: testNow.toISOString()
+      }
+    });
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE interaction_threads
+         SET family_ref = ?, entry_audience = 'family_admin'
+         WHERE thread_ref IN (?, ?)`
+      ).run(familyRef, chat.chat.threadRef, adminState.conversation.threadRef);
+      db.prepare(
+        `UPDATE home_chat_streams SET entry_audience = 'family_admin'
+         WHERE home_chat_stream_ref = ?`
+      ).run(chat.chat.homeChatStreamRef);
+      db.prepare(
+        `UPDATE work_conversations SET entry_audience = 'family_admin'
+         WHERE work_conversation_ref = ?`
+      ).run(adminState.conversation.workConversationRef);
+    })();
+    db.close();
+    await openApp();
+
+    const adminConversion = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/work-conversions",
+      headers: entryHeaders(personal),
+      payload: {
+        protocolVersion: 1,
+        title: "越权转换",
+        goal: "必须拒绝管理态来源",
+        source: {
+          homeChatStreamRef: chat.chat.homeChatStreamRef,
+          dailyEpisodeRef: chat.currentEpisode!.dailyEpisodeRef,
+          messageRefs: [source.messageRef]
+        },
+        decisions: [],
+        openQuestions: []
+      }
+    });
+    expect(adminConversion.statusCode).toBe(400);
+    expectPublicError(adminConversion, {
+      code: "CHAT_SOURCE_INVALID",
+      category: "validation",
+      retryable: false
+    });
+    const adminProgress = await app.inject({
+      method: "GET",
+      url: `/api/v1/work-conversations/${encodeURIComponent(
+        adminState.conversation.workConversationRef
+      )}/progress`,
+      headers: entryHeaders(personal)
+    });
+    expect(adminProgress.statusCode).toBe(404);
+    expectPublicError(adminProgress, {
+      code: "WORK_PROGRESS_NOT_FOUND",
+      category: "permission",
+      retryable: false
+    });
+
+    await app.close();
+    db = openGatewayDatabase(databasePath);
+    new AgentManagementRepository(db, () => testNow).unmountMemberAgent({
+      familyRef,
+      personRef: ownerPersonRef,
+      agentRef: "agent:personal-assistant"
+    });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM chat_work_conversions WHERE conversion_ref = ?"
+    ).get(adminState.conversion.conversionRef)).toEqual({ count: 1 });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM work_progress_snapshots WHERE work_conversation_ref = ?"
+    ).get(personalWork.workConversationRef)).toEqual({ count: 1 });
+    db.close();
+    await openApp();
+
+    const unmountedProgress = await app.inject({
+      method: "GET",
+      url: `/api/v1/work-conversations/${encodeURIComponent(
+        personalWork.workConversationRef
+      )}/progress`,
+      headers: entryHeaders(personal)
+    });
+    expect(unmountedProgress.statusCode).toBe(403);
+    expectPublicError(unmountedProgress, {
+      code: "AGENT_NOT_MOUNTED",
       category: "permission",
       retryable: false
     });
