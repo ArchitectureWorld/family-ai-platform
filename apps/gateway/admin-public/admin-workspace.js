@@ -199,23 +199,43 @@ export function createAdminWorkspace({
 
   async function selectWork(state, conversation) {
     if (state.busy || destroyed) return;
+    state.generation += 1;
+    const capture = {
+      agentRef: state.agentRef,
+      mode: state.mode,
+      threadRef: conversation.threadRef,
+      workConversationRef: conversation.workConversationRef,
+      generation: state.generation,
+      operation: {}
+    };
+    const isCurrent = () =>
+      !destroyed &&
+      panes.get(capture.agentRef) === state &&
+      state.agentRef === capture.agentRef &&
+      state.mode === capture.mode &&
+      state.generation === capture.generation &&
+      state.work.threadRef === capture.threadRef &&
+      state.work.workConversationRef === capture.workConversationRef &&
+      state.activeOperation === capture.operation;
+    state.activeOperation = capture.operation;
     state.busy = true;
     state.error = null;
-    state.work.workConversationRef = conversation.workConversationRef;
-    state.work.threadRef = conversation.threadRef;
+    state.work.workConversationRef = capture.workConversationRef;
+    state.work.threadRef = capture.threadRef;
     renderPane(state);
     try {
       const [messageResult, progressResult] = await Promise.all([
-        api.systemThreadMessages(conversation.threadRef),
-        api.systemWorkProgress(conversation.workConversationRef)
+        api.systemThreadMessages(capture.threadRef),
+        api.systemWorkProgress(capture.workConversationRef)
       ]);
-      if (destroyed) return;
+      if (!isCurrent()) return;
       state.work.messages = messageResult.messages;
       state.work.progress = progressResult.snapshot;
     } catch {
-      if (!destroyed) state.error = boundedError();
+      if (isCurrent()) state.error = boundedError();
     } finally {
-      if (!destroyed) {
+      if (!destroyed && state.activeOperation === capture.operation) {
+        state.activeOperation = null;
         state.busy = false;
         renderPane(state);
       }
@@ -224,6 +244,24 @@ export function createAdminWorkspace({
 
   async function createWork(state, title, goal) {
     if (state.busy || destroyed) return;
+    const capture = {
+      agentRef: state.agentRef,
+      mode: state.mode,
+      threadRef: state.work.threadRef,
+      workConversationRef: state.work.workConversationRef,
+      generation: state.generation,
+      operation: {}
+    };
+    const isCurrent = () =>
+      !destroyed &&
+      panes.get(capture.agentRef) === state &&
+      state.agentRef === capture.agentRef &&
+      state.mode === capture.mode &&
+      state.generation === capture.generation &&
+      state.work.threadRef === capture.threadRef &&
+      state.work.workConversationRef === capture.workConversationRef &&
+      state.activeOperation === capture.operation;
+    state.activeOperation = capture.operation;
     state.busy = true;
     state.error = null;
     renderPane(state);
@@ -232,7 +270,7 @@ export function createAdminWorkspace({
         state.agentRef,
         { title, goal }
       );
-      if (destroyed) return;
+      if (!isCurrent()) return;
       state.work.conversations = [
         response.conversation,
         ...state.work.conversations.filter((conversation) =>
@@ -244,10 +282,12 @@ export function createAdminWorkspace({
       state.work.threadRef = response.conversation.threadRef;
       state.work.messages = [];
       state.work.progress = null;
+      state.generation += 1;
     } catch {
-      if (!destroyed) state.error = boundedError();
+      if (isCurrent()) state.error = boundedError();
     } finally {
-      if (!destroyed) {
+      if (!destroyed && state.activeOperation === capture.operation) {
+        state.activeOperation = null;
         state.busy = false;
         renderPane(state);
       }

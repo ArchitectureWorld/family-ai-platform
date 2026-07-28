@@ -730,17 +730,13 @@ export function createAdminApi({
       if (!isRecord(value) || value.protocolVersion !== 1) {
         throw new AdminApiError("ADMIN_SYSTEM_MESSAGE_INVALID", 502);
       }
-      if (!MESSAGE_REF.test(value.assistantMessageRef ?? "")) {
-        throw new AdminApiError("ADMIN_SYSTEM_MESSAGE_INVALID", 502);
-      }
       return {
         protocolVersion: 1,
         message: safeMessage(
           value.message,
           normalizedThreadRef,
           "ADMIN_SYSTEM_MESSAGE_INVALID"
-        ),
-        assistantMessageRef: value.assistantMessageRef
+        )
       };
     },
 
