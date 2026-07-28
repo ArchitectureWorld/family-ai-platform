@@ -2,11 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { AgentManagementRepository } from "../src/agentManagement.js";
 import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
-import { ChatWorkProviderRepository } from "../src/chatWorkProvider.js";
 import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
 import { DomainEventStore } from "../src/domainEvents.js";
-import { FamilyDomainRepository } from "../src/familyDomain.js";
 
 const appliedAt = "2026-07-28T00:00:00.000Z";
 const openAtVersion = openGatewayDatabase as unknown as (
@@ -62,42 +61,123 @@ function createRealV6Database(databasePath: string) {
     .toEqual({ version: 6 });
   const now = new Date(appliedAt);
   new DomainEventStore(db, () => now);
-  const family = new FamilyDomainRepository(db).initializeFamily({
-    familyName: "V6 家庭",
-    ownerName: "V6 成员",
-    deviceName: "V6 设备",
-    deviceCredential: "v6-migration-device-credential"
-  });
-  const domain = new ChatWorkDomainRepository(db, () => now);
-  const chat = domain.ensureHomeChat({
-    personRef: family.owner.personRef,
-    timezone: "UTC",
-    localDate: "2026-07-28"
-  });
-  const message = domain.appendThreadMessage({
-    personRef: family.owner.personRef,
-    threadRef: chat.chat.threadRef,
-    clientMessageId: "v6-migration-message-0001",
-    actor: { type: "person", personRef: family.owner.personRef },
-    origin: { deviceRef: family.device.deviceRef, connectionRef: "v6", entryAudience: "personal" },
-    content: { type: "text", text: "保留 V6 消息。" },
-    occurredAt: appliedAt
-  });
-  const provider = new ChatWorkProviderRepository(db, () => now);
-  const turn = provider.prepareTurn({ personRef: family.owner.personRef, userMessage: message });
-  provider.commitTurnSucceeded({
-    personRef: family.owner.personRef,
-    userMessage: message,
-    turn,
-    output: { type: "text", text: "保留 V6 Provider 状态。" },
-    externalSessionRef: "external:v6-preserved",
-    completedAt: "2026-07-28T00:00:01.000Z"
-  });
-  domain.createWorkConversation({
-    personRef: family.owner.personRef,
-    title: "V6 Work",
-    goal: "验证真实 V6 迁移"
-  });
+  db.exec(`
+    INSERT INTO provider_profiles
+      (provider_profile_ref, provider_kind, display_name, created_at)
+    VALUES
+      ('provider-profile:fake-local', 'fake', 'V6 Provider', '${appliedAt}');
+    INSERT INTO agents(agent_ref, display_name, created_at)
+    VALUES
+      ('agent:family-manager', 'V6 家庭管家', '${appliedAt}'),
+      ('agent:personal-assistant', 'V6 个人助理', '${appliedAt}');
+    INSERT INTO families
+      (family_ref, display_name, status, created_at, updated_at)
+    VALUES
+      ('family:v6', 'V6 家庭', 'active', '${appliedAt}', '${appliedAt}');
+    INSERT INTO persons
+      (person_ref, display_name, status, created_at, updated_at)
+    VALUES
+      ('person:v6', 'V6 成员', 'active', '${appliedAt}', '${appliedAt}');
+    INSERT INTO family_memberships
+      (family_ref, person_ref, family_role, status, joined_at, updated_at)
+    VALUES
+      ('family:v6', 'person:v6', 'owner', 'active', '${appliedAt}', '${appliedAt}');
+    INSERT INTO managed_devices
+      (device_ref, display_name, terminal_type, platform, status, credential_hash,
+       created_at, updated_at, revoked_at)
+    VALUES
+      ('device:v6', 'V6 设备', 'computer', 'linux', 'active',
+       'v6-credential-hash', '${appliedAt}', '${appliedAt}', NULL);
+    INSERT INTO device_bindings
+      (device_binding_ref, device_ref, owner_scope, family_ref, person_ref,
+       status, bound_at, revoked_at)
+    VALUES
+      ('device-binding:v6', 'device:v6', 'person', 'family:v6', 'person:v6',
+       'active', '${appliedAt}', NULL);
+    INSERT INTO family_manager_assignments
+      (assignment_ref, family_ref, agent_ref, provider_profile_ref, status,
+       effective_from, effective_to)
+    VALUES
+      ('assignment:v6-manager', 'family:v6', 'agent:family-manager',
+       'provider-profile:fake-local', 'active', '${appliedAt}', NULL);
+    INSERT INTO assistant_assignments
+      (assignment_ref, person_ref, agent_ref, provider_profile_ref, status,
+       effective_from, effective_to)
+    VALUES
+      ('assignment:v6-assistant', 'person:v6', 'agent:personal-assistant',
+       'provider-profile:fake-local', 'active', '${appliedAt}', NULL);
+
+    INSERT INTO interaction_threads
+      (thread_ref, person_ref, thread_kind, last_sequence, created_at, last_active_at)
+    VALUES
+      ('thread:v6-home', 'person:v6', 'home_chat', 0, '${appliedAt}', '${appliedAt}');
+    INSERT INTO home_chat_streams
+      (home_chat_stream_ref, thread_ref, person_ref, status)
+    VALUES
+      ('home-chat:v6', 'thread:v6-home', 'person:v6', 'active');
+    INSERT INTO daily_episodes
+      (daily_episode_ref, home_chat_stream_ref, thread_ref, local_date, timezone,
+       started_at, ended_at, boundary_reason, archive_status, archive_version,
+       last_message_sequence)
+    VALUES
+      ('daily-episode:v6', 'home-chat:v6', 'thread:v6-home', '2026-07-28', 'UTC',
+       '${appliedAt}', NULL, 'initial', 'open', 0, 0);
+    INSERT INTO thread_messages
+      (message_ref, thread_ref, thread_sequence, client_message_id, actor_type,
+       actor_person_ref, actor_assignment_ref, actor_agent_ref,
+       actor_provider_profile_ref, actor_system_ref, origin_device_ref,
+       origin_connection_ref, entry_audience, content_type, content_text,
+       content_language, occurred_at, created_at)
+    VALUES
+      ('message:v6-user', 'thread:v6-home', 1, 'v6-migration-message-0001',
+       'person', 'person:v6', NULL, NULL, NULL, NULL, 'device:v6', 'v6',
+       'personal', 'text', '保留 V6 消息。', NULL, '${appliedAt}', '${appliedAt}'),
+      ('message:v6-assistant', 'thread:v6-home', 2, 'v6-provider-message-0001',
+       'assistant', NULL, 'assignment:v6-assistant', 'agent:personal-assistant',
+       'provider-profile:fake-local', NULL, NULL, NULL, 'personal', 'text',
+       '保留 V6 Provider 状态。', NULL, '2026-07-28T00:00:01.000Z',
+       '2026-07-28T00:00:01.000Z');
+    UPDATE interaction_threads
+      SET last_sequence = 2, last_active_at = '2026-07-28T00:00:01.000Z'
+      WHERE thread_ref = 'thread:v6-home';
+    UPDATE daily_episodes SET last_message_sequence = 2
+      WHERE daily_episode_ref = 'daily-episode:v6';
+    INSERT INTO thread_provider_contexts
+      (thread_ref, person_ref, provider_conversation_ref, assignment_ref,
+       agent_ref, provider_profile_ref, external_session_ref, created_at, updated_at)
+    VALUES
+      ('thread:v6-home', 'person:v6', 'provider-conversation:v6',
+       'assignment:v6-assistant', 'agent:personal-assistant',
+       'provider-profile:fake-local', 'external:v6-preserved',
+       '${appliedAt}', '2026-07-28T00:00:01.000Z');
+    INSERT INTO thread_provider_turns
+      (user_message_ref, thread_ref, invocation_ref, correlation_ref,
+       idempotency_key, assignment_ref, agent_ref, provider_profile_ref, status,
+       attempt_count, assistant_message_ref, error_json, requested_at, completed_at)
+    VALUES
+      ('message:v6-user', 'thread:v6-home', 'invocation:v6', 'correlation:v6',
+       'idempotency:v6', 'assignment:v6-assistant', 'agent:personal-assistant',
+       'provider-profile:fake-local', 'pending', 1, NULL, NULL, '${appliedAt}', NULL);
+    UPDATE thread_provider_turns
+      SET status = 'succeeded', assistant_message_ref = 'message:v6-assistant',
+          completed_at = '2026-07-28T00:00:01.000Z'
+      WHERE user_message_ref = 'message:v6-user';
+
+    INSERT INTO interaction_threads
+      (thread_ref, person_ref, thread_kind, last_sequence, created_at, last_active_at)
+    VALUES
+      ('thread:v6-work', 'person:v6', 'work', 0, '${appliedAt}', '${appliedAt}');
+    INSERT INTO work_conversations
+      (work_conversation_ref, thread_ref, person_ref, title, goal, summary,
+       status, archived_at)
+    VALUES
+      ('work:v6', 'thread:v6-work', 'person:v6', 'V6 Work',
+       '验证真实 V6 迁移', '', 'active', NULL);
+  `);
+  const family = {
+    owner: { personRef: "person:v6" },
+    device: { deviceRef: "device:v6" }
+  };
   const snapshot = snapshotMigrationState(db);
   db.close();
   return { family, snapshot };
@@ -119,6 +199,13 @@ describe("Gateway V7 multi-Agent migration", () => {
     const { family, snapshot } = createRealV6Database(databasePath);
 
     db = openGatewayDatabase(databasePath);
+    new AgentManagementRepository(db, () => new Date(appliedAt))
+      .reconcileRuntimeCatalog([{
+        agentRef: "agent:personal-assistant",
+        displayName: "V6 个人助理",
+        providerProfileRef: "provider-profile:fake-local",
+        providerKind: "fake"
+      }]);
     expect(snapshotMigrationState(db)).toEqual(snapshot);
     expect(db.prepare(
       "SELECT agent_ref, entry_audience FROM interaction_threads WHERE thread_kind = 'home_chat'"
