@@ -49,6 +49,23 @@ export function lanUrls(ip) {
   });
 }
 
+export function privateIpv4FromRoute(value) {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 1 ||
+    value[0] === null ||
+    typeof value[0] !== "object" ||
+    Array.isArray(value[0])
+  ) {
+    fail("LAN_ROUTE_INVALID");
+  }
+  try {
+    return validatePrivateIpv4(value[0].prefsrc);
+  } catch {
+    fail("LAN_ROUTE_INVALID");
+  }
+}
+
 export function renderLeafExtensions(ip) {
   const address = validatePrivateIpv4(ip);
   return [
@@ -156,6 +173,16 @@ function main(argv) {
   }
   if (argv.length === 2 && argv[0] === "--urls") {
     process.stdout.write(`${JSON.stringify(lanUrls(argv[1]))}\n`);
+    return;
+  }
+  if (argv.length === 2 && argv[0] === "--route-ip") {
+    let route;
+    try {
+      route = JSON.parse(argv[1]);
+    } catch {
+      fail("LAN_ROUTE_INVALID");
+    }
+    process.stdout.write(`${privateIpv4FromRoute(route)}\n`);
     return;
   }
   fail("LAN_LIBRARY_ARGUMENTS_INVALID");

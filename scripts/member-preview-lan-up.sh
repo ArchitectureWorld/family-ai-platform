@@ -113,10 +113,8 @@ write_8790_baseline
 curl --fail --silent --show-error --max-time 5 "$GATEWAY_ORIGIN/health" >/dev/null \
   || fail LAN_PREVIEW_GATEWAY_INVALID
 
-LAN_IP="$(
-  ip -4 route get 1.1.1.1 \
-    | awk '{ for (index = 1; index <= NF; index += 1) if ($index == "src") { print $(index + 1); exit } }'
-)"
+LAN_ROUTE="$(ip -json -4 route get 1.1.1.1)"
+LAN_IP="$(node "$LIBRARY" --route-ip "$LAN_ROUTE")"
 # Accepted private ranges include 10/8, 172.16/12 and 192.168/16.
 node "$LIBRARY" --urls "$LAN_IP" >/dev/null \
   || fail LAN_PREVIEW_PRIVATE_IP_INVALID

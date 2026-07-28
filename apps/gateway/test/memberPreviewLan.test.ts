@@ -16,7 +16,11 @@ async function library() {
 
 describe("LAN Preview pure boundary", () => {
   it("accepts only canonical RFC1918 IPv4 addresses and renders public URLs", async () => {
-    const { lanUrls, validatePrivateIpv4 } = await library();
+    const {
+      lanUrls,
+      privateIpv4FromRoute,
+      validatePrivateIpv4
+    } = await library();
     for (const value of ["10.0.0.1", "172.16.0.1", "172.31.255.254", "192.168.110.84"]) {
       expect(validatePrivateIpv4(value)).toBe(value);
     }
@@ -39,6 +43,20 @@ describe("LAN Preview pure boundary", () => {
       admin: "https://192.168.110.84:9443/admin/",
       member: "https://192.168.110.84:9443/member/"
     });
+    expect(privateIpv4FromRoute([{
+      dst: "1.1.1.1",
+      dev: "wlp2s0",
+      prefsrc: "192.168.110.84"
+    }])).toBe("192.168.110.84");
+    for (const route of [
+      [],
+      [{ dst: "1.1.1.1", prefsrc: "127.0.0.1" }],
+      [{ dst: "1.1.1.1", prefsrc: "192.168.110.84" }, { prefsrc: "10.0.0.2" }],
+      { prefsrc: "192.168.110.84" }
+    ]) {
+      expect(() => privateIpv4FromRoute(route), JSON.stringify(route))
+        .toThrow("LAN_ROUTE_INVALID");
+    }
   });
 
   it("renders an isolated Nginx config with a CA-only HTTP surface", async () => {
@@ -113,6 +131,7 @@ describe("LAN Preview lifecycle scripts", () => {
       "id -un",
       "fix/member-web-entry-hardening",
       "member-preview-up.sh",
+      "ip -json -4 route get",
       "192.168",
       "9080",
       "9443",
