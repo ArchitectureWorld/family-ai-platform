@@ -259,7 +259,8 @@ function workspaceApi() {
         threadRef,
         threadSequence: 2,
         content: { type: "text", text }
-      }
+      },
+      assistantMessageRef: "message:assistant-new"
     })),
     systemWorkProgress: vi.fn(async (workRef: string) => ({
       protocolVersion: 1,
@@ -279,6 +280,14 @@ function workspaceApi() {
 
 async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
 }
 
 describe("Admin sticky Agent monitor", () => {
@@ -396,6 +405,256 @@ describe("Admin Jarvis/Codex workspace panes", () => {
     expect(jarvisState.error).toBeNull();
     expect(codexState.error).toBeNull();
   });
+
+  it("reloads authoritative messages after send so the Agent reply appears only in the captured pane and channel", async () => {
+    const { createAdminWorkspace } = await workspaceModule();
+    const documentRef = new TestDocument();
+    const root = documentRef.createElement("section");
+    const api = workspaceApi();
+    const reads = new Map<string, number>();
+    api.systemThreadMessages.mockImplementation(async (threadRef: string) => {
+      const count = (reads.get(threadRef) ?? 0) + 1;
+      reads.set(threadRef, count);
+      if (threadRef === "thread:codex-chat" && count === 2) {
+        return {
+          protocolVersion: 1,
+          threadRef,
+          messages: [
+            {
+              messageRef: "message:codex-history",
+              threadRef,
+              threadSequence: 1,
+              content: { type: "text", text: "Codex 历史消息" }
+            },
+            {
+              messageRef: "message:codex-user",
+              threadRef,
+              threadSequence: 2,
+              content: { type: "text", text: "请修复入口" }
+            },
+            {
+              messageRef: "message:codex-agent",
+              threadRef,
+              threadSequence: 3,
+              content: { type: "text", text: "Codex Agent 回复" }
+            }
+          ]
+        };
+      }
+      return messages(threadRef);
+    });
+    const controller = createAdminWorkspace({
+      root,
+      api,
+      documentRef,
+      setIntervalImpl: () => 81,
+      clearIntervalImpl: vi.fn()
+    });
+    await controller.ready;
+
+    const [jarvisPane, codexPane] = root.querySelectorAll("[data-agent-pane]");
+    codexPane?.querySelector("[data-pane-draft]")?.input("请修复入口");
+    codexPane?.querySelector("[data-pane-send]")?.click();
+    await flush();
+    await flush();
+
+    expect(api.sendSystemThreadMessage).toHaveBeenCalledWith(
+      "thread:codex-chat",
+      "请修复入口"
+    );
+    expect(reads.get("thread:codex-chat")).toBe(2);
+    expect(codexPane?.textContent).toContain("Codex Agent 回复");
+    expect(jarvisPane?.textContent).not.toContain("Codex Agent 回复");
+    expect(controller.panes.get("agent:codex-cli").chat.messages)
+      .toHaveLength(3);
+    expect(controller.panes.get("agent:hermes-jarvis").chat.messages)
+      .toHaveLength(1);
+    controller.destroy();
+  });
+
+  it("drops a late Chat send result after that pane switches to Work without affecting the other Agent", async () => {
+    const { createAdminWorkspace } = await workspaceModule();
+    const documentRef = new TestDocument();
+    const root = documentRef.createElement("section");
+    const api = workspaceApi();
+    const pendingSend = deferred<{
+      protocolVersion: number;
+      message: {
+        messageRef: string;
+        threadRef: string;
+        threadSequence: number;
+        content: { type: string; text: string };
+      };
+      assistantMessageRef: string;
+    }>();
+    api.sendSystemThreadMessage.mockImplementationOnce(
+      async () => pendingSend.promise
+    );
+    const controller = createAdminWorkspace({
+      root,
+      api,
+      documentRef,
+      setIntervalImpl: () => 82,
+      clearIntervalImpl: vi.fn()
+    });
+    await controller.ready;
+
+    const [jarvisPane, codexPane] = root.querySelectorAll("[data-agent-pane]");
+    const detachedWorkSwitch =
+      codexPane?.querySelector('[data-pane-mode="work"]');
+    codexPane?.querySelector("[data-pane-draft]")?.input("迟到的 Chat");
+    codexPane?.querySelector("[data-pane-send]")?.click();
+    detachedWorkSwitch?.click();
+    expect(controller.panes.get("agent:codex-cli").mode).toBe("work");
+
+    pendingSend.resolve({
+      protocolVersion: 1,
+      message: {
+        messageRef: "message:late-user",
+        threadRef: "thread:codex-chat",
+        threadSequence: 2,
+        content: { type: "text", text: "迟到的 Chat" }
+      },
+      assistantMessageRef: "message:late-agent"
+    });
+    await flush();
+    await flush();
+
+    const codex = controller.panes.get("agent:codex-cli");
+    const jarvis = controller.panes.get("agent:hermes-jarvis");
+    expect(codex.mode).toBe("work");
+    expect(codex.chat.messages).toHaveLength(1);
+    expect(codex.chat.draft).toBe("迟到的 Chat");
+    expect(codex.work.messages).toHaveLength(1);
+    expect(jarvis.chat.messages).toHaveLength(1);
+    expect(jarvisPane?.textContent).not.toContain("迟到的 Chat");
+    expect(
+      api.systemThreadMessages.mock.calls
+        .filter(([threadRef]) => threadRef === "thread:codex-chat")
+    ).toHaveLength(1);
+    controller.destroy();
+  });
+
+  it("drops a late authoritative GET after the captured pane switches channel", async () => {
+    const { createAdminWorkspace } = await workspaceModule();
+    const documentRef = new TestDocument();
+    const root = documentRef.createElement("section");
+    const api = workspaceApi();
+    const latePage = deferred<ReturnType<typeof messages>>();
+    const reads = new Map<string, number>();
+    api.systemThreadMessages.mockImplementation(async (threadRef: string) => {
+      const count = (reads.get(threadRef) ?? 0) + 1;
+      reads.set(threadRef, count);
+      if (threadRef === "thread:codex-chat" && count === 2) {
+        return latePage.promise;
+      }
+      return messages(threadRef);
+    });
+    const controller = createAdminWorkspace({
+      root,
+      api,
+      documentRef,
+      setIntervalImpl: () => 83,
+      clearIntervalImpl: vi.fn()
+    });
+    await controller.ready;
+
+    const codexPane = root.querySelectorAll("[data-agent-pane]")[1];
+    const detachedWorkSwitch =
+      codexPane?.querySelector('[data-pane-mode="work"]');
+    codexPane?.querySelector("[data-pane-draft]")?.input("等待重拉");
+    codexPane?.querySelector("[data-pane-send]")?.click();
+    await flush();
+    expect(reads.get("thread:codex-chat")).toBe(2);
+    detachedWorkSwitch?.click();
+    latePage.resolve({
+      protocolVersion: 1,
+      threadRef: "thread:codex-chat",
+      messages: [{
+        messageRef: "message:late-get-agent",
+        threadRef: "thread:codex-chat",
+        threadSequence: 3,
+        content: { type: "text", text: "不应写入的迟到回复" }
+      }]
+    });
+    await flush();
+    await flush();
+
+    const codex = controller.panes.get("agent:codex-cli");
+    expect(codex.mode).toBe("work");
+    expect(codex.chat.messages).toHaveLength(1);
+    expect(codex.chat.draft).toBe("等待重拉");
+    expect(codex.work.messages).toHaveLength(1);
+    expect(codexPane?.textContent).not.toContain("不应写入的迟到回复");
+    controller.destroy();
+  });
+
+  it("refreshes only the captured Jarvis Work messages and progress after send", async () => {
+    const { createAdminWorkspace } = await workspaceModule();
+    const documentRef = new TestDocument();
+    const root = documentRef.createElement("section");
+    const api = workspaceApi();
+    const messageReads = new Map<string, number>();
+    const progressReads = new Map<string, number>();
+    api.systemThreadMessages.mockImplementation(async (threadRef: string) => {
+      const count = (messageReads.get(threadRef) ?? 0) + 1;
+      messageReads.set(threadRef, count);
+      if (threadRef === "thread:jarvis-work" && count === 2) {
+        return {
+          protocolVersion: 1,
+          threadRef,
+          messages: [{
+            messageRef: "message:jarvis-work-agent",
+            threadRef,
+            threadSequence: 3,
+            content: { type: "text", text: "Jarvis Work 回复" }
+          }]
+        };
+      }
+      return messages(threadRef);
+    });
+    api.systemWorkProgress.mockImplementation(async (workRef: string) => {
+      const count = (progressReads.get(workRef) ?? 0) + 1;
+      progressReads.set(workRef, count);
+      return {
+        protocolVersion: 1,
+        snapshot: {
+          workConversationRef: workRef,
+          status: "active",
+          phaseSummary: count === 1 ? "正在执行" : "回复后进度",
+          incompleteTasks: [],
+          risks: [],
+          pendingConfirmations: [],
+          deadlines: [],
+          updatedAt: "2026-07-28T10:00:03.000Z"
+        }
+      };
+    });
+    const controller = createAdminWorkspace({
+      root,
+      api,
+      documentRef,
+      setIntervalImpl: () => 84,
+      clearIntervalImpl: vi.fn()
+    });
+    await controller.ready;
+
+    const [jarvisPane, codexPane] = root.querySelectorAll("[data-agent-pane]");
+    jarvisPane?.querySelector('[data-pane-mode="work"]')?.click();
+    jarvisPane?.querySelector("[data-pane-draft]")?.input("更新 Work");
+    jarvisPane?.querySelector("[data-pane-send]")?.click();
+    await flush();
+    await flush();
+
+    expect(messageReads.get("thread:jarvis-work")).toBe(2);
+    expect(progressReads.get("work:jarvis-work")).toBe(2);
+    expect(jarvisPane?.textContent).toContain("Jarvis Work 回复");
+    expect(jarvisPane?.textContent).toContain("回复后进度");
+    expect(codexPane?.textContent).not.toContain("Jarvis Work 回复");
+    expect(controller.panes.get("agent:codex-cli").chat.messages)
+      .toHaveLength(1);
+    controller.destroy();
+  });
 });
 
 describe("Admin system workspace API client", () => {
@@ -424,7 +683,8 @@ describe("Admin system workspace API client", () => {
       if (url.endsWith("/messages") && init.method === "POST") {
         return Response.json({
           protocolVersion: 1,
-          message: messages("thread:jarvis-chat").messages[0]
+          message: messages("thread:jarvis-chat").messages[0],
+          assistantMessageRef: "message:jarvis-assistant"
         }, { status: 201 });
       }
       if (url.endsWith("/messages")) {
@@ -466,7 +726,13 @@ describe("Admin system workspace API client", () => {
       goal: "完成安全修复"
     });
     await api.systemThreadMessages("thread:jarvis-chat");
-    await api.sendSystemThreadMessage("thread:jarvis-chat", "继续");
+    expect(
+      await api.sendSystemThreadMessage("thread:jarvis-chat", "继续")
+    ).toEqual({
+      protocolVersion: 1,
+      message: messages("thread:jarvis-chat").messages[0],
+      assistantMessageRef: "message:jarvis-assistant"
+    });
     await api.systemWorkProgress("work:jarvis-work");
 
     expect(requests.map(({ url, init }) => [url, init.method])).toEqual([

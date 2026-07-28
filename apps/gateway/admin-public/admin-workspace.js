@@ -41,6 +41,8 @@ function createPaneState(agent) {
       draft: "",
       progress: null
     },
+    generation: 0,
+    activeOperation: null,
     busy: false,
     error: null
   };
@@ -256,21 +258,54 @@ export function createAdminWorkspace({
     const channel = activeChannel(state);
     const text = channel.draft.trim();
     if (state.busy || destroyed || text === "" || !channel.threadRef) return;
+    const capture = {
+      agentRef: state.agentRef,
+      mode: state.mode,
+      threadRef: channel.threadRef,
+      workConversationRef:
+        state.mode === "work" ? state.work.workConversationRef : null,
+      generation: state.generation,
+      channel,
+      operation: {}
+    };
+    const isCurrent = () =>
+      !destroyed &&
+      panes.get(capture.agentRef) === state &&
+      state.agentRef === capture.agentRef &&
+      state.mode === capture.mode &&
+      state.generation === capture.generation &&
+      activeChannel(state) === capture.channel &&
+      capture.channel.threadRef === capture.threadRef &&
+      state.activeOperation === capture.operation;
+    state.activeOperation = capture.operation;
     state.busy = true;
     state.error = null;
     renderPane(state);
     try {
-      const response = await api.sendSystemThreadMessage(
-        channel.threadRef,
+      await api.sendSystemThreadMessage(
+        capture.threadRef,
         text
       );
-      if (destroyed) return;
-      channel.messages = [...channel.messages, response.message];
-      channel.draft = "";
+      if (!isCurrent()) return;
+      const messageResult = await api.systemThreadMessages(
+        capture.threadRef
+      );
+      if (!isCurrent()) return;
+      let progressResult = null;
+      if (capture.mode === "work" && capture.workConversationRef) {
+        progressResult = await api.systemWorkProgress(
+          capture.workConversationRef
+        );
+        if (!isCurrent()) return;
+      }
+      capture.channel.messages = messageResult.messages;
+      capture.channel.draft = "";
+      if (progressResult) state.work.progress = progressResult.snapshot;
     } catch {
-      if (!destroyed) state.error = boundedError();
+      if (isCurrent()) state.error = boundedError();
     } finally {
-      if (!destroyed) {
+      if (!destroyed && state.activeOperation === capture.operation) {
+        state.activeOperation = null;
         state.busy = false;
         renderPane(state);
       }
@@ -376,6 +411,7 @@ export function createAdminWorkspace({
       });
       button.disabled = state.busy;
       button.addEventListener("click", () => {
+        if (state.mode !== mode) state.generation += 1;
         state.mode = mode;
         state.error = null;
         renderPane(state);
