@@ -354,7 +354,8 @@ describe("isolated Member Web Preview scripts", () => {
     }
   });
 
-  it("uses pidfd validation and signaling against a real OS-assigned listener", async () => {
+  // BuildKit has its own PID namespace; the host quality gate still runs this lifecycle test.
+  it.skipIf(process.env.FAMILY_AI_CONTAINER_BUILD === "1")("uses pidfd validation and signaling against a real OS-assigned listener", async () => {
     const match = read("scripts/member-preview-up.sh").match(
       /<<'PYTHON'\n([\s\S]*?)\nPYTHON/
     );
