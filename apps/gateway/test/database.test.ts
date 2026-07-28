@@ -27,7 +27,8 @@ const migrationVersions = [
   { version: 3 },
   { version: 4 },
   { version: 5 },
-  { version: 6 }
+  { version: 6 },
+  { version: 7 }
 ];
 
 const mobilePairingColumnNames = [
@@ -142,6 +143,74 @@ describe("gateway database", () => {
       CREATE TABLE entry_bindings (entry_binding_ref TEXT PRIMARY KEY);
       CREATE TABLE managed_devices (device_ref TEXT PRIMARY KEY);
       CREATE TABLE entry_sessions (entry_session_ref TEXT PRIMARY KEY);
+      CREATE TABLE agents (agent_ref TEXT PRIMARY KEY);
+      CREATE TABLE provider_profiles (provider_profile_ref TEXT PRIMARY KEY);
+      CREATE TABLE assistant_assignments (
+        assignment_ref TEXT PRIMARY KEY,
+        person_ref TEXT NOT NULL REFERENCES persons(person_ref),
+        agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+        provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+        status TEXT NOT NULL,
+        effective_from TEXT NOT NULL,
+        effective_to TEXT
+      );
+      CREATE UNIQUE INDEX person_active_assistant_assignment_idx
+        ON assistant_assignments(person_ref) WHERE status = 'active';
+      CREATE TABLE interaction_threads (
+        thread_ref TEXT PRIMARY KEY,
+        person_ref TEXT NOT NULL REFERENCES persons(person_ref),
+        thread_kind TEXT NOT NULL,
+        last_sequence INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        last_active_at TEXT NOT NULL
+      );
+      CREATE TABLE home_chat_streams (
+        home_chat_stream_ref TEXT PRIMARY KEY,
+        thread_ref TEXT NOT NULL UNIQUE REFERENCES interaction_threads(thread_ref),
+        person_ref TEXT NOT NULL REFERENCES persons(person_ref),
+        status TEXT NOT NULL
+      );
+      CREATE TABLE work_conversations (
+        work_conversation_ref TEXT PRIMARY KEY,
+        thread_ref TEXT NOT NULL UNIQUE REFERENCES interaction_threads(thread_ref),
+        person_ref TEXT NOT NULL REFERENCES persons(person_ref),
+        title TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        status TEXT NOT NULL,
+        archived_at TEXT
+      );
+      CREATE TABLE thread_messages (
+        message_ref TEXT PRIMARY KEY,
+        thread_ref TEXT NOT NULL REFERENCES interaction_threads(thread_ref)
+      );
+      CREATE TABLE thread_provider_contexts (
+        thread_ref TEXT PRIMARY KEY REFERENCES interaction_threads(thread_ref),
+        person_ref TEXT NOT NULL REFERENCES persons(person_ref),
+        provider_conversation_ref TEXT NOT NULL,
+        assignment_ref TEXT NOT NULL REFERENCES assistant_assignments(assignment_ref),
+        agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+        provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+        external_session_ref TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE thread_provider_turns (
+        user_message_ref TEXT PRIMARY KEY REFERENCES thread_messages(message_ref),
+        thread_ref TEXT NOT NULL REFERENCES interaction_threads(thread_ref),
+        invocation_ref TEXT NOT NULL,
+        correlation_ref TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        assignment_ref TEXT NOT NULL REFERENCES assistant_assignments(assignment_ref),
+        agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+        provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+        status TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL,
+        assistant_message_ref TEXT,
+        error_json TEXT,
+        requested_at TEXT NOT NULL,
+        completed_at TEXT
+      );
       CREATE TABLE mobile_pairing_codes (
         pairing_ref TEXT PRIMARY KEY,
         family_ref TEXT NOT NULL REFERENCES families(family_ref) ON DELETE CASCADE,
@@ -235,12 +304,12 @@ describe("gateway database", () => {
         applied_at TEXT NOT NULL
       );
       INSERT INTO schema_migrations(version, applied_at)
-      VALUES(7, '2026-07-25T00:00:00.000Z');
+      VALUES(8, '2026-07-25T00:00:00.000Z');
     `);
     legacy.close();
 
     expect(() => openGatewayDatabase(databasePath)).toThrow(
-      "Unsupported Gateway schema version: 7"
+      "Unsupported Gateway schema version: 8"
     );
   });
 
@@ -326,6 +395,7 @@ describe("gateway database", () => {
       "assignment_ref",
       "agent_ref",
       "provider_profile_ref",
+      "entry_audience",
       "external_session_ref",
       "created_at",
       "updated_at"
@@ -344,6 +414,7 @@ describe("gateway database", () => {
       "assignment_ref",
       "agent_ref",
       "provider_profile_ref",
+      "entry_audience",
       "status",
       "attempt_count",
       "assistant_message_ref",

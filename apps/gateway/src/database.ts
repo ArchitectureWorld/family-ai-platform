@@ -415,6 +415,263 @@ ALTER TABLE mobile_pairing_codes
   CHECK (web_replay_count >= 0);
 `;
 
+const MIGRATION_V7 = `
+ALTER TABLE assistant_assignments
+  ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1));
+UPDATE assistant_assignments SET is_default = 1 WHERE status = 'active';
+DROP INDEX person_active_assistant_assignment_idx;
+CREATE UNIQUE INDEX person_agent_active_assistant_assignment_idx
+  ON assistant_assignments(person_ref, agent_ref) WHERE status = 'active';
+CREATE UNIQUE INDEX person_default_assistant_assignment_idx
+  ON assistant_assignments(person_ref)
+  WHERE status = 'active' AND is_default = 1;
+
+CREATE TABLE agent_runtime_bindings (
+  agent_ref TEXT PRIMARY KEY REFERENCES agents(agent_ref),
+  provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+  status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE admin_agent_assignments (
+  assignment_ref TEXT PRIMARY KEY,
+  family_ref TEXT NOT NULL REFERENCES families(family_ref) ON DELETE CASCADE,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+  status TEXT NOT NULL CHECK (status IN ('active', 'ended')),
+  effective_from TEXT NOT NULL,
+  effective_to TEXT
+);
+CREATE UNIQUE INDEX admin_person_agent_active_assignment_idx
+  ON admin_agent_assignments(family_ref, person_ref, agent_ref)
+  WHERE status = 'active';
+
+CREATE TABLE interaction_threads_v7 (
+  thread_ref TEXT PRIMARY KEY,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  family_ref TEXT REFERENCES families(family_ref) ON DELETE CASCADE,
+  agent_ref TEXT NOT NULL DEFAULT 'agent:personal-assistant' REFERENCES agents(agent_ref),
+  entry_audience TEXT NOT NULL DEFAULT 'personal'
+    CHECK (entry_audience IN ('personal', 'family_admin')),
+  thread_kind TEXT NOT NULL CHECK (thread_kind IN ('home_chat', 'work')),
+  last_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_sequence >= 0),
+  created_at TEXT NOT NULL,
+  last_active_at TEXT NOT NULL,
+  CHECK (
+    (entry_audience = 'personal' AND family_ref IS NULL) OR
+    (entry_audience = 'family_admin' AND family_ref IS NOT NULL)
+  )
+);
+
+CREATE TABLE home_chat_streams_v7 (
+  home_chat_stream_ref TEXT PRIMARY KEY,
+  thread_ref TEXT NOT NULL UNIQUE REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  agent_ref TEXT NOT NULL DEFAULT 'agent:personal-assistant' REFERENCES agents(agent_ref),
+  entry_audience TEXT NOT NULL DEFAULT 'personal'
+    CHECK (entry_audience IN ('personal', 'family_admin')),
+  status TEXT NOT NULL CHECK (status IN ('active', 'suspended'))
+);
+
+CREATE TABLE work_conversations_v7 (
+  work_conversation_ref TEXT PRIMARY KEY,
+  thread_ref TEXT NOT NULL UNIQUE REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  agent_ref TEXT NOT NULL DEFAULT 'agent:personal-assistant' REFERENCES agents(agent_ref),
+  entry_audience TEXT NOT NULL DEFAULT 'personal'
+    CHECK (entry_audience IN ('personal', 'family_admin')),
+  title TEXT NOT NULL,
+  goal TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (
+    status IN ('active', 'paused', 'waiting_confirmation', 'completed', 'archived')
+  ),
+  archived_at TEXT,
+  CHECK (
+    (status = 'archived' AND archived_at IS NOT NULL) OR
+    (status <> 'archived' AND archived_at IS NULL)
+  )
+);
+
+CREATE TABLE thread_provider_contexts_v7 (
+  thread_ref TEXT PRIMARY KEY REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  provider_conversation_ref TEXT NOT NULL UNIQUE,
+  assignment_ref TEXT REFERENCES assistant_assignments(assignment_ref),
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+  entry_audience TEXT NOT NULL DEFAULT 'personal'
+    CHECK (entry_audience IN ('personal', 'family_admin')),
+  external_session_ref TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (
+    (entry_audience = 'personal' AND assignment_ref IS NOT NULL) OR
+    (entry_audience = 'family_admin' AND assignment_ref IS NULL)
+  )
+);
+
+CREATE TABLE thread_provider_turns_v7 (
+  user_message_ref TEXT PRIMARY KEY REFERENCES thread_messages(message_ref) ON DELETE CASCADE,
+  thread_ref TEXT NOT NULL REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  invocation_ref TEXT NOT NULL UNIQUE,
+  correlation_ref TEXT NOT NULL UNIQUE,
+  idempotency_key TEXT NOT NULL,
+  assignment_ref TEXT REFERENCES assistant_assignments(assignment_ref),
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  provider_profile_ref TEXT NOT NULL REFERENCES provider_profiles(provider_profile_ref),
+  entry_audience TEXT NOT NULL DEFAULT 'personal'
+    CHECK (entry_audience IN ('personal', 'family_admin')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+  attempt_count INTEGER NOT NULL CHECK (attempt_count > 0),
+  assistant_message_ref TEXT UNIQUE REFERENCES thread_messages(message_ref),
+  error_json TEXT,
+  requested_at TEXT NOT NULL,
+  completed_at TEXT,
+  CHECK (
+    (status = 'pending' AND assistant_message_ref IS NULL AND error_json IS NULL
+      AND completed_at IS NULL) OR
+    (status = 'succeeded' AND assistant_message_ref IS NOT NULL AND error_json IS NULL
+      AND completed_at IS NOT NULL) OR
+    (status = 'failed' AND assistant_message_ref IS NULL AND error_json IS NOT NULL
+      AND completed_at IS NOT NULL)
+  ),
+  CHECK (
+    (entry_audience = 'personal' AND assignment_ref IS NOT NULL) OR
+    (entry_audience = 'family_admin' AND assignment_ref IS NULL)
+  )
+);
+`;
+
+const MIGRATION_V7_RENAME_AND_INDEXES = `
+DROP TRIGGER IF EXISTS domain_event_home_chat_created;
+DROP TRIGGER IF EXISTS domain_event_work_created;
+DROP TRIGGER IF EXISTS domain_event_thread_message_created;
+DROP TRIGGER IF EXISTS domain_event_chat_work_created;
+DROP TRIGGER IF EXISTS domain_event_chat_work_source_message_added;
+DROP TRIGGER IF EXISTS domain_event_work_progress_inserted;
+DROP TRIGGER IF EXISTS domain_event_work_progress_updated;
+DROP TRIGGER IF EXISTS domain_event_provider_turn_failed;
+DROP TRIGGER IF EXISTS domain_event_provider_turn_succeeded;
+
+DROP TABLE thread_provider_turns;
+DROP TABLE thread_provider_contexts;
+DROP TABLE home_chat_streams;
+DROP TABLE work_conversations;
+DROP TABLE interaction_threads;
+
+ALTER TABLE interaction_threads_v7 RENAME TO interaction_threads;
+ALTER TABLE home_chat_streams_v7 RENAME TO home_chat_streams;
+ALTER TABLE work_conversations_v7 RENAME TO work_conversations;
+ALTER TABLE thread_provider_contexts_v7 RENAME TO thread_provider_contexts;
+ALTER TABLE thread_provider_turns_v7 RENAME TO thread_provider_turns;
+
+CREATE INDEX interaction_threads_person_kind_active_idx
+  ON interaction_threads(person_ref, thread_kind, last_active_at DESC);
+CREATE UNIQUE INDEX person_active_home_chat_idx
+  ON home_chat_streams(person_ref, agent_ref)
+  WHERE status = 'active' AND entry_audience = 'personal';
+CREATE INDEX work_conversations_person_status_idx
+  ON work_conversations(person_ref, status, work_conversation_ref);
+CREATE INDEX thread_provider_context_person_idx
+  ON thread_provider_contexts(person_ref, thread_ref);
+CREATE INDEX thread_provider_turns_thread_status_idx
+  ON thread_provider_turns(thread_ref, status, requested_at);
+`;
+
+interface ThreadAgentBackfill {
+  threadRef: string;
+  agentRef: string;
+}
+
+function resolveThreadAgentBackfills(db: GatewayDatabase): ThreadAgentBackfill[] {
+  const threads = db.prepare(
+    "SELECT thread_ref FROM interaction_threads ORDER BY thread_ref"
+  ).all() as Array<{ thread_ref: string }>;
+  const contextAgents = db.prepare(
+    "SELECT agent_ref FROM thread_provider_contexts WHERE thread_ref = ?"
+  );
+  const assignmentAgents = db.prepare(
+    `SELECT aa.agent_ref
+     FROM assistant_assignments aa
+     JOIN interaction_threads it ON it.person_ref = aa.person_ref
+     WHERE it.thread_ref = ? AND aa.status = 'active'`
+  );
+
+  return threads.map(({ thread_ref: threadRef }) => {
+    const fromContext = contextAgents.all(threadRef) as Array<{ agent_ref: string }>;
+    const candidates = fromContext.length > 0
+      ? fromContext
+      : assignmentAgents.all(threadRef) as Array<{ agent_ref: string }>;
+    if (candidates.length !== 1) {
+      throw new Error(`Cannot backfill Agent for ${threadRef}`);
+    }
+    return { threadRef, agentRef: candidates[0]!.agent_ref };
+  });
+}
+
+function applyMigrationV7(db: GatewayDatabase): void {
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      const threadAgents = resolveThreadAgentBackfills(db);
+      db.exec(MIGRATION_V7);
+      const insertThread = db.prepare(
+        `INSERT INTO interaction_threads_v7
+         (thread_ref, person_ref, family_ref, agent_ref, entry_audience, thread_kind,
+          last_sequence, created_at, last_active_at)
+         SELECT thread_ref, person_ref, NULL, ?, 'personal', thread_kind,
+                last_sequence, created_at, last_active_at
+         FROM interaction_threads WHERE thread_ref = ?`
+      );
+      for (const thread of threadAgents) {
+        insertThread.run(thread.agentRef, thread.threadRef);
+      }
+      db.exec(`
+        INSERT INTO home_chat_streams_v7
+          (home_chat_stream_ref, thread_ref, person_ref, agent_ref, entry_audience, status)
+        SELECT h.home_chat_stream_ref, h.thread_ref, h.person_ref, t.agent_ref,
+               t.entry_audience, h.status
+        FROM home_chat_streams h
+        JOIN interaction_threads_v7 t ON t.thread_ref = h.thread_ref;
+        INSERT INTO work_conversations_v7
+          (work_conversation_ref, thread_ref, person_ref, agent_ref, entry_audience,
+           title, goal, summary, status, archived_at)
+        SELECT w.work_conversation_ref, w.thread_ref, w.person_ref, t.agent_ref,
+               t.entry_audience, w.title, w.goal, w.summary, w.status, w.archived_at
+        FROM work_conversations w
+        JOIN interaction_threads_v7 t ON t.thread_ref = w.thread_ref;
+        INSERT INTO thread_provider_contexts_v7
+          (thread_ref, person_ref, provider_conversation_ref, assignment_ref, agent_ref,
+           provider_profile_ref, entry_audience, external_session_ref, created_at, updated_at)
+        SELECT c.thread_ref, c.person_ref, c.provider_conversation_ref, c.assignment_ref,
+               c.agent_ref, c.provider_profile_ref, t.entry_audience,
+               c.external_session_ref, c.created_at, c.updated_at
+        FROM thread_provider_contexts c
+        JOIN interaction_threads_v7 t ON t.thread_ref = c.thread_ref;
+        INSERT INTO thread_provider_turns_v7
+          (user_message_ref, thread_ref, invocation_ref, correlation_ref, idempotency_key,
+           assignment_ref, agent_ref, provider_profile_ref, entry_audience, status,
+           attempt_count, assistant_message_ref, error_json, requested_at, completed_at)
+        SELECT p.user_message_ref, p.thread_ref, p.invocation_ref, p.correlation_ref,
+               p.idempotency_key, p.assignment_ref, p.agent_ref, p.provider_profile_ref,
+               t.entry_audience, p.status, p.attempt_count, p.assistant_message_ref,
+               p.error_json, p.requested_at, p.completed_at
+        FROM thread_provider_turns p
+        JOIN interaction_threads_v7 t ON t.thread_ref = p.thread_ref;
+      `);
+      db.exec(MIGRATION_V7_RENAME_AND_INDEXES);
+      db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES(7, ?)").run(
+        new Date().toISOString()
+      );
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -436,7 +693,7 @@ function applyMigrations(db: GatewayDatabase): void {
   }
 
   let latest = latestMigrationVersion(db);
-  if (latest > 6 || latest < 1) {
+  if (latest > 7 || latest < 1) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
   if (latest === 1) {
@@ -484,7 +741,11 @@ function applyMigrations(db: GatewayDatabase): void {
     })();
     latest = 6;
   }
-  if (latest !== 6) {
+  if (latest === 6) {
+    applyMigrationV7(db);
+    latest = 7;
+  }
+  if (latest !== 7) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }

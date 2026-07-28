@@ -509,8 +509,8 @@ export class DomainEventStore {
     const coreVersion = this.db.prepare(
       "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
     ).get() as { version: number } | undefined;
-    if (coreVersion?.version !== 6) {
-      throw new Error(`Domain Event schema requires Gateway schema version 6, got ${String(coreVersion?.version)}`);
+    if (coreVersion?.version !== 7) {
+      throw new Error(`Domain Event schema requires Gateway schema version 7, got ${String(coreVersion?.version)}`);
     }
     this.db.transaction(() => {
       this.db.exec(DOMAIN_EVENT_SCHEMA);
