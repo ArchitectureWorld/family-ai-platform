@@ -252,6 +252,7 @@ member_handoff_scan "$ROOT_DIR"
 
 preview_scripts=(
   scripts/member-preview-up.sh
+  scripts/member-preview-admin-activate.mjs
   scripts/member-preview-admin.mjs
   scripts/member-preview-pair.mjs
   scripts/member-preview-revoke.mjs
