@@ -6,6 +6,7 @@ import {
   writeStoredAdminCredential
 } from "./admin-entry.js";
 import { AdminApiError, createAdminApi } from "./admin-api.js";
+import { renderMemberAgentControls } from "./admin-agents.js";
 import {
   createPairingDismissalGuard,
   memberHandoffUrl,
@@ -21,6 +22,9 @@ const states = new Map(
 const setupRoot = document.querySelector("#family-setup-root");
 const summaryRoot = document.querySelector("#family-summary");
 const membersRoot = document.querySelector("#member-management-root");
+const adminPageButtons = [...document.querySelectorAll("[data-admin-page]")];
+const membersPage = document.querySelector("#admin-members-page");
+const workspacePage = document.querySelector("#admin-workspace-page");
 const activationForm = document.querySelector("#admin-activation-form");
 const activationInput = document.querySelector("#admin-activation-code");
 const activationSubmit = document.querySelector("#admin-activation-submit");
@@ -34,6 +38,23 @@ export function showAdminState(name) {
   for (const [stateName, element] of states) {
     element.hidden = stateName !== name;
   }
+}
+
+function showAdminPage(name) {
+  if (!["members", "workspace"].includes(name)) {
+    throw new Error("ADMIN_PAGE_INVALID");
+  }
+  membersPage.hidden = name !== "members";
+  workspacePage.hidden = name !== "workspace";
+  for (const button of adminPageButtons) {
+    const selected = button.dataset.adminPage === name;
+    button.setAttribute("aria-selected", String(selected));
+    button.classList.toggle("is-selected", selected);
+  }
+}
+
+for (const button of adminPageButtons) {
+  button.addEventListener("click", () => showAdminPage(button.dataset.adminPage));
 }
 
 function element(name, { className, text, attributes = {} } = {}) {
@@ -171,8 +192,9 @@ function roleLabel(role) {
   ]).get(role) ?? "成员";
 }
 
-function memberCard(member, onPair) {
+function memberCard(member, api, onPair) {
   const card = element("article", { className: "member-card" });
+  const summary = element("div", { className: "member-card-summary" });
   const identity = element("div");
   identity.append(
     element("h3", { text: member.displayName }),
@@ -189,7 +211,19 @@ function memberCard(member, onPair) {
     }
   });
   pair.addEventListener("click", onPair);
-  card.append(identity, pair);
+  summary.append(identity, pair);
+  const agentRoot = element("div", {
+    className: "member-agent-root",
+    attributes: {
+      "data-member-agent-ref": member.personRef
+    }
+  });
+  card.append(summary, agentRoot);
+  renderMemberAgentControls({
+    root: agentRoot,
+    personRef: member.personRef,
+    api
+  });
   return card;
 }
 
@@ -439,7 +473,7 @@ async function renderManagement(credential, persistenceWarning = "") {
     attributes: { "aria-label": "家庭成员" }
   });
   for (const member of memberResult.members) {
-    list.append(memberCard(member, () => openPairing(api, member)));
+    list.append(memberCard(member, api, () => openPairing(api, member)));
   }
 
   const form = element("form", { className: "member-form" });
@@ -487,6 +521,7 @@ async function renderManagement(credential, persistenceWarning = "") {
     element("h3", { className: "section-title", text: "添加成员" }),
     form
   );
+  showAdminPage("members");
   showAdminState("management");
 }
 

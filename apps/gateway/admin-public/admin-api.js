@@ -5,6 +5,20 @@ const PERSON_REF = /^person:[a-zA-Z0-9][a-zA-Z0-9._:-]{1,126}$/u;
 const PAIRING_REF = /^pairing:[a-z0-9][a-z0-9._:-]{1,126}$/u;
 const PAIRING_CODE = /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/u;
 const ACTIVATION_CODE = /^[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5}$/u;
+const AGENT_REF = /^agent:[a-z0-9][a-z0-9._:-]{1,126}$/u;
+const AGENT_STATUS_LABELS = new Map([
+  ["idle", "空闲"],
+  ["working", "工作中"],
+  ["problem", "有问题"]
+]);
+const AGENT_PUBLIC_PROBLEMS = new Set([
+  null,
+  "Agent 尚未配置。",
+  "Agent 当前无法连接。",
+  "Agent 状态尚未初始化。",
+  "Agent 任务执行超时。",
+  "Agent 最近一次调用失败。"
+]);
 
 export class AdminApiError extends Error {
   constructor(code, status) {
@@ -45,6 +59,113 @@ async function responseJson(response) {
   } catch {
     throw new AdminApiError("ADMIN_API_RESPONSE_INVALID", 502);
   }
+}
+
+function requireEntryCredential(credential) {
+  if (credential?.kind !== "entry") {
+    throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
+  }
+}
+
+function normalizePersonRef(value) {
+  if (typeof value !== "string" || !PERSON_REF.test(value)) {
+    throw new AdminApiError("ADMIN_PERSON_REF_INVALID", 400);
+  }
+  return value;
+}
+
+function normalizeAgentRef(value) {
+  if (typeof value !== "string" || !AGENT_REF.test(value)) {
+    throw new AdminApiError("ADMIN_AGENT_REF_INVALID", 400);
+  }
+  return value;
+}
+
+function validTimestamp(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function safeAgentStatus(value, code) {
+  if (
+    !isRecord(value) ||
+    !AGENT_REF.test(value.agentRef ?? "") ||
+    typeof value.displayName !== "string" ||
+    value.displayName.trim() === "" ||
+    AGENT_STATUS_LABELS.get(value.status) !== value.statusLabel
+  ) {
+    throw new AdminApiError(code, 502);
+  }
+  return {
+    agentRef: value.agentRef,
+    displayName: value.displayName,
+    status: value.status,
+    statusLabel: value.statusLabel
+  };
+}
+
+function validateAgentCatalog(value) {
+  if (
+    !isRecord(value) ||
+    value.protocolVersion !== 1 ||
+    !Array.isArray(value.agents) ||
+    value.agents.length > 500
+  ) {
+    throw new AdminApiError("ADMIN_AGENTS_INVALID", 502);
+  }
+  const agents = value.agents.map((agent) => {
+    const safe = safeAgentStatus(agent, "ADMIN_AGENTS_INVALID");
+    if (
+      !Number.isInteger(agent.activeTurnCount) ||
+      agent.activeTurnCount < 0 ||
+      !validTimestamp(agent.lastCheckedAt) ||
+      !AGENT_PUBLIC_PROBLEMS.has(agent.publicProblem)
+    ) {
+      throw new AdminApiError("ADMIN_AGENTS_INVALID", 502);
+    }
+    return {
+      ...safe,
+      activeTurnCount: agent.activeTurnCount,
+      lastCheckedAt: agent.lastCheckedAt,
+      publicProblem: agent.publicProblem
+    };
+  });
+  return { protocolVersion: 1, agents };
+}
+
+function validateMemberMounts(value, personRef) {
+  if (
+    !isRecord(value) ||
+    value.protocolVersion !== 1 ||
+    value.personRef !== personRef ||
+    !Array.isArray(value.mountedAgents) ||
+    value.mountedAgents.length > 100 ||
+    !(value.defaultAgentRef === null || AGENT_REF.test(value.defaultAgentRef ?? ""))
+  ) {
+    throw new AdminApiError("ADMIN_AGENT_MOUNTS_INVALID", 502);
+  }
+  const seen = new Set();
+  const mountedAgents = value.mountedAgents.map((mount) => {
+    const safe = safeAgentStatus(mount, "ADMIN_AGENT_MOUNTS_INVALID");
+    if (typeof mount.isDefault !== "boolean" || seen.has(safe.agentRef)) {
+      throw new AdminApiError("ADMIN_AGENT_MOUNTS_INVALID", 502);
+    }
+    seen.add(safe.agentRef);
+    return { ...safe, isDefault: mount.isDefault };
+  });
+  const defaults = mountedAgents.filter((mount) => mount.isDefault);
+  if (
+    (value.defaultAgentRef === null && defaults.length !== 0) ||
+    (value.defaultAgentRef !== null &&
+      (defaults.length !== 1 || defaults[0].agentRef !== value.defaultAgentRef))
+  ) {
+    throw new AdminApiError("ADMIN_AGENT_MOUNTS_INVALID", 502);
+  }
+  return {
+    protocolVersion: 1,
+    personRef,
+    defaultAgentRef: value.defaultAgentRef,
+    mountedAgents
+  };
 }
 
 export function normalizeDisplayName(value) {
@@ -247,6 +368,63 @@ export function createAdminApi({ fetchImpl = fetch, credential = null } = {}) {
         throw new AdminApiError("ADMIN_MEMBER_INVALID", 502);
       }
       return value;
+    },
+
+    async agents() {
+      requireEntryCredential(validatedCredential);
+      return validateAgentCatalog(await request("/api/v1/admin/agents"));
+    },
+
+    async memberAgentMounts(personRef) {
+      requireEntryCredential(validatedCredential);
+      const normalizedPersonRef = normalizePersonRef(personRef);
+      const value = await request(
+        `/api/v1/admin/members/${encodeURIComponent(normalizedPersonRef)}/agent-mounts`
+      );
+      return validateMemberMounts(value, normalizedPersonRef);
+    },
+
+    async mountAgent(personRef, agentRef) {
+      requireEntryCredential(validatedCredential);
+      const normalizedPersonRef = normalizePersonRef(personRef);
+      const normalizedAgentRef = normalizeAgentRef(agentRef);
+      const value = await request(
+        `/api/v1/admin/members/${encodeURIComponent(normalizedPersonRef)}/agent-mounts`,
+        {
+          method: "POST",
+          expectedStatus: 201,
+          body: { agentRef: normalizedAgentRef }
+        }
+      );
+      return validateMemberMounts(value, normalizedPersonRef);
+    },
+
+    async unmountAgent(personRef, agentRef) {
+      requireEntryCredential(validatedCredential);
+      const normalizedPersonRef = normalizePersonRef(personRef);
+      const normalizedAgentRef = normalizeAgentRef(agentRef);
+      const value = await request(
+        `/api/v1/admin/members/${encodeURIComponent(normalizedPersonRef)}` +
+          `/agent-mounts/${encodeURIComponent(normalizedAgentRef)}`,
+        { method: "DELETE" }
+      );
+      return validateMemberMounts(value, normalizedPersonRef);
+    },
+
+    async setDefaultAgent(personRef, agentRefOrNull) {
+      requireEntryCredential(validatedCredential);
+      const normalizedPersonRef = normalizePersonRef(personRef);
+      const normalizedAgentRef = agentRefOrNull === null
+        ? null
+        : normalizeAgentRef(agentRefOrNull);
+      const value = await request(
+        `/api/v1/admin/members/${encodeURIComponent(normalizedPersonRef)}/default-agent`,
+        {
+          method: "PUT",
+          body: { agentRef: normalizedAgentRef }
+        }
+      );
+      return validateMemberMounts(value, normalizedPersonRef);
     },
 
     async createPairing(personRef) {

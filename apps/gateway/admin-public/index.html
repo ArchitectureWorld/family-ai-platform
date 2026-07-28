@@ -32,10 +32,31 @@
       </section>
 
       <section class="state-card" data-state="management" hidden>
-        <p class="eyebrow">家庭控制台</p>
-        <h2>成员与配对</h2>
-        <div id="family-summary"></div>
-        <div id="member-management-root"></div>
+        <nav class="admin-page-navigation" aria-label="管理员页面">
+          <button
+            class="admin-page-button is-selected"
+            data-admin-page="members"
+            type="button"
+            aria-selected="true"
+          >
+            成员与 Agent 配置
+          </button>
+          <button
+            class="admin-page-button"
+            data-admin-page="workspace"
+            type="button"
+            aria-selected="false"
+          >
+            系统工作台
+          </button>
+        </nav>
+        <div id="admin-members-page">
+          <p class="eyebrow">家庭控制台</p>
+          <h2>成员与 Agent 配置</h2>
+          <div id="family-summary"></div>
+          <div id="member-management-root"></div>
+        </div>
+        <div id="admin-workspace-page" hidden></div>
       </section>
 
       <section class="state-card recovery" data-state="recovery-required" hidden>

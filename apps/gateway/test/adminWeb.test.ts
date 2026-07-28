@@ -56,12 +56,19 @@ describe("development Admin Web product entry", () => {
       expect(admin.body).toContain('placeholder="XXXXX-XXXXX"');
       expect(admin.body).toContain("激活管理员设备");
       expect(admin.body).not.toContain(token);
+      expect(admin.body).toContain('data-admin-page="members"');
+      expect(admin.body).toContain('data-admin-page="workspace"');
+      expect(admin.body).toContain('id="admin-members-page"');
+      expect(admin.body).toContain('id="admin-workspace-page"');
+      expect(admin.body).not.toContain("Provider Session");
+      expect(admin.body).not.toContain("消息正文");
 
       for (const [path, contentType] of [
         ["/admin/assets/admin.css", "text/css"],
         ["/admin/assets/admin.js", "text/javascript"],
         ["/admin/assets/admin-entry.js", "text/javascript"],
         ["/admin/assets/admin-api.js", "text/javascript"],
+        ["/admin/assets/admin-agents.js", "text/javascript"],
         ["/admin/assets/admin-pairing.js", "text/javascript"],
         ["/admin/assets/qr.js", "text/javascript"],
         ["/admin/assets/qr-v10.mjs", "text/javascript"]
@@ -93,6 +100,7 @@ describe("development Admin Web product entry", () => {
           "/admin/assets/admin.js",
           "/admin/assets/admin-entry.js",
           "/admin/assets/admin-api.js",
+          "/admin/assets/admin-agents.js",
           "/admin/assets/admin-pairing.js",
           "/admin/assets/qr.js",
           "/admin/assets/qr-v10.mjs"

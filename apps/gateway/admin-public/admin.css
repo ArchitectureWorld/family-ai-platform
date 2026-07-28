@@ -198,15 +198,184 @@ button:disabled {
   gap: 12px;
 }
 
-.member-card {
+.admin-page-navigation {
   display: flex;
-  gap: 18px;
-  align-items: center;
-  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 34px;
+  padding: 5px;
+  border-radius: 15px;
+  background: #edf2ee;
+}
+
+.admin-page-button {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 11px;
+  color: #526158;
+  background: transparent;
+  font: inherit;
+  font-weight: 740;
+  cursor: pointer;
+}
+
+.admin-page-button.is-selected {
+  color: #17472f;
+  background: #fff;
+  box-shadow: 0 3px 12px rgb(25 67 43 / 10%);
+}
+
+.member-card {
   padding: 18px;
   border: 1px solid #dce5df;
   border-radius: 18px;
   background: #f9fbf9;
+}
+
+.member-card-summary {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.member-agent-controls {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e1e8e3;
+}
+
+.member-agent-title {
+  margin: 0 0 10px;
+  color: #344c3e;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+}
+
+.agent-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.agent-chip {
+  position: relative;
+  min-width: 150px;
+  padding: 12px 34px 11px 13px;
+  border: 1px solid #cddbd1;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.agent-chip-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  align-items: center;
+}
+
+.agent-status,
+.agent-default-badge {
+  font-size: 0.74rem;
+  font-weight: 720;
+}
+
+.agent-status {
+  color: #5e7166;
+}
+
+.agent-status-working {
+  border-color: #95c3a6;
+  background: #f3faf5;
+}
+
+.agent-status-problem {
+  border-color: #dfb8b1;
+  background: #fff7f5;
+}
+
+.agent-status-problem .agent-status {
+  color: #a34235;
+}
+
+.agent-default-badge {
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #245c42;
+  background: #e2f0e6;
+}
+
+.agent-remove-button {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  background: #d84b42;
+  box-shadow: 0 2px 7px rgb(111 33 28 / 24%);
+  font: 700 17px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+  cursor: pointer;
+}
+
+.agent-remove-button:focus-visible {
+  outline: 3px solid rgb(216 75 66 / 30%);
+  outline-offset: 2px;
+}
+
+.agent-empty {
+  margin: 0;
+  color: #6a776f;
+  font-size: 0.86rem;
+}
+
+.agent-control-row {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.agent-select-label {
+  display: grid;
+  flex: 1;
+  gap: 6px;
+  color: #52655a;
+  font-size: 0.78rem;
+  font-weight: 720;
+}
+
+.agent-select-label select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid #c8d5cc;
+  border-radius: 11px;
+  color: #17251d;
+  background: #fff;
+  font: inherit;
+}
+
+.agent-reuse-note {
+  margin: 14px 0 0;
+  color: #69766e;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.agent-feedback {
+  display: flex;
+  min-height: 1.4em;
+  gap: 8px;
+  align-items: center;
+  margin-top: 7px;
+  color: #874c39;
+  font-size: 0.82rem;
 }
 
 .member-card h3,
@@ -372,7 +541,17 @@ button:disabled {
     grid-column: auto;
   }
 
-  .member-card {
+  .member-card-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agent-control-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-page-navigation {
     align-items: stretch;
     flex-direction: column;
   }
