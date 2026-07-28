@@ -209,7 +209,11 @@ export class AgentManagementRepository {
     this.db.transaction(() => {
       this.requireActiveMember(input.familyRef, input.personRef);
       const runtime = this.runtimeForAgent(input.agentRef);
-      this.requireActiveMount(input.personRef, input.agentRef, runtime.providerProfileRef);
+      this.requireActiveRuntimeMount(
+        input.personRef,
+        input.agentRef,
+        runtime.providerProfileRef
+      );
       this.db.prepare(
         `UPDATE assistant_assignments
          SET status = ?, effective_to = ?, is_default = 0
@@ -230,7 +234,11 @@ export class AgentManagementRepository {
       this.requireActiveMember(input.familyRef, input.personRef);
       if (input.agentRef !== null) {
         const runtime = this.runtimeForAgent(input.agentRef);
-        this.requireActiveMount(input.personRef, input.agentRef, runtime.providerProfileRef);
+        this.requireActiveRuntimeMount(
+          input.personRef,
+          input.agentRef,
+          runtime.providerProfileRef
+        );
       }
       this.db.prepare(
         "UPDATE assistant_assignments SET is_default = 0 WHERE person_ref = ? AND status = ?"
@@ -302,7 +310,7 @@ export class AgentManagementRepository {
     return { providerProfileRef: String(runtime.provider_profile_ref), displayName: String(runtime.display_name) };
   }
 
-  private requireActiveMount(
+  private requireActiveRuntimeMount(
     personRef: string,
     agentRef: string,
     providerProfileRef: string
