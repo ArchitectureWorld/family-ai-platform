@@ -210,7 +210,7 @@ export class ChatWorkMessageService {
           currentMessageRef: message.messageRef,
           externalSessionRef: turn.externalSessionRef
         }),
-        timeoutMs: 30000
+        timeoutMs: 120000
       });
 
       let providerAdapter: ProviderAdapter;

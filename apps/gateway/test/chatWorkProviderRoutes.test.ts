@@ -282,6 +282,7 @@ describe("Chat Work Provider HTTP flow", () => {
       content: [{ type: "text", text: "你好，请回复我。", language: "zh-CN" }]
     });
     expect(adapter.calls[0]?.externalSessionRef).toBeUndefined();
+    expect(adapter.calls[0]?.timeoutMs).toBe(120000);
   });
 
   it("continues Chat context after restart and keeps Work context independent", async () => {

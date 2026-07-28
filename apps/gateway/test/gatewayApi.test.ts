@@ -308,6 +308,7 @@ describe("local Family AI Gateway API", () => {
     expect(second.json().replayed).toBe(false);
     expect(adapter.calls).toHaveLength(2);
     expect(adapter.calls[0]?.conversationRef).toBe(firstConversation);
+    expect(adapter.calls[0]?.timeoutMs).toBe(120000);
     expect(adapter.calls[1]?.conversationRef).toBe(secondConversation);
   });
 });
