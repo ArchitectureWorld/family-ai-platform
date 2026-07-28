@@ -20,11 +20,16 @@
     "terminalType": "mobile",
     "platform": "ios"
   },
-  "agent": {
-    "assignmentRef": "assignment:test-personal-1",
-    "assignmentType": "personal_assistant",
-    "agentRef": "agent:personal-assistant",
-    "displayName": "个人助理",
-    "providerProfileRef": "provider-profile:fake-local"
-  }
+  "mountedAgents": [
+    {
+      "assignmentRef": "assignment:test-personal-1",
+      "agentRef": "agent:personal-assistant",
+      "displayName": "个人助理",
+      "providerProfileRef": "provider-profile:fake-local",
+      "isDefault": true,
+      "status": "idle",
+      "statusLabel": "空闲"
+    }
+  ],
+  "defaultAgentRef": "agent:personal-assistant"
 }

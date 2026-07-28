@@ -46,6 +46,7 @@ export const homeChatStreamSchema = interactionThreadSchema
   .extend({
     threadKind: z.literal("home_chat"),
     homeChatStreamRef: homeChatStreamRefSchema,
+    agentRef: agentRefSchema,
     status: z.enum(["active", "suspended"]),
     currentEpisodeRef: dailyEpisodeRefSchema.nullable()
   })
@@ -106,6 +107,7 @@ const workConversationBaseSchema = interactionThreadSchema
   .extend({
     threadKind: z.literal("work"),
     workConversationRef: workConversationRefSchema,
+    agentRef: agentRefSchema,
     title: titleSchema,
     goal: goalSchema,
     summary: summarySchema,
@@ -279,6 +281,7 @@ export const threadMessageListResponseSchema = z
 export const createWorkConversationRequestSchema = z
   .object({
     protocolVersion: protocolVersionSchema,
+    agentRef: agentRefSchema,
     title: titleSchema,
     goal: goalSchema
   })

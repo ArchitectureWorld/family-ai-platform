@@ -13,7 +13,8 @@
       "goal": "完成 Chat 与 Work 的统一协议。",
       "summary": "协议设计已确认。",
       "status": "active",
-      "archivedAt": null
+      "archivedAt": null,
+      "agentRef": "agent:personal-assistant"
     },
     {
       "threadRef": "thread:work-finished",
@@ -27,7 +28,8 @@
       "goal": "验证归档约束。",
       "summary": "事项已经归档。",
       "status": "archived",
-      "archivedAt": "2026-07-22T09:10:00.000Z"
+      "archivedAt": "2026-07-22T09:10:00.000Z",
+      "agentRef": "agent:personal-assistant"
     }
   ]
 }

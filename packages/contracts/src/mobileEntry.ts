@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { mountedAgentSchema } from "./agentManagement.js";
 
 export const MOBILE_ENTRY_PROTOCOL_VERSION = 1 as const;
 
@@ -178,17 +179,24 @@ export const personalPortalContextSchema = z
         platform: z.string().trim().min(1).max(64)
       })
       .strict(),
-    agent: z
-      .object({
-        assignmentRef: assignmentRefSchema,
-        assignmentType: z.literal("personal_assistant"),
-        agentRef: mobileAgentRefSchema,
-        displayName: displayNameSchema,
-        providerProfileRef: mobileProviderProfileRefSchema
-      })
-      .strict()
+    mountedAgents: z.array(mountedAgentSchema).max(100),
+    defaultAgentRef: mobileAgentRefSchema.nullable()
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.defaultAgentRef === null) {
+      return;
+    }
+
+    const defaults = value.mountedAgents.filter((agent) => agent.agentRef === value.defaultAgentRef);
+    if (defaults.length !== 1 || !defaults[0]?.isDefault) {
+      context.addIssue({
+        code: "custom",
+        path: ["defaultAgentRef"],
+        message: "defaultAgentRef must identify exactly one mounted default Agent"
+      });
+    }
+  });
 
 export const mobileGatewayErrorCodeSchema = z.enum([
   "PAIRING_INVALID",

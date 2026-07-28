@@ -9,7 +9,8 @@
     "lastActiveAt": "2026-07-23T08:02:00.000Z",
     "homeChatStreamRef": "home-chat:alice",
     "status": "active",
-    "currentEpisodeRef": "daily-episode:alice-2026-07-23"
+    "currentEpisodeRef": "daily-episode:alice-2026-07-23",
+    "agentRef": "agent:personal-assistant"
   },
   "currentEpisode": {
     "dailyEpisodeRef": "daily-episode:alice-2026-07-23",

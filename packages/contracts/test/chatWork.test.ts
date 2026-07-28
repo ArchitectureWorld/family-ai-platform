@@ -32,6 +32,22 @@ describe("Chat / Work protocol v1 read models", () => {
     ).toBeTruthy();
   });
 
+  it("requires an Agent reference on Home Chat and Work resources", () => {
+    const homeChat = fixture("home-chat-response.json") as { chat: Record<string, unknown> };
+    const workList = fixture("work-list-response.json") as {
+      conversations: Array<Record<string, unknown>>;
+    };
+    const { agentRef: homeAgentRef, ...chatWithoutAgent } = homeChat.chat;
+    const { agentRef: workAgentRef, ...workWithoutAgent } = workList.conversations[0] ?? {};
+
+    expect(homeAgentRef).toBe("agent:personal-assistant");
+    expect(workAgentRef).toBe("agent:personal-assistant");
+    expect(homeChatStreamResponseSchema.safeParse({ ...homeChat, chat: chatWithoutAgent }).success).toBe(
+      false
+    );
+    expect(workConversationSchema.safeParse(workWithoutAgent).success).toBe(false);
+  });
+
   it("keeps the current Episode consistent with the Home Chat", () => {
     const response = fixture("home-chat-response.json") as {
       chat: Record<string, unknown>;
@@ -102,6 +118,14 @@ describe("Chat / Work protocol v1 commands", () => {
     expect(sendThreadMessageRequestSchema.parse(sendMessage)).toEqual(sendMessage);
   });
 
+  it("requires an Agent reference when creating Work", () => {
+    const request = fixture("create-work-request.json") as Record<string, unknown>;
+    const { agentRef, ...withoutAgent } = request;
+
+    expect(agentRef).toBe("agent:personal-assistant");
+    expect(createWorkConversationRequestSchema.safeParse(withoutAgent).success).toBe(false);
+  });
+
   it("preserves message text exactly and rejects padded client message IDs", () => {
     const messageWithMeaningfulWhitespace = {
       ...sendMessage,
@@ -169,7 +193,6 @@ describe("Chat / Work protocol v1 commands", () => {
 
   it.each([
     ["personRef", "person:alice"],
-    ["agentRef", "agent:personal-assistant"],
     ["deviceRef", "device:web-alice"]
   ])("rejects trusted identity field %s in a Work command", (field, value) => {
     const request = fixture("create-work-request.json") as Record<string, unknown>;

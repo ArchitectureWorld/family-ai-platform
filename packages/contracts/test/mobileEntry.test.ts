@@ -115,6 +115,25 @@ describe("mobile entry protocol v1", () => {
     );
   });
 
+  it("requires the default mounted Agent to exist exactly once", () => {
+    const context = fixture("portal-context-personal.json") as {
+      mountedAgents: Array<Record<string, unknown>>;
+      defaultAgentRef: string;
+    };
+    expect(
+      personalPortalContextSchema.safeParse({
+        ...context,
+        defaultAgentRef: "agent:missing"
+      }).success
+    ).toBe(false);
+    expect(
+      personalPortalContextSchema.safeParse({
+        ...context,
+        mountedAgents: context.mountedAgents.map((agent) => ({ ...agent, isDefault: false }))
+      }).success
+    ).toBe(false);
+  });
+
   it("requires exactly 32 base64url credential bytes", () => {
     expect(deviceCredentialSchema.safeParse("too-short").success).toBe(false);
     expect(deviceCredentialSchema.safeParse("A".repeat(43)).success).toBe(true);
