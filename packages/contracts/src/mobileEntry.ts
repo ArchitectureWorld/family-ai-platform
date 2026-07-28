@@ -184,16 +184,42 @@ export const personalPortalContextSchema = z
   })
   .strict()
   .superRefine((value, context) => {
+    const seenAgentRefs = new Set<string>();
+    for (const [index, mountedAgent] of value.mountedAgents.entries()) {
+      if (seenAgentRefs.has(mountedAgent.agentRef)) {
+        context.addIssue({
+          code: "custom",
+          path: ["mountedAgents", index, "agentRef"],
+          message: "mountedAgents must not contain duplicate Agent references"
+        });
+      }
+      seenAgentRefs.add(mountedAgent.agentRef);
+    }
+
+    const defaultMounts = value.mountedAgents.filter((mountedAgent) => mountedAgent.isDefault);
     if (value.defaultAgentRef === null) {
+      if (defaultMounts.length !== 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["mountedAgents"],
+          message: "a member without a defaultAgentRef must not mark a mounted Agent as default"
+        });
+      }
       return;
     }
 
-    const defaults = value.mountedAgents.filter((agent) => agent.agentRef === value.defaultAgentRef);
-    if (defaults.length !== 1 || !defaults[0]?.isDefault) {
+    const matchingMounts = value.mountedAgents.filter(
+      (mountedAgent) => mountedAgent.agentRef === value.defaultAgentRef
+    );
+    if (
+      matchingMounts.length !== 1 ||
+      !matchingMounts[0]?.isDefault ||
+      defaultMounts.length !== 1
+    ) {
       context.addIssue({
         code: "custom",
         path: ["defaultAgentRef"],
-        message: "defaultAgentRef must identify exactly one mounted default Agent"
+        message: "defaultAgentRef must identify the only mounted default Agent"
       });
     }
   });

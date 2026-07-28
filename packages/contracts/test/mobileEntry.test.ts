@@ -132,6 +132,31 @@ describe("mobile entry protocol v1", () => {
         mountedAgents: context.mountedAgents.map((agent) => ({ ...agent, isDefault: false }))
       }).success
     ).toBe(false);
+    const mountedAgent = context.mountedAgents[0];
+    expect(
+      personalPortalContextSchema.safeParse({
+        ...context,
+        defaultAgentRef: null,
+        mountedAgents: [
+          { ...mountedAgent, isDefault: false },
+          { ...mountedAgent, assignmentRef: "assignment:duplicate", isDefault: false }
+        ]
+      }).success
+    ).toBe(false);
+    expect(
+      personalPortalContextSchema.safeParse({
+        ...context,
+        mountedAgents: [
+          mountedAgent,
+          {
+            ...mountedAgent,
+            assignmentRef: "assignment:another-default",
+            agentRef: "agent:another-default",
+            isDefault: true
+          }
+        ]
+      }).success
+    ).toBe(false);
   });
 
   it("requires exactly 32 base64url credential bytes", () => {
