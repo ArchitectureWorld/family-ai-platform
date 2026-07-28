@@ -193,6 +193,10 @@ describe("Gateway configuration", () => {
       ...realEnvironment(),
       FAMILY_AI_HERMES_PROFILES: "valid,bad profile"
     })).toThrow("runtime configuration");
+    expect(() => loadGatewayConfig({
+      ...realEnvironment(),
+      FAMILY_AI_HERMES_PROFILES: "Jarvis,zzh"
+    })).toThrow("runtime configuration");
   });
 
   it("composes deterministic Agent and Provider refs for every real runtime", () => {
@@ -251,7 +255,8 @@ describe("Gateway configuration", () => {
         deviceToken: token,
         mode: "development",
         providerRouter: runtime.router,
-        configuredAgentRuntimes: runtime.agents
+        configuredAgentRuntimes: runtime.agents,
+        authoritativeAgentRuntimeCatalog: runtime.authoritative
       });
       await app.close();
     }
@@ -277,6 +282,15 @@ describe("Gateway configuration", () => {
         provider_profile_ref: "provider-profile:hermes-jarvis"
       }
     ]);
+    expect(verified.prepare(
+      `SELECT status FROM agent_runtime_bindings
+       WHERE provider_profile_ref = 'provider-profile:fake-local'
+       ORDER BY agent_ref`
+    ).all()).toEqual([{ status: "disabled" }, { status: "disabled" }]);
+    expect(verified.prepare(
+      `SELECT status, is_default FROM assistant_assignments
+       WHERE provider_profile_ref = 'provider-profile:fake-local'`
+    ).all()).toEqual([{ status: "ended", is_default: 0 }]);
     verified.close();
   });
 

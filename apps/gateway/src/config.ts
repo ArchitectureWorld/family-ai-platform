@@ -40,6 +40,7 @@ export type GatewayProviderRuntimeConfig =
 export interface GatewayProviderRuntime {
   router: ProviderAdapterRouter;
   agents: readonly ConfiguredAgentRuntime[];
+  authoritative: boolean;
 }
 
 export interface GatewayConfig {
@@ -100,6 +101,7 @@ function profileNames(raw: string | undefined): readonly string[] {
   if (
     profiles.length === 0 ||
     profiles.some(profile => !/^[a-z0-9_-]+$/.test(profile)) ||
+    profiles.includes("jarvis") ||
     new Set(profiles).size !== profiles.length
   ) {
     throw runtimeConfigurationError();
@@ -155,7 +157,8 @@ export function buildProviderRuntime(
         "provider-profile:fake-local",
         adapter
       ),
-      agents: []
+      agents: [],
+      authoritative: false
     };
   }
 
@@ -221,7 +224,8 @@ export function buildProviderRuntime(
 
   return {
     router: new ProviderAdapterRouter(routes),
-    agents
+    agents,
+    authoritative: true
   };
 }
 

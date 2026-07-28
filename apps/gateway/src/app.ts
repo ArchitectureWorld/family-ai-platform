@@ -73,6 +73,7 @@ export interface BuildGatewayAppOptions {
   configuredAgentRuntimes?: readonly ConfiguredAgentRuntime[];
   providerAdapter?: ProviderAdapter;
   providerRouter?: ProviderAdapterResolver;
+  authoritativeAgentRuntimeCatalog?: boolean;
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
   previewAdminEntryPath?: string;
   previewAdminOrigin?: string;
@@ -245,7 +246,9 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   const repository = new GatewayRepository(db);
   const agentManagementRepository = new AgentManagementRepository(db, now);
   const configuredAgentRuntimes = options.configuredAgentRuntimes ?? [];
-  agentManagementRepository.reconcileRuntimeCatalog(configuredAgentRuntimes);
+  agentManagementRepository.reconcileRuntimeCatalog(configuredAgentRuntimes, {
+    authoritative: options.authoritativeAgentRuntimeCatalog ?? false
+  });
   const configuredAgentRefs = new Set(
     configuredAgentRuntimes.map(runtime => runtime.agentRef)
   );
@@ -271,7 +274,9 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   }
   const familyRepository = new FamilyDomainRepository(db, {
     repository: agentManagementRepository,
-    configuredRuntimes: configuredAgentRuntimes
+    configuredRuntimes: configuredAgentRuntimes,
+    authoritativeRuntimeCatalog:
+      options.authoritativeAgentRuntimeCatalog ?? false
   });
   const entryAuthenticator = new EntrySessionAuthenticator(db, familyRepository, now);
   const deviceSyncRepository = new DeviceSyncRepository(db, domainEventStore, now);

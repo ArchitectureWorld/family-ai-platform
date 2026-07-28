@@ -70,7 +70,7 @@ export interface EntryContext {
     terminalType: string;
     platform: string;
   };
-  agent: {
+  agent?: {
     assignmentRef: string;
     assignmentType: "family_manager" | "personal_assistant";
     agentRef: string;
@@ -89,7 +89,7 @@ export interface FamilyMember {
     agentRef: string;
     displayName: string;
     providerProfileRef: string;
-  };
+  } | null;
   entryStatus: "claimed" | "unclaimed";
   joinedAt: string;
 }
@@ -116,12 +116,14 @@ function mapMember(row: Record<string, unknown>): FamilyMember {
     displayName: String(row.display_name),
     familyRole: row.family_role as FamilyRole,
     status: "active",
-    personalAssistant: {
-      assignmentRef: String(row.assignment_ref),
-      agentRef: String(row.agent_ref),
-      displayName: String(row.agent_display_name),
-      providerProfileRef: String(row.provider_profile_ref)
-    },
+    personalAssistant: row.assignment_ref === null
+      ? null
+      : {
+          assignmentRef: String(row.assignment_ref),
+          agentRef: String(row.agent_ref),
+          displayName: String(row.agent_display_name),
+          providerProfileRef: String(row.provider_profile_ref)
+        },
     entryStatus: Number(row.has_personal_entry) === 1 ? "claimed" : "unclaimed",
     joinedAt: String(row.joined_at)
   };
@@ -130,6 +132,7 @@ function mapMember(row: Record<string, unknown>): FamilyMember {
 interface FamilyAgentManagementConfiguration {
   repository: AgentManagementRepository;
   configuredRuntimes: readonly ConfiguredAgentRuntime[];
+  authoritativeRuntimeCatalog?: boolean;
 }
 
 export class FamilyDomainRepository {
@@ -206,9 +209,6 @@ export class FamilyDomainRepository {
          (agent_ref, provider_profile_ref, status, created_at, updated_at)
          VALUES(?, ?, ?, ?, ?)`
       ).run(PERSONAL_ASSISTANT_AGENT_REF, DEVELOPMENT_PROVIDER_PROFILE_REF, "active", now, now);
-      this.agentManagement?.repository.reconcileRuntimeCatalog(
-        this.agentManagement.configuredRuntimes
-      );
       this.db.prepare(
         `INSERT INTO families(family_ref, display_name, status, created_at, updated_at)
          VALUES(?, ?, 'active', ?, ?)`
@@ -271,6 +271,13 @@ export class FamilyDomainRepository {
 
       this.db.prepare("UPDATE assistant_assignments SET is_default = 1 WHERE assignment_ref = ?")
         .run(personalAssistantAssignmentRef);
+      this.agentManagement?.repository.reconcileRuntimeCatalog(
+        this.agentManagement.configuredRuntimes,
+        {
+          authoritative:
+            this.agentManagement.authoritativeRuntimeCatalog ?? false
+        }
+      );
       const insertBinding = this.db.prepare(
         `INSERT INTO entry_bindings
          (entry_binding_ref, device_ref, family_ref, person_ref, audience, status,
@@ -347,6 +354,7 @@ export class FamilyDomainRepository {
            FROM assistant_assignments candidate
            WHERE eb.audience = 'personal'
              AND candidate.person_ref = p.person_ref
+             AND candidate.status = 'active'
            ORDER BY
              CASE
                WHEN candidate.status = 'active' AND candidate.is_default = 1 THEN 0
@@ -357,7 +365,7 @@ export class FamilyDomainRepository {
              candidate.assignment_ref DESC
            LIMIT 1
          )
-       JOIN agents a ON a.agent_ref = COALESCE(fma.agent_ref, aa.agent_ref)
+       LEFT JOIN agents a ON a.agent_ref = COALESCE(fma.agent_ref, aa.agent_ref)
        WHERE es.entry_session_ref = ?
          AND es.status = 'active'
          AND es.expires_at > ?
@@ -372,6 +380,19 @@ export class FamilyDomainRepository {
     ).run(now, String(row.entry_binding_ref));
 
     const audience = row.audience as EntryAudience;
+    const agent = row.assignment_ref === null
+      ? {}
+      : {
+          agent: {
+            assignmentRef: String(row.assignment_ref),
+            assignmentType: audience === "family_admin"
+              ? "family_manager" as const
+              : "personal_assistant" as const,
+            agentRef: String(row.agent_ref),
+            displayName: String(row.agent_display_name),
+            providerProfileRef: String(row.provider_profile_ref)
+          }
+        };
     return {
       audience,
       entrySessionRef: String(row.entry_session_ref),
@@ -393,13 +414,7 @@ export class FamilyDomainRepository {
         terminalType: String(row.terminal_type),
         platform: String(row.platform)
       },
-      agent: {
-        assignmentRef: String(row.assignment_ref),
-        assignmentType: audience === "family_admin" ? "family_manager" : "personal_assistant",
-        agentRef: String(row.agent_ref),
-        displayName: String(row.agent_display_name),
-        providerProfileRef: String(row.provider_profile_ref)
-      }
+      ...agent
     };
   }
 
@@ -417,8 +432,9 @@ export class FamilyDomainRepository {
               ) THEN 1 ELSE 0 END AS has_personal_entry
        FROM family_memberships fm
        JOIN persons p ON p.person_ref = fm.person_ref AND p.status = 'active'
-       JOIN assistant_assignments aa ON aa.person_ref = p.person_ref AND aa.status = 'active'
-       JOIN agents a ON a.agent_ref = aa.agent_ref
+       LEFT JOIN assistant_assignments aa
+         ON aa.person_ref = p.person_ref AND aa.status = 'active'
+       LEFT JOIN agents a ON a.agent_ref = aa.agent_ref
        WHERE fm.family_ref = ? AND fm.status = 'active'
        ORDER BY CASE fm.family_role WHEN 'owner' THEN 0 ELSE 1 END,
                 fm.joined_at, p.person_ref`
@@ -471,6 +487,13 @@ export class FamilyDomainRepository {
       );
       this.db.prepare("UPDATE assistant_assignments SET is_default = 1 WHERE assignment_ref = ?")
         .run(assignmentRef);
+      this.agentManagement?.repository.reconcileRuntimeCatalog(
+        this.agentManagement.configuredRuntimes,
+        {
+          authoritative:
+            this.agentManagement.authoritativeRuntimeCatalog ?? false
+        }
+      );
     })();
 
     const member = this.listMembers(input.familyRef).find((item) => item.personRef === personRef);

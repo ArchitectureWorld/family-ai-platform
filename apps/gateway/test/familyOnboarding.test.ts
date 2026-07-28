@@ -2,6 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  FakeProviderAdapter,
+  ProviderAdapterRouter
+} from "@family-ai/provider-adapter-sdk";
 import { buildGatewayApp } from "../src/app.js";
 import type { ConfiguredAgentRuntime } from "../src/agentManagement.js";
 import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
@@ -206,6 +210,90 @@ describe("Family onboarding and dual-entry sessions", () => {
 
     expect(adminContext.json().person.personRef).toBe(personalContext.json().person.personRef);
     expect(adminContext.json().device.deviceRef).toBe(personalContext.json().device.deviceRef);
+  });
+
+  it("keeps fresh real-mode onboarding free of visible Fake defaults and mounts", async () => {
+    await app.close();
+    const router = new ProviderAdapterRouter(
+      ownerAdminRuntimes.map(runtime => [
+        runtime.providerProfileRef,
+        new FakeProviderAdapter()
+      ] as const)
+    );
+    app = await buildGatewayApp({
+      databasePath,
+      deviceToken,
+      mode: "test",
+      providerRouter: router,
+      configuredAgentRuntimes: ownerAdminRuntimes,
+      authoritativeAgentRuntimeCatalog: true
+    });
+    const result = await initialize();
+
+    const adminContext = await app.inject({
+      method: "GET",
+      url: "/api/v1/portal/context",
+      headers: entryHeaders(result.entries.admin)
+    });
+    expect(adminContext.statusCode).toBe(200);
+    expect(adminContext.json()).toMatchObject({
+      agent: {
+        agentRef: "agent:hermes-jarvis",
+        providerProfileRef: "provider-profile:hermes-jarvis"
+      }
+    });
+
+    const personalContext = await app.inject({
+      method: "GET",
+      url: "/api/v1/portal/context",
+      headers: entryHeaders(result.entries.personal)
+    });
+    expect(personalContext.statusCode).toBe(200);
+    expect(personalContext.json()).toMatchObject({
+      mountedAgents: [],
+      defaultAgentRef: null
+    });
+    for (const providerProfileRef of [
+      adminContext.json().agent.providerProfileRef,
+      ...personalContext.json().mountedAgents.map(
+        (mount: { providerProfileRef: string }) => mount.providerProfileRef
+      )
+    ]) {
+      expect(() => router.resolve(providerProfileRef)).not.toThrow();
+    }
+    expect(adminContext.body).not.toContain("provider-profile:fake-local");
+    expect(personalContext.body).not.toContain("provider-profile:fake-local");
+
+    const createdMember = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/members",
+      headers: entryHeaders(result.entries.admin),
+      payload: { displayName: "No Default Member", familyRole: "adult" }
+    });
+    expect(createdMember.statusCode).toBe(201);
+    expect(createdMember.json().member.personalAssistant).toBeNull();
+    const memberMounts = await app.inject({
+      method: "GET",
+      url: `/api/v1/admin/members/${createdMember.json().member.personRef}/agent-mounts`,
+      headers: entryHeaders(result.entries.admin)
+    });
+    expect(memberMounts.statusCode).toBe(200);
+    expect(memberMounts.json()).toMatchObject({
+      mountedAgents: [],
+      defaultAgentRef: null
+    });
+
+    const db = openGatewayDatabase(databasePath);
+    expect(db.prepare(
+      `SELECT status FROM agent_runtime_bindings
+       WHERE provider_profile_ref = 'provider-profile:fake-local'
+       ORDER BY agent_ref`
+    ).all()).toEqual([{ status: "disabled" }, { status: "disabled" }]);
+    expect(db.prepare(
+      `SELECT COUNT(*) AS count FROM admin_agent_assignments
+       WHERE status = 'active'`
+    ).get()).toEqual({ count: 2 });
+    db.close();
   });
 
   it("creates one active default Personal assignment during onboarding", async () => {

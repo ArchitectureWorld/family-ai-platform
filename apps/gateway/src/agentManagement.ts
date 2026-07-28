@@ -10,6 +10,10 @@ export interface ConfiguredAgentRuntime {
   providerKind: "fake" | "hermes" | "codex";
 }
 
+export interface RuntimeCatalogReconcileOptions {
+  authoritative?: boolean;
+}
+
 export interface ActiveAgentMount {
   assignmentRef: string;
   agentRef: string;
@@ -33,7 +37,10 @@ export class AgentManagementRepository {
     private readonly now: () => Date = () => new Date()
   ) {}
 
-  reconcileRuntimeCatalog(definitions: readonly ConfiguredAgentRuntime[]): void {
+  reconcileRuntimeCatalog(
+    definitions: readonly ConfiguredAgentRuntime[],
+    options: RuntimeCatalogReconcileOptions = {}
+  ): void {
     const seenAgentRefs = new Set<string>();
     for (const definition of definitions) {
       if (seenAgentRefs.has(definition.agentRef)) {
@@ -87,6 +94,105 @@ export class AgentManagementRepository {
           now,
           now
         );
+      }
+
+      if (options.authoritative) {
+        const configured = new Map(
+          definitions.map(definition => [
+            definition.agentRef,
+            definition.providerProfileRef
+          ])
+        );
+        const bindings = this.db.prepare(
+          `SELECT agent_ref, provider_profile_ref
+           FROM agent_runtime_bindings`
+        ).all() as Array<{
+          agent_ref: string;
+          provider_profile_ref: string;
+        }>;
+        const endAssistant = this.db.prepare(
+          `UPDATE assistant_assignments
+           SET status = ?, effective_to = ?, is_default = 0
+           WHERE agent_ref = ? AND provider_profile_ref = ? AND status = ?`
+        );
+        const endAdmin = this.db.prepare(
+          `UPDATE admin_agent_assignments
+           SET status = ?, effective_to = ?
+           WHERE agent_ref = ? AND provider_profile_ref = ? AND status = ?`
+        );
+        const endFamilyManager = this.db.prepare(
+          `UPDATE family_manager_assignments
+           SET status = ?, effective_to = ?
+           WHERE agent_ref = ? AND provider_profile_ref = ? AND status = ?`
+        );
+        const disableBinding = this.db.prepare(
+          `UPDATE agent_runtime_bindings
+           SET status = 'disabled', updated_at = ?
+           WHERE agent_ref = ? AND provider_profile_ref = ?`
+        );
+        for (const binding of bindings) {
+          if (
+            configured.get(binding.agent_ref) === binding.provider_profile_ref
+          ) {
+            continue;
+          }
+          endAssistant.run(
+            ended,
+            now,
+            binding.agent_ref,
+            binding.provider_profile_ref,
+            active
+          );
+          endAdmin.run(
+            ended,
+            now,
+            binding.agent_ref,
+            binding.provider_profile_ref,
+            active
+          );
+          endFamilyManager.run(
+            ended,
+            now,
+            binding.agent_ref,
+            binding.provider_profile_ref,
+            active
+          );
+          disableBinding.run(
+            now,
+            binding.agent_ref,
+            binding.provider_profile_ref
+          );
+        }
+
+        const jarvis = definitions.find(
+          definition => definition.agentRef === "agent:hermes-jarvis"
+        );
+        if (jarvis) {
+          const families = this.db.prepare(
+            `SELECT family_ref FROM families
+             WHERE status = 'active'
+               AND NOT EXISTS (
+                 SELECT 1 FROM family_manager_assignments fma
+                 WHERE fma.family_ref = families.family_ref
+                   AND fma.status = 'active'
+               )`
+          ).all() as Array<{ family_ref: string }>;
+          const insertFamilyManager = this.db.prepare(
+            `INSERT INTO family_manager_assignments
+             (assignment_ref, family_ref, agent_ref, provider_profile_ref,
+              status, effective_from, effective_to)
+             VALUES(?, ?, ?, ?, 'active', ?, NULL)`
+          );
+          for (const family of families) {
+            insertFamilyManager.run(
+              `assignment:${randomUUID()}`,
+              family.family_ref,
+              jarvis.agentRef,
+              jarvis.providerProfileRef,
+              now
+            );
+          }
+        }
       }
     })();
   }

@@ -55,6 +55,23 @@ function invalidRequest(message: string): GatewayDomainError {
   return new GatewayDomainError("REQUEST_INVALID", 400, "validation", false, message);
 }
 
+function selectedAgentRef(
+  explicitAgentRef: string | undefined,
+  defaultAgentRef: string | undefined
+): string {
+  const agentRef = explicitAgentRef ?? defaultAgentRef;
+  if (!agentRef) {
+    throw new GatewayDomainError(
+      "AGENT_NOT_MOUNTED",
+      409,
+      "conflict",
+      false,
+      "请先挂载一个 Agent。"
+    );
+  }
+  return agentRef;
+}
+
 function workProgressNotFound(): GatewayDomainError {
   return new GatewayDomainError(
     "WORK_PROGRESS_NOT_FOUND",
@@ -116,7 +133,7 @@ export function registerChatWorkRoutes(
       request.query,
       "Chat 查询参数不正确。"
     );
-    const agentRef = query.agentRef ?? context.agent.agentRef;
+    const agentRef = selectedAgentRef(query.agentRef, context.agent?.agentRef);
     const timeZone = query.timezone ? validatedTimeZone(query.timezone) : null;
     input.repository.requireActiveAgent(context.person.personRef, agentRef);
     let record = input.repository.getHomeChat(context.person.personRef, agentRef);
@@ -144,7 +161,7 @@ export function registerChatWorkRoutes(
       request.query,
       "Work 查询参数不正确。"
     );
-    const agentRef = query.agentRef ?? context.agent.agentRef;
+    const agentRef = selectedAgentRef(query.agentRef, context.agent?.agentRef);
     return workConversationListResponseSchema.parse({
       protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
       conversations: input.repository.listWorkConversations(

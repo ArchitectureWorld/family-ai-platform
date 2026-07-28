@@ -12,6 +12,7 @@ const app = await buildGatewayApp({
   mode: config.mode,
   providerRouter: runtime.router,
   configuredAgentRuntimes: runtime.agents,
+  authoritativeAgentRuntimeCatalog: runtime.authoritative,
   ...(config.previewAdminEntryPath === undefined
     ? {}
     : {

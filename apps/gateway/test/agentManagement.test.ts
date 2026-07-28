@@ -109,6 +109,59 @@ describe("Agent management repository", () => {
     ])).toThrow(/duplicate Agent ref/i);
   });
 
+  it("atomically retires unconfigured Fake runtime state in authoritative real mode", () => {
+    repository.reconcileRuntimeCatalog(
+      configuredAgents.filter(agent => agent.providerKind !== "fake"),
+      { authoritative: true }
+    );
+
+    expect(repository.listCatalog().map(agent => agent.agentRef)).toEqual([
+      "agent:codex-cli",
+      "agent:hermes-jarvis"
+    ]);
+    expect(repository.listMemberMounts(familyRef, alice)).toMatchObject({
+      defaultAgentRef: null,
+      mountedAgents: []
+    });
+    expect(db.prepare(
+      `SELECT status FROM agent_runtime_bindings
+       WHERE provider_profile_ref = 'provider-profile:fake-local'
+       ORDER BY agent_ref`
+    ).all()).toEqual([{ status: "disabled" }, { status: "disabled" }]);
+    expect(db.prepare(
+      `SELECT status, is_default, effective_to
+       FROM assistant_assignments
+       WHERE provider_profile_ref = 'provider-profile:fake-local'`
+    ).all()).toEqual([
+      {
+        status: "ended",
+        is_default: 0,
+        effective_to: "2026-07-28T10:00:00.000Z"
+      },
+      {
+        status: "ended",
+        is_default: 0,
+        effective_to: "2026-07-28T10:00:00.000Z"
+      }
+    ]);
+    expect(db.prepare(
+      `SELECT agent_ref, provider_profile_ref, status
+       FROM family_manager_assignments
+       ORDER BY effective_from, assignment_ref`
+    ).all()).toEqual(expect.arrayContaining([
+      {
+        agent_ref: "agent:family-manager",
+        provider_profile_ref: "provider-profile:fake-local",
+        status: "ended"
+      },
+      {
+        agent_ref: "agent:hermes-jarvis",
+        provider_profile_ref: "provider-profile:hermes-jarvis",
+        status: "active"
+      }
+    ]));
+  });
+
   it("mounts one Agent for two members but not twice for one member", () => {
     const first = repository.mountMemberAgent({ familyRef, personRef: alice, agentRef: "agent:shared" });
     const replay = repository.mountMemberAgent({ familyRef, personRef: alice, agentRef: "agent:shared" });
