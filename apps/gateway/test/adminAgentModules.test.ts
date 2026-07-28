@@ -108,8 +108,26 @@ class TestElement extends EventTarget {
     return this.children.some((child) => child.contains(node));
   }
 
+  private isHiddenFromView(): boolean {
+    let current: TestElement | null = this;
+    while (current !== null) {
+      if (current.hidden) return true;
+      current = current.parentElement;
+    }
+    return false;
+  }
+
   focus() {
-    if (!this.disabled) this.ownerDocument.activeElement = this;
+    if (!this.disabled && !this.isHiddenFromView()) {
+      this.ownerDocument.activeElement = this;
+    }
+  }
+
+  keydown(key: string) {
+    const event = new Event("keydown", { cancelable: true });
+    Object.defineProperty(event, "key", { value: key });
+    this.dispatchEvent(event);
+    return event;
   }
 
   click() {
@@ -210,9 +228,9 @@ describe("Admin member Agent controls", () => {
     const addTrigger = card.querySelector("[data-add-agent-trigger]");
     const addMenu = card.querySelector("[data-add-agent-menu]");
     expect(addTrigger?.textContent).toBe("+");
-    expect(addTrigger?.getAttribute("aria-haspopup")).toBe("menu");
+    expect(addTrigger?.getAttribute("aria-haspopup")).toBeNull();
     expect(addTrigger?.getAttribute("aria-expanded")).toBe("false");
-    expect(addMenu?.getAttribute("role")).toBe("menu");
+    expect(addMenu?.getAttribute("role")).toBeNull();
     expect(addMenu?.hidden).toBe(true);
     addTrigger?.click();
     expect(card.querySelector("[data-add-agent-menu]")?.hidden).toBe(false);
@@ -225,6 +243,44 @@ describe("Admin member Agent controls", () => {
     expect(documentRef.activeElement?.getAttribute("data-mount-agent"))
       .toBe("agent:not-mounted");
     expect(card.querySelector("[data-default-agent]")?.value).toBe("");
+  });
+
+  it("uses a button popover and returns Escape focus to its trigger", async () => {
+    const { renderMemberAgentControls } = await agentsModule();
+    const documentRef = new TestDocument();
+    const card = documentRef.createElement("article");
+    const controller = renderMemberAgentControls({
+      documentRef,
+      root: card,
+      personRef: "person:alice",
+      api: {
+        agents: vi.fn(async () => catalog),
+        memberAgentMounts: vi.fn(async () => mounted),
+        mountAgent: vi.fn(),
+        unmountAgent: vi.fn(),
+        setDefaultAgent: vi.fn()
+      },
+      confirmImpl: () => true
+    });
+    await controller.ready;
+
+    const trigger = card.querySelector("[data-add-agent-trigger]");
+    expect(trigger?.getAttribute("aria-haspopup")).toBeNull();
+    trigger?.click();
+
+    const menu = card.querySelector("[data-add-agent-menu]");
+    const option = card.querySelector("[data-mount-agent]");
+    expect(menu?.getAttribute("role")).toBeNull();
+    expect(option?.getAttribute("role")).toBeNull();
+    expect(option?.tagName).toBe("button");
+    expect(documentRef.activeElement).toBe(option);
+
+    const escape = option?.keydown("Escape");
+    expect(escape?.defaultPrevented).toBe(true);
+    expect(card.querySelector("[data-add-agent-menu]")?.hidden).toBe(true);
+    expect(card.querySelector("[data-add-agent-trigger]")?.getAttribute("aria-expanded"))
+      .toBe("false");
+    expect(documentRef.activeElement?.getAttribute("data-add-agent-trigger")).toBe("");
   });
 
   it("keeps unknown initial state unavailable and mutation-free until reload succeeds", async () => {
@@ -454,6 +510,8 @@ describe("Admin member Agent controls", () => {
 
     expect(card.textContent).toContain("暂时无法完成");
     expect(card.textContent).not.toContain("private provider path");
+    expect(documentRef.activeElement?.getAttribute("data-focus-key"))
+      .toBe("mutation-retry");
     card.querySelector("[data-agent-retry]")?.click();
     await flush();
     await flush();

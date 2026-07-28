@@ -48,9 +48,17 @@ export function renderMemberAgentControls({
       : [preferredKey, ...focusFallbacks.filter((key) => key !== preferredKey)];
     for (const key of keys) {
       const target = root.querySelector(`[data-focus-key="${key}"]`);
-      if (target !== null && !target.disabled) {
+      let hidden = false;
+      for (let current = target; current !== null; current = current.parentElement) {
+        if (current.hidden) {
+          hidden = true;
+          break;
+        }
+        if (current === root) break;
+      }
+      if (target !== null && !target.disabled && !hidden) {
         target.focus();
-        return;
+        if (documentRef.activeElement === target) return;
       }
     }
   };
@@ -198,6 +206,12 @@ export function renderMemberAgentControls({
       className: "agent-add-menu"
     });
     const menuId = `agent-add-${personRef.replace(/[^a-z0-9_-]/giu, "-")}`;
+    const closeAddPopover = (event) => {
+      if (event.key !== "Escape" || !menuOpen) return;
+      event.preventDefault();
+      menuOpen = false;
+      render("add-menu");
+    };
     const addTrigger = control(element(documentRef, "button", {
       className: "agent-add-trigger",
       text: "+",
@@ -206,7 +220,6 @@ export function renderMemberAgentControls({
         "data-add-agent-trigger": "",
         "data-focus-key": "add-menu",
         "aria-label": "添加 Agent",
-        "aria-haspopup": "menu",
         "aria-controls": menuId,
         "aria-expanded": String(menuOpen)
       }
@@ -217,12 +230,12 @@ export function renderMemberAgentControls({
       menuOpen = !menuOpen;
       render(menuOpen ? `add:${options[0].agentRef}` : "add-menu");
     });
+    addTrigger.addEventListener("keydown", closeAddPopover);
 
     const addMenu = element(documentRef, "div", {
       className: "agent-add-popover",
       attributes: {
         id: menuId,
-        role: "menu",
         "data-add-agent-menu": "",
         "aria-label": "可添加 Agent"
       }
@@ -234,11 +247,11 @@ export function renderMemberAgentControls({
         text: `${agent.displayName} · ${agent.statusLabel}`,
         attributes: {
           type: "button",
-          role: "menuitem",
           "data-mount-agent": agent.agentRef,
           "data-focus-key": `add:${agent.agentRef}`
         }
       }));
+      option.addEventListener("keydown", closeAddPopover);
       option.addEventListener("click", () => {
         if (busy) return;
         const agentRef = agent.agentRef;
@@ -365,7 +378,7 @@ export function renderMemberAgentControls({
         const { descriptor, outcome } = pendingMutation;
         if (outcome === "ambiguous" && !descriptor.applied(mounts)) {
           mutationRetry = descriptor;
-          resolvedFocus = descriptor.focusKey;
+          resolvedFocus = "mutation-retry";
         } else {
           mutationRetry = null;
           resolvedFocus = descriptor.focusKey;
