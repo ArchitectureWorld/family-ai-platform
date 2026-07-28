@@ -57,6 +57,7 @@ describe("development Admin Web product entry", () => {
         ["/admin/assets/admin.js", "text/javascript"],
         ["/admin/assets/admin-entry.js", "text/javascript"],
         ["/admin/assets/admin-api.js", "text/javascript"],
+        ["/admin/assets/admin-pairing.js", "text/javascript"],
         ["/admin/assets/qr.js", "text/javascript"],
         ["/admin/assets/qr-v10.mjs", "text/javascript"]
       ] as const) {
@@ -87,6 +88,7 @@ describe("development Admin Web product entry", () => {
           "/admin/assets/admin.js",
           "/admin/assets/admin-entry.js",
           "/admin/assets/admin-api.js",
+          "/admin/assets/admin-pairing.js",
           "/admin/assets/qr.js",
           "/admin/assets/qr-v10.mjs"
         ]) {

@@ -6,6 +6,12 @@ import {
   writeStoredAdminCredential
 } from "./admin-entry.js";
 import { AdminApiError, createAdminApi } from "./admin-api.js";
+import {
+  memberHandoffUrl,
+  pairingCountdown,
+  pairingQrSvg
+} from "./admin-pairing.js";
+import { qrSvg } from "./qr.js";
 
 const states = new Map(
   [...document.querySelectorAll("[data-state]")]
@@ -14,6 +20,8 @@ const states = new Map(
 const setupRoot = document.querySelector("#family-setup-root");
 const summaryRoot = document.querySelector("#family-summary");
 const membersRoot = document.querySelector("#member-management-root");
+let activePairingDialog = null;
+let activePairingTimer = null;
 
 export function showAdminState(name) {
   if (!states.has(name)) throw new Error("ADMIN_STATE_INVALID");
@@ -112,7 +120,7 @@ function roleLabel(role) {
   ]).get(role) ?? "成员";
 }
 
-function memberCard(member) {
+function memberCard(member, onPair) {
   const card = element("article", { className: "member-card" });
   const identity = element("div");
   identity.append(
@@ -126,13 +134,167 @@ function memberCard(member) {
     text: "生成配对码",
     attributes: {
       type: "button",
-      "data-pair-person-ref": member.personRef,
-      disabled: "",
-      title: "配对功能正在载入"
+      "data-pair-person-ref": member.personRef
     }
   });
+  pair.addEventListener("click", onPair);
   card.append(identity, pair);
   return card;
+}
+
+function closePairingDialog() {
+  if (activePairingTimer !== null) {
+    window.clearInterval(activePairingTimer);
+    activePairingTimer = null;
+  }
+  if (activePairingDialog !== null) {
+    activePairingDialog.remove();
+    activePairingDialog = null;
+  }
+}
+
+function openDialog(dialog) {
+  document.body.append(dialog);
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "");
+  }
+}
+
+async function openPairing(api, member) {
+  closePairingDialog();
+  const dialog = element("dialog", {
+    className: "pairing-dialog",
+    attributes: { "aria-label": `为 ${member.displayName} 生成配对码` }
+  });
+  activePairingDialog = dialog;
+  const content = element("div", { className: "pairing-content" });
+  const close = element("button", {
+    className: "icon-button",
+    text: "关闭",
+    attributes: { type: "button", "aria-label": "关闭配对窗口" }
+  });
+  close.addEventListener("click", closePairingDialog);
+  content.append(
+    close,
+    element("p", { className: "eyebrow", text: "成员配对" }),
+    element("h2", { text: member.displayName }),
+    element("p", { text: "正在生成五分钟有效的配对码…" })
+  );
+  dialog.append(content);
+  dialog.addEventListener("cancel", event => {
+    event.preventDefault();
+    closePairingDialog();
+  });
+  openDialog(dialog);
+
+  try {
+    let result = await api.createPairing(member.personRef);
+
+    const render = () => {
+      if (activePairingDialog !== dialog) return;
+      if (activePairingTimer !== null) {
+        window.clearInterval(activePairingTimer);
+        activePairingTimer = null;
+      }
+      const pairing = result.pairing;
+      const handoff = memberHandoffUrl(window.location.origin, pairing);
+      const code = element("p", {
+        className: "pairing-code",
+        text: pairing.code,
+        attributes: { "aria-label": `配对码 ${pairing.code}` }
+      });
+      const countdown = element("p", {
+        className: "pairing-countdown",
+        attributes: { role: "timer" }
+      });
+      const qr = element("div", {
+        className: "pairing-qr",
+        attributes: { "aria-label": "成员端配对二维码" }
+      });
+      qr.innerHTML = pairingQrSvg(handoff, qrSvg);
+      const memberLink = element("a", {
+        className: "primary-button action-link",
+        text: "在本机进入成员端",
+        attributes: { href: handoff }
+      });
+      const revoke = element("button", {
+        className: "secondary-button",
+        text: "撤销配对码",
+        attributes: { type: "button" }
+      });
+      const renew = element("button", {
+        className: "text-button",
+        text: "生成新码",
+        attributes: { type: "button" }
+      });
+      const feedback = messageNode();
+      const disable = message => {
+        memberLink.removeAttribute("href");
+        memberLink.setAttribute("aria-disabled", "true");
+        revoke.disabled = true;
+        qr.replaceChildren();
+        feedback.textContent = message;
+      };
+      const updateCountdown = () => {
+        const state = pairingCountdown(pairing.expiresAt);
+        countdown.textContent = state.expired
+          ? "配对码已过期"
+          : `剩余 ${state.label}`;
+        if (state.expired) {
+          if (activePairingTimer !== null) {
+            window.clearInterval(activePairingTimer);
+            activePairingTimer = null;
+          }
+          disable("此配对码已失效，请生成新码。");
+        }
+      };
+      revoke.addEventListener("click", async () => {
+        revoke.disabled = true;
+        feedback.textContent = "正在撤销…";
+        try {
+          await api.revokePairing(pairing.pairingRef);
+          disable("配对码已撤销。");
+        } catch (error) {
+          feedback.textContent = errorText(error);
+          revoke.disabled = false;
+        }
+      });
+      renew.addEventListener("click", async () => {
+        renew.disabled = true;
+        feedback.textContent = "正在生成新码…";
+        try {
+          if (!pairingCountdown(pairing.expiresAt).expired) {
+            await api.revokePairing(pairing.pairingRef);
+          }
+          result = await api.createPairing(member.personRef);
+          render();
+        } catch (error) {
+          feedback.textContent = errorText(error);
+          renew.disabled = false;
+        }
+      });
+      content.replaceChildren(
+        close,
+        element("p", { className: "eyebrow", text: "成员配对" }),
+        element("h2", { text: member.displayName }),
+        element("p", { text: "在成员设备输入配对码，或扫描二维码。" }),
+        code,
+        countdown,
+        qr,
+        element("div", { className: "pairing-actions" })
+      );
+      content.lastElementChild.append(memberLink, revoke, renew, feedback);
+      updateCountdown();
+      if (activePairingTimer === null) {
+        activePairingTimer = window.setInterval(updateCountdown, 1000);
+      }
+    };
+    render();
+  } catch (error) {
+    content.append(element("p", { className: "form-message", text: errorText(error) }));
+  }
 }
 
 async function renderManagement(credential) {
@@ -159,7 +321,9 @@ async function renderManagement(credential) {
     className: "member-list",
     attributes: { "aria-label": "家庭成员" }
   });
-  for (const member of memberResult.members) list.append(memberCard(member));
+  for (const member of memberResult.members) {
+    list.append(memberCard(member, () => openPairing(api, member)));
+  }
 
   const form = element("form", { className: "member-form" });
   const nameField = labeledInput("新成员姓名", "displayName", "name");

@@ -1,6 +1,9 @@
 import { adminHeaders, validateAdminCredential } from "./admin-entry.js";
 
 const FAMILY_ROLES = new Set(["adult", "child", "elder"]);
+const PERSON_REF = /^person:[a-zA-Z0-9][a-zA-Z0-9._:-]{1,126}$/u;
+const PAIRING_REF = /^pairing:[a-z0-9][a-z0-9._:-]{1,126}$/u;
+const PAIRING_CODE = /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/u;
 
 export class AdminApiError extends Error {
   constructor(code, status) {
@@ -191,6 +194,52 @@ export function createAdminApi({ fetchImpl = fetch, credential = null } = {}) {
         typeof value.member.personRef !== "string"
       ) {
         throw new AdminApiError("ADMIN_MEMBER_INVALID", 502);
+      }
+      return value;
+    },
+
+    async createPairing(personRef) {
+      if (validatedCredential?.kind !== "entry") {
+        throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
+      }
+      if (typeof personRef !== "string" || !PERSON_REF.test(personRef)) {
+        throw new AdminApiError("ADMIN_PERSON_REF_INVALID", 400);
+      }
+      const value = await request(
+        `/api/v1/admin/members/${encodeURIComponent(personRef)}/pairing-codes`,
+        { method: "POST", expectedStatus: 201 }
+      );
+      if (
+        !isRecord(value) ||
+        !isRecord(value.pairing) ||
+        !PAIRING_REF.test(value.pairing.pairingRef ?? "") ||
+        !PAIRING_CODE.test(value.pairing.code ?? "") ||
+        typeof value.pairing.expiresAt !== "string" ||
+        !Number.isFinite(Date.parse(value.pairing.expiresAt)) ||
+        value.pairing.status !== "active"
+      ) {
+        throw new AdminApiError("ADMIN_PAIRING_INVALID", 502);
+      }
+      return value;
+    },
+
+    async revokePairing(pairingRef) {
+      if (validatedCredential?.kind !== "entry") {
+        throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
+      }
+      if (typeof pairingRef !== "string" || !PAIRING_REF.test(pairingRef)) {
+        throw new AdminApiError("ADMIN_PAIRING_INVALID", 400);
+      }
+      const value = await request(
+        `/api/v1/admin/pairing-codes/${encodeURIComponent(pairingRef)}`,
+        { method: "DELETE" }
+      );
+      if (
+        !isRecord(value) ||
+        value.pairingRef !== pairingRef ||
+        value.status !== "revoked"
+      ) {
+        throw new AdminApiError("ADMIN_PAIRING_REVOKE_INVALID", 502);
       }
       return value;
     }

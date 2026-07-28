@@ -196,6 +196,102 @@ button:disabled {
   margin: 0;
 }
 
+.pairing-dialog {
+  width: min(560px, calc(100% - 28px));
+  max-height: calc(100vh - 36px);
+  padding: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 28px;
+  color: #18231d;
+  background: #fff;
+  box-shadow: 0 34px 100px rgb(11 34 21 / 35%);
+}
+
+.pairing-dialog::backdrop {
+  background: rgb(12 27 18 / 58%);
+  backdrop-filter: blur(4px);
+}
+
+.pairing-content {
+  position: relative;
+  padding: 34px;
+}
+
+.pairing-content h2 {
+  font-size: 2.4rem;
+}
+
+.icon-button {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  padding: 8px 10px;
+  border: 0;
+  color: #5a685f;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.pairing-code {
+  margin: 24px 0 4px;
+  color: #163e2a;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: clamp(2rem, 8vw, 3.6rem);
+  font-weight: 850;
+  letter-spacing: 0.06em;
+}
+
+.pairing-countdown {
+  color: #68746d;
+  font-variant-numeric: tabular-nums;
+}
+
+.pairing-qr {
+  width: min(300px, 100%);
+  margin: 24px auto;
+}
+
+.pairing-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.pairing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.action-link {
+  display: inline-grid;
+  place-items: center;
+  text-decoration: none;
+}
+
+.action-link[aria-disabled="true"] {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.text-button {
+  min-height: 42px;
+  padding: 0 8px;
+  border: 0;
+  color: #245c42;
+  background: transparent;
+  font: inherit;
+  font-weight: 740;
+  cursor: pointer;
+}
+
+.pairing-actions .form-message {
+  width: 100%;
+}
+
 .member-card p {
   margin-top: 4px;
   color: #65716a;

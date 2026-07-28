@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 const adminPublic = fileURLToPath(new URL("../admin-public/", import.meta.url));
 const entryModuleUrl = pathToFileURL(join(adminPublic, "admin-entry.js")).href;
 const apiModuleUrl = pathToFileURL(join(adminPublic, "admin-api.js")).href;
+const pairingModuleUrl = pathToFileURL(join(adminPublic, "admin-pairing.js")).href;
 const token = `${"A".repeat(42)}A`;
 
 async function entryModule() {
@@ -14,6 +15,10 @@ async function entryModule() {
 
 async function apiModule() {
   return import(`${apiModuleUrl}?test=${Date.now()}-${Math.random()}`);
+}
+
+async function pairingModule() {
+  return import(`${pairingModuleUrl}?test=${Date.now()}-${Math.random()}`);
 }
 
 function memoryStorage() {
@@ -208,5 +213,123 @@ describe("Admin Web API client", () => {
         "X-Entry-Session-Ref": "entry-session:preview-admin"
       });
     }
+  });
+
+  it("creates and revokes pairing material only through the selected member", async () => {
+    const { createAdminApi } = await apiModule();
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (
+        url === "/api/v1/admin/members/person%3Achild/pairing-codes" &&
+        init.method === "POST"
+      ) {
+        return Response.json({
+          protocolVersion: 1,
+          pairing: {
+            pairingRef: "pairing:preview",
+            code: "ABCD-EFGH",
+            expiresAt: "2030-01-01T00:05:00.000Z",
+            status: "active"
+          },
+          family: { displayName: "我的家庭" },
+          person: { displayName: "小明" },
+          qr: {
+            payload: {
+              version: 1,
+              gateway: "https://192.168.110.84:9443",
+              pairingRef: "pairing:preview",
+              code: "ABCD-EFGH",
+              expiresAt: "2030-01-01T00:05:00.000Z"
+            },
+            url: "familyai://pair#redacted"
+          }
+        }, { status: 201 });
+      }
+      if (
+        url === "/api/v1/admin/pairing-codes/pairing%3Apreview" &&
+        init.method === "DELETE"
+      ) {
+        return Response.json({
+          protocolVersion: 1,
+          pairingRef: "pairing:preview",
+          status: "revoked"
+        });
+      }
+      return Response.json({ code: "UNEXPECTED" }, { status: 500 });
+    });
+    const api = createAdminApi({
+      fetchImpl,
+      credential: {
+        kind: "entry",
+        entrySessionRef: "entry-session:preview-admin",
+        token
+      }
+    });
+
+    expect((await api.createPairing("person:child")).pairing.code).toBe("ABCD-EFGH");
+    expect((await api.revokePairing("pairing:preview")).status).toBe("revoked");
+    expect(requests.map(request => [request.url, request.init.method])).toEqual([
+      ["/api/v1/admin/members/person%3Achild/pairing-codes", "POST"],
+      ["/api/v1/admin/pairing-codes/pairing%3Apreview", "DELETE"]
+    ]);
+    for (const request of requests) {
+      expect(request.init.headers).toMatchObject({
+        Authorization: `Bearer ${token}`,
+        "X-Entry-Session-Ref": "entry-session:preview-admin"
+      });
+    }
+  });
+});
+
+describe("Admin Web pairing presentation", () => {
+  it("builds a same-origin fragment handoff, QR, and deterministic expiry", async () => {
+    const {
+      memberHandoffUrl,
+      pairingCountdown,
+      pairingQrSvg
+    } = await pairingModule();
+    const pairing = {
+      pairingRef: "pairing:preview",
+      code: "ABCD-EFGH",
+      expiresAt: "2030-01-01T00:05:00.000Z"
+    };
+    const url = memberHandoffUrl("https://192.168.110.84:9443", pairing);
+
+    expect(url).toBe(
+      "https://192.168.110.84:9443/member/#pairingRef=pairing%3Apreview&code=ABCD-EFGH"
+    );
+    expect(new URL(url).search).toBe("");
+    expect(() => memberHandoffUrl("http://192.168.110.84:9443", pairing))
+      .toThrow("ADMIN_PAIRING_ORIGIN_INVALID");
+    expect(() => memberHandoffUrl("https://example.com", pairing))
+      .toThrow("ADMIN_PAIRING_ORIGIN_INVALID");
+
+    expect(pairingCountdown(
+      pairing.expiresAt,
+      Date.parse("2030-01-01T00:03:59.000Z")
+    )).toEqual({
+      expired: false,
+      remainingSeconds: 61,
+      label: "1:01"
+    });
+    expect(pairingCountdown(
+      pairing.expiresAt,
+      Date.parse("2030-01-01T00:05:00.000Z")
+    )).toEqual({
+      expired: true,
+      remainingSeconds: 0,
+      label: "已过期"
+    });
+
+    const svg = pairingQrSvg(
+      url,
+      (_value: string, options: { title: string }) =>
+        `<svg><title>${options.title}</title><path d="M0 0"></path></svg>`
+    );
+    expect(svg).toContain("<svg");
+    expect(svg).toContain("Family AI Member Web pairing");
+    expect(svg).not.toContain("ABCD-EFGH");
   });
 });
