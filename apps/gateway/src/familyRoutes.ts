@@ -111,10 +111,10 @@ export function registerFamilyRoutes(
       return personalPortalContextSchema.parse({
         protocolVersion: MOBILE_ENTRY_PROTOCOL_VERSION,
         ...personalContext,
-        mountedAgents: mounts.mountedAgents.map((mount) => {
-          const status = input.agentStatus.snapshot(mount.agentRef);
+        mountedAgents: await Promise.all(mounts.mountedAgents.map(async (mount) => {
+          const status = await input.agentStatus.snapshot(mount.agentRef);
           return { ...mount, status: status.status, statusLabel: status.statusLabel };
-        }),
+        })),
         defaultAgentRef: mounts.defaultAgentRef
       });
     }

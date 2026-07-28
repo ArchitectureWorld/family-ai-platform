@@ -36,6 +36,13 @@ export interface PreparedProviderTurn {
   rebuildProviderContext: boolean;
 }
 
+export interface AgentProviderTurnFacts {
+  pending: number;
+  stalePending: number;
+  latestFailedAt: string | null;
+  latestSucceededAt: string | null;
+}
+
 interface ActiveAssignment {
   assignmentRef: string;
   agentRef: string;
@@ -226,6 +233,29 @@ export class ChatWorkProviderRepository {
     });
 
     return resolve();
+  }
+
+  statusFacts(agentRef: string, staleBefore: string): AgentProviderTurnFacts {
+    const row = this.db.prepare(
+      `SELECT
+         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+         SUM(CASE WHEN status = 'pending' AND requested_at < ? THEN 1 ELSE 0 END)
+           AS stale_pending,
+         MAX(CASE WHEN status = 'failed' THEN completed_at END) AS latest_failed_at,
+         MAX(CASE WHEN status = 'succeeded' THEN completed_at END) AS latest_succeeded_at
+       FROM thread_provider_turns
+       WHERE agent_ref = ?`
+    ).get(staleBefore, agentRef) as Record<string, unknown>;
+    return {
+      pending: Number(row.pending ?? 0),
+      stalePending: Number(row.stale_pending ?? 0),
+      latestFailedAt: row.latest_failed_at === null
+        ? null
+        : String(row.latest_failed_at),
+      latestSucceededAt: row.latest_succeeded_at === null
+        ? null
+        : String(row.latest_succeeded_at)
+    };
   }
 
   prepareTurn(input: {

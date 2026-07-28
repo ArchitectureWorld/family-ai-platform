@@ -6,7 +6,10 @@ import {
   type ThreadMessage,
   type ThreadMessageContent
 } from "@family-ai/contracts";
-import type { ProviderAdapter } from "@family-ai/provider-adapter-sdk";
+import type {
+  ProviderAdapter,
+  ProviderAdapterResolver
+} from "@family-ai/provider-adapter-sdk";
 import type { ChatWorkDomainRepository } from "./chatWorkDomain.js";
 import { buildProviderContext } from "./chatWorkContext.js";
 import type { ChatWorkProviderRepository } from "./chatWorkProvider.js";
@@ -68,6 +71,15 @@ function unavailableProvider(): PublicError {
   };
 }
 
+function unconfiguredProvider(): PublicError {
+  return {
+    code: "AGENT_RUNTIME_UNAVAILABLE",
+    category: "availability",
+    message: "Agent 尚未配置。",
+    retryable: true
+  };
+}
+
 function throwProviderError(error: PublicError, statusCode: number): never {
   throw new GatewayDomainError(
     error.code,
@@ -80,13 +92,18 @@ function throwProviderError(error: PublicError, statusCode: number): never {
 
 export class ChatWorkMessageService {
   private readonly lanes = new ThreadLane();
+  private readonly providerResolver: ProviderAdapterResolver;
 
   constructor(
     private readonly domainRepository: ChatWorkDomainRepository,
     private readonly providerRepository: ChatWorkProviderRepository,
-    private readonly providerAdapter: ProviderAdapter,
+    providerResolver: ProviderAdapterResolver | ProviderAdapter,
     private readonly now: () => Date = () => new Date()
-  ) {}
+  ) {
+    this.providerResolver = "resolve" in providerResolver
+      ? providerResolver
+      : { resolve: () => providerResolver };
+  }
 
   async sendPersonMessage(
     input: SendChatWorkMessageInput
@@ -157,9 +174,22 @@ export class ChatWorkMessageService {
         timeoutMs: 30000
       });
 
+      let providerAdapter: ProviderAdapter;
+      try {
+        providerAdapter = this.providerResolver.resolve(turn.providerProfileRef);
+      } catch {
+        const error = unconfiguredProvider();
+        this.providerRepository.markTurnFailed({
+          userMessageRef: message.messageRef,
+          error,
+          completedAt: this.now().toISOString()
+        });
+        return throwProviderError(error, 503);
+      }
+
       let rawResult: unknown;
       try {
-        rawResult = await this.providerAdapter.invoke(request);
+        rawResult = await providerAdapter.invoke(request);
       } catch {
         const error = unavailableProvider();
         this.providerRepository.markTurnFailed({

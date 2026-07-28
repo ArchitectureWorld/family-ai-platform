@@ -9,6 +9,7 @@ import {
 export * from "./codexCliProvider.js";
 export * from "./hermesCliProvider.js";
 export * from "./processRunner.js";
+export * from "./providerRouter.js";
 
 export interface ProviderAdapter {
   invoke(request: ProviderInvocationRequest): Promise<ProviderInvocationResult>;

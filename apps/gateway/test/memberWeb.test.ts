@@ -2,7 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FakeProviderAdapter } from "@family-ai/provider-adapter-sdk";
+import {
+  FakeProviderAdapter,
+  ProviderAdapterRouter
+} from "@family-ai/provider-adapter-sdk";
 import { buildGatewayApp } from "../src/app.js";
 
 const token = "member-web-product-token-with-enough-length";
@@ -116,6 +119,24 @@ describe("Member Web product entry", () => {
         deviceToken: token,
         mode: "production"
       })
-    ).rejects.toThrow("explicit provider adapter");
+    ).rejects.toThrow("explicit provider adapter or router");
+  });
+
+  it("accepts an explicit Provider Router as the production runtime boundary", async () => {
+    const app = await buildGatewayApp({
+      databasePath: databasePathFor("production-with-router"),
+      deviceToken: token,
+      mode: "production",
+      providerRouter: ProviderAdapterRouter.single(
+        "provider-profile:fake-local",
+        new FakeProviderAdapter()
+      )
+    });
+    try {
+      const health = await app.inject({ method: "GET", url: "/health" });
+      expect(health.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
   });
 });

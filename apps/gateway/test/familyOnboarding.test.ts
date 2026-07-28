@@ -193,8 +193,8 @@ describe("Family onboarding and dual-entry sessions", () => {
         agentRef: "agent:personal-assistant",
         displayName: "个人助理",
         isDefault: true,
-        status: "problem",
-        statusLabel: "有问题"
+        status: "idle",
+        statusLabel: "空闲"
       }],
       defaultAgentRef: "agent:personal-assistant"
     });

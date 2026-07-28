@@ -17,8 +17,11 @@ import {
 } from "./agentManagement.js";
 import {
   FakeProviderAdapter,
+  ProviderAdapterRouter,
+  type ProviderAdapterResolver,
   type ProviderAdapter
 } from "@family-ai/provider-adapter-sdk";
+import { AgentStatusService } from "./agentStatus.js";
 import { ChatWorkDomainRepository } from "./chatWorkDomain.js";
 import { ChatWorkMessageService } from "./chatWorkMessageService.js";
 import { ChatWorkProviderRepository } from "./chatWorkProvider.js";
@@ -67,6 +70,7 @@ export interface BuildGatewayAppOptions {
   mode: GatewayMode;
   configuredAgentRuntimes?: readonly ConfiguredAgentRuntime[];
   providerAdapter?: ProviderAdapter;
+  providerRouter?: ProviderAdapterResolver;
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
   previewAdminEntryPath?: string;
   previewAdminOrigin?: string;
@@ -209,8 +213,12 @@ function deviceRef(request: FastifyRequest): string | null {
 }
 
 export async function buildGatewayApp(options: BuildGatewayAppOptions) {
-  if (options.mode === "production" && !options.providerAdapter) {
-    throw new Error("production requires an explicit provider adapter");
+  if (
+    options.mode === "production" &&
+    !options.providerAdapter &&
+    !options.providerRouter
+  ) {
+    throw new Error("production requires an explicit provider adapter or router");
   }
   if (
     (options.previewAdminEntryPath === undefined) !==
@@ -234,15 +242,6 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
 
   const repository = new GatewayRepository(db);
   const agentManagementRepository = new AgentManagementRepository(db, now);
-  const agentStatus: AgentStatusLookup = {
-    snapshot: () => ({
-      status: "problem",
-      statusLabel: "有问题",
-      activeTurnCount: 0,
-      lastCheckedAt: now().toISOString(),
-      publicProblem: "Agent 状态尚未初始化。"
-    })
-  };
   const familyRepository = new FamilyDomainRepository(db, {
     repository: agentManagementRepository,
     configuredRuntimes: options.configuredAgentRuntimes ?? []
@@ -262,8 +261,16 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   const mobileDeviceSummaryRepository = new MobileDeviceSummaryRepository(db);
   const mobileRepository = new MobilePairingRepository(db, { now });
   const webEntryRepository = new WebEntryRepository(db, now);
-  const providerAdapter = options.providerAdapter ?? new FakeProviderAdapter();
-  const messageService = new MessageService(repository, providerAdapter);
+  const providerAdapter = options.providerAdapter ??
+    (options.mode === "production" ? null : new FakeProviderAdapter());
+  const providerRouter = options.providerRouter ??
+    ProviderAdapterRouter.single("provider-profile:fake-local", providerAdapter!);
+  const agentStatus: AgentStatusLookup = new AgentStatusService(
+    db,
+    providerRouter,
+    { now }
+  );
+  const messageService = new MessageService(repository, providerRouter);
   const chatWorkProviderRepository = new ChatWorkProviderRepository(
     db,
     now,
@@ -272,7 +279,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   const chatWorkMessageService = new ChatWorkMessageService(
     chatWorkRepository,
     chatWorkProviderRepository,
-    providerAdapter,
+    providerRouter,
     now
   );
 

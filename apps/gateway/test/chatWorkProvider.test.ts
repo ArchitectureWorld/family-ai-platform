@@ -453,6 +453,65 @@ describe("Chat Work Message service", () => {
     }).messages).toHaveLength(2);
   });
 
+  it("resolves the adapter from the persisted Provider Profile", async () => {
+    const adapter = new FakeProviderAdapter({ clock: () => currentNow });
+    const resolvedProfiles: string[] = [];
+    const service = new ChatWorkMessageService(
+      domainRepository,
+      providerRepository,
+      {
+        resolve(providerProfileRef: string) {
+          resolvedProfiles.push(providerProfileRef);
+          return adapter;
+        }
+      },
+      () => currentNow
+    );
+    const chat = domainRepository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+
+    await service.sendPersonMessage(command(chat.chat.threadRef, "routed"));
+
+    expect(resolvedProfiles).toEqual(["provider-profile:fake-local"]);
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  it("fails an unbound Provider Profile with a bounded 503", async () => {
+    const service = new ChatWorkMessageService(
+      domainRepository,
+      providerRepository,
+      {
+        resolve() {
+          throw new Error("/private/provider/session should not escape");
+        }
+      },
+      () => currentNow
+    );
+    const chat = domainRepository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+
+    await expect(
+      service.sendPersonMessage(command(chat.chat.threadRef, "unbound"))
+    ).rejects.toMatchObject({
+      code: "AGENT_RUNTIME_UNAVAILABLE",
+      statusCode: 503,
+      message: "Agent 尚未配置。"
+    });
+    const stored = db.prepare(
+      `SELECT status, error_json FROM thread_provider_turns
+       WHERE agent_ref = 'agent:personal-assistant'`
+    ).get() as { status: string; error_json: string };
+    expect(stored.status).toBe("failed");
+    expect(stored.error_json).not.toContain("/private/");
+    expect(stored.error_json).not.toContain("session");
+  });
+
   it("serializes Provider calls in one Thread but allows different Threads to run in parallel", async () => {
     const adapter = new ControlledProviderAdapter();
     const service = new ChatWorkMessageService(

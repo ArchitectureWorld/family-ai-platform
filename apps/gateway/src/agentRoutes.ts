@@ -16,13 +16,13 @@ import {
 import { GatewayDomainError } from "./service.js";
 
 export interface AgentStatusLookup {
-  snapshot(agentRef: string): {
+  snapshot(agentRef: string): Promise<{
     status: "idle" | "working" | "problem";
     statusLabel: "空闲" | "工作中" | "有问题";
     activeTurnCount: number;
     lastCheckedAt: string;
     publicProblem: string | null;
-  };
+  }>;
 }
 
 const memberParamsSchema = z.object({ personRef: personRefSchema }).strict();
@@ -40,15 +40,15 @@ export function registerAgentRoutes(
     agentStatus: AgentStatusLookup;
   }
 ): void {
-  const mountResponse = (familyRef: string, personRef: string) => {
+  const mountResponse = async (familyRef: string, personRef: string) => {
     const mounts = input.repository.listMemberMounts(familyRef, personRef);
     return memberAgentMountsResponseSchema.parse({
       protocolVersion: 1,
       ...mounts,
-      mountedAgents: mounts.mountedAgents.map((mount) => {
-        const status = input.agentStatus.snapshot(mount.agentRef);
+      mountedAgents: await Promise.all(mounts.mountedAgents.map(async (mount) => {
+        const status = await input.agentStatus.snapshot(mount.agentRef);
         return { ...mount, status: status.status, statusLabel: status.statusLabel };
-      })
+      }))
     });
   };
 
@@ -56,10 +56,10 @@ export function registerAgentRoutes(
     requireEntryRequest(request, input.entryAuthenticator, "family_admin");
     return adminAgentCatalogResponseSchema.parse({
       protocolVersion: 1,
-      agents: input.repository.listCatalog().map((agent) => ({
+      agents: await Promise.all(input.repository.listCatalog().map(async (agent) => ({
         ...agent,
-        ...input.agentStatus.snapshot(agent.agentRef)
-      }))
+        ...await input.agentStatus.snapshot(agent.agentRef)
+      })))
     });
   });
 
@@ -80,7 +80,9 @@ export function registerAgentRoutes(
       personRef: params.data.personRef,
       agentRef: body.data.agentRef
     });
-    return reply.code(201).send(mountResponse(context.family.familyRef, params.data.personRef));
+    return reply.code(201).send(
+      await mountResponse(context.family.familyRef, params.data.personRef)
+    );
   });
 
   app.delete("/api/v1/admin/members/:personRef/agent-mounts/:agentRef", async (request) => {

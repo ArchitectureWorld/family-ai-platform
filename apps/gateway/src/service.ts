@@ -5,7 +5,10 @@ import {
   type ProviderInvocationRequest,
   type PublicError
 } from "@family-ai/contracts";
-import type { ProviderAdapter } from "@family-ai/provider-adapter-sdk";
+import type {
+  ProviderAdapter,
+  ProviderAdapterResolver
+} from "@family-ai/provider-adapter-sdk";
 import {
   GatewayRepository,
   sha256,
@@ -93,11 +96,16 @@ function assertFixedRoute(device: AuthenticatedDevice, envelope: MessageEnvelope
 
 export class MessageService {
   private readonly queue = new ConversationQueue();
+  private readonly providerResolver: ProviderAdapterResolver;
 
   constructor(
     private readonly repository: GatewayRepository,
-    private readonly providerAdapter: ProviderAdapter
-  ) {}
+    providerResolver: ProviderAdapterResolver | ProviderAdapter
+  ) {
+    this.providerResolver = "resolve" in providerResolver
+      ? providerResolver
+      : { resolve: () => providerResolver };
+  }
 
   private replayOrConflict(input: {
     device: AuthenticatedDevice;
@@ -178,7 +186,21 @@ export class MessageService {
       const providerRequest: ProviderInvocationRequest = externalSessionRef
         ? { ...providerRequestBase, externalSessionRef }
         : providerRequestBase;
-      const providerResult = await this.providerAdapter.invoke(providerRequest);
+      let providerAdapter: ProviderAdapter;
+      try {
+        providerAdapter = this.providerResolver.resolve(
+          providerRequest.providerProfileRef
+        );
+      } catch {
+        throw new GatewayDomainError(
+          "AGENT_RUNTIME_UNAVAILABLE",
+          503,
+          "availability",
+          true,
+          "Agent 尚未配置。"
+        );
+      }
+      const providerResult = await providerAdapter.invoke(providerRequest);
       if (
         providerResult.status !== "succeeded" ||
         !providerResult.output?.[0] ||

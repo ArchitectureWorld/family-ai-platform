@@ -131,7 +131,7 @@ describe("Admin Agent routes", () => {
         status: "problem",
         statusLabel: "有问题",
         activeTurnCount: 0,
-        publicProblem: "Agent 状态尚未初始化。"
+        publicProblem: "Agent 当前无法连接。"
       })])
     );
     const denied = await app.inject({
