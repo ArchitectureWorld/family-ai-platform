@@ -22,6 +22,7 @@ class TestElement extends EventTarget {
   parentElement: TestElement | null = null;
   value = "";
   disabled = false;
+  hidden = false;
   selected = false;
   private text = "";
 
@@ -82,10 +83,14 @@ class TestElement extends EventTarget {
   }
 
   querySelectorAll(selector: string): TestElement[] {
-    const attribute = selector.match(/^\[([a-z0-9-]+)\]$/u)?.[1];
+    const attributeSelector = selector.match(
+      /^\[([a-z0-9-]+)(?:="([^"]*)")?\]$/u
+    );
     const matches = (node: TestElement) =>
-      attribute !== undefined
-        ? node.attributes.has(attribute)
+      attributeSelector !== null
+        ? attributeSelector[2] === undefined
+          ? node.attributes.has(attributeSelector[1]!)
+          : node.attributes.get(attributeSelector[1]!) === attributeSelector[2]
         : node.tagName === selector.toLowerCase();
     const result: TestElement[] = [];
     const visit = (node: TestElement) => {
@@ -98,14 +103,26 @@ class TestElement extends EventTarget {
     return result;
   }
 
+  contains(node: TestElement | null): boolean {
+    if (node === this) return true;
+    return this.children.some((child) => child.contains(node));
+  }
+
+  focus() {
+    if (!this.disabled) this.ownerDocument.activeElement = this;
+  }
+
   click() {
     if (!this.disabled) {
+      this.focus();
       this.dispatchEvent(new Event("click", { cancelable: true }));
     }
   }
 }
 
 class TestDocument {
+  activeElement: TestElement | null = null;
+
   createElement(tagName: string) {
     return new TestElement(tagName.toLowerCase(), this);
   }
@@ -190,12 +207,68 @@ describe("Admin member Agent controls", () => {
     expect(card.textContent).toContain("有问题");
     expect(card.textContent).not.toContain("provider-profile:private");
     expect(card.textContent).not.toContain("Session");
+    const addTrigger = card.querySelector("[data-add-agent-trigger]");
+    const addMenu = card.querySelector("[data-add-agent-menu]");
+    expect(addTrigger?.textContent).toBe("+");
+    expect(addTrigger?.getAttribute("aria-haspopup")).toBe("menu");
+    expect(addTrigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(addMenu?.getAttribute("role")).toBe("menu");
+    expect(addMenu?.hidden).toBe(true);
+    addTrigger?.click();
+    expect(card.querySelector("[data-add-agent-menu]")?.hidden).toBe(false);
+    expect(card.querySelector("[data-add-agent-trigger]")?.getAttribute("aria-expanded"))
+      .toBe("true");
     expect(
-      card.querySelector("[data-add-agent]")?.options
-        .filter((option) => option.value !== "")
-        .map((option) => option.value)
+      card.querySelectorAll("[data-mount-agent]")
+        .map((option) => option.getAttribute("data-mount-agent"))
     ).toEqual(["agent:not-mounted"]);
+    expect(documentRef.activeElement?.getAttribute("data-mount-agent"))
+      .toBe("agent:not-mounted");
     expect(card.querySelector("[data-default-agent]")?.value).toBe("");
+  });
+
+  it("keeps unknown initial state unavailable and mutation-free until reload succeeds", async () => {
+    const { renderMemberAgentControls } = await agentsModule();
+    const documentRef = new TestDocument();
+    const card = documentRef.createElement("article");
+    let unavailable = true;
+    const api = {
+      agents: vi.fn(async () => {
+        if (unavailable) throw new Error("private initial failure");
+        return catalog;
+      }),
+      memberAgentMounts: vi.fn(async () => mounted),
+      mountAgent: vi.fn(),
+      unmountAgent: vi.fn(),
+      setDefaultAgent: vi.fn()
+    };
+    const controller = renderMemberAgentControls({
+      documentRef,
+      root: card,
+      personRef: "person:alice",
+      api,
+      confirmImpl: () => true
+    });
+    await controller.ready;
+
+    expect(card.textContent).toContain("无法确认当前 Agent 配置");
+    expect(card.textContent).not.toContain("尚未挂载");
+    expect(card.textContent).not.toContain("private initial failure");
+    expect(card.querySelector("[data-add-agent-trigger]")).toBeNull();
+    expect(card.querySelector("[data-default-agent]")).toBeNull();
+    expect(card.querySelector("[data-save-default-agent]")).toBeNull();
+    expect(documentRef.activeElement?.getAttribute("data-agent-refresh-retry"))
+      .toBe("");
+
+    unavailable = false;
+    card.querySelector("[data-agent-refresh-retry]")?.click();
+    await flush();
+    await flush();
+    expect(card.textContent).toContain("家庭助理");
+    expect(card.querySelector("[data-add-agent-trigger]")).not.toBeNull();
+    expect(api.mountAgent).not.toHaveBeenCalled();
+    expect(api.unmountAgent).not.toHaveBeenCalled();
+    expect(api.setDefaultAgent).not.toHaveBeenCalled();
   });
 
   it("keeps the mounted control pending, deduplicates clicks, and refreshes server state", async () => {
@@ -244,6 +317,54 @@ describe("Admin member Agent controls", () => {
     expect(card.querySelector("[data-remove-agent]")).toBeNull();
     expect(card.textContent).toContain("尚未挂载");
     expect(card.querySelector("[data-default-agent]")?.value).toBe("");
+  });
+
+  it("retries only refresh after a successful mutation and restores focus", async () => {
+    const { renderMemberAgentControls } = await agentsModule();
+    const documentRef = new TestDocument();
+    const card = documentRef.createElement("article");
+    let mountReads = 0;
+    const removedState = { ...mounted, mountedAgents: [] };
+    const api = {
+      agents: vi.fn(async () => catalog),
+      memberAgentMounts: vi.fn(async () => {
+        mountReads += 1;
+        if (mountReads === 2) throw new Error("private refresh failure");
+        return mountReads === 1 ? mounted : removedState;
+      }),
+      mountAgent: vi.fn(),
+      unmountAgent: vi.fn(async () => undefined),
+      setDefaultAgent: vi.fn()
+    };
+    const controller = renderMemberAgentControls({
+      documentRef,
+      root: card,
+      personRef: "person:alice",
+      api,
+      confirmImpl: () => true
+    });
+    await controller.ready;
+
+    card.querySelector("[data-remove-agent]")?.click();
+    expect(documentRef.activeElement?.getAttribute("data-focus-key"))
+      .toBe("pending");
+    await flush();
+    await flush();
+    expect(api.unmountAgent).toHaveBeenCalledTimes(1);
+    expect(card.textContent).toContain("无法确认当前 Agent 配置");
+    expect(card.textContent).not.toContain("尚未挂载");
+    expect(card.querySelector("[data-add-agent-trigger]")).toBeNull();
+    expect(documentRef.activeElement?.getAttribute("data-agent-refresh-retry"))
+      .toBe("");
+
+    card.querySelector("[data-agent-refresh-retry]")?.click();
+    await flush();
+    await flush();
+    expect(api.unmountAgent).toHaveBeenCalledTimes(1);
+    expect(api.memberAgentMounts).toHaveBeenCalledTimes(3);
+    expect(card.textContent).toContain("尚未挂载");
+    expect(documentRef.activeElement?.getAttribute("data-focus-key"))
+      .toBe("add-menu");
   });
 
   it("sets and clears a nullable default from refreshed server state", async () => {
@@ -327,9 +448,8 @@ describe("Admin member Agent controls", () => {
       confirmImpl: () => true
     });
     await controller.ready;
-    const select = card.querySelector("[data-add-agent]");
-    if (select) select.value = "agent:mounted";
-    card.querySelector("[data-add-agent-submit]")?.click();
+    card.querySelector("[data-add-agent-trigger]")?.click();
+    card.querySelector('[data-mount-agent="agent:mounted"]')?.click();
     await flush();
 
     expect(card.textContent).toContain("暂时无法完成");
@@ -338,7 +458,7 @@ describe("Admin member Agent controls", () => {
     await flush();
     await flush();
     expect(api.mountAgent).toHaveBeenCalledTimes(2);
-    expect(api.memberAgentMounts).toHaveBeenCalledTimes(2);
+    expect(api.memberAgentMounts).toHaveBeenCalledTimes(3);
     expect(card.querySelector("[data-remove-agent]")).not.toBeNull();
   });
 });
