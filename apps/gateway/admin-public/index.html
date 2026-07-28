@@ -56,7 +56,20 @@
           <div id="family-summary"></div>
           <div id="member-management-root"></div>
         </div>
-        <div id="admin-workspace-page" hidden></div>
+        <div id="admin-workspace-page" hidden>
+          <section
+            class="agent-monitor compact"
+            id="admin-agent-monitor"
+            data-agent-monitor
+            aria-label="全部 Agent 运行状态"
+          ></section>
+          <section
+            class="admin-agent-workspace"
+            id="admin-agent-workspace"
+            data-agent-workspace
+            aria-label="Jarvis 与 Codex 系统工作台"
+          ></section>
+        </div>
       </section>
 
       <section class="state-card recovery" data-state="recovery-required" hidden>

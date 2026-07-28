@@ -6,6 +6,16 @@ const PAIRING_REF = /^pairing:[a-z0-9][a-z0-9._:-]{1,126}$/u;
 const PAIRING_CODE = /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/u;
 const ACTIVATION_CODE = /^[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5}$/u;
 const AGENT_REF = /^agent:[a-z0-9][a-z0-9._:-]{1,126}$/u;
+const THREAD_REF = /^thread:[a-z0-9][a-z0-9._:-]{1,126}$/u;
+const WORK_REF = /^work:[a-z0-9][a-z0-9._:-]{1,126}$/u;
+const MESSAGE_REF = /^message:[a-z0-9][a-z0-9._:-]{1,126}$/u;
+const WORK_STATUSES = new Set([
+  "active",
+  "paused",
+  "waiting_confirmation",
+  "completed",
+  "archived"
+]);
 const AGENT_STATUS_LABELS = new Map([
   ["idle", "空闲"],
   ["working", "工作中"],
@@ -81,8 +91,200 @@ function normalizeAgentRef(value) {
   return value;
 }
 
+function normalizeThreadRef(value) {
+  if (typeof value !== "string" || !THREAD_REF.test(value)) {
+    throw new AdminApiError("ADMIN_THREAD_REF_INVALID", 400);
+  }
+  return value;
+}
+
+function normalizeWorkRef(value) {
+  if (typeof value !== "string" || !WORK_REF.test(value)) {
+    throw new AdminApiError("ADMIN_WORK_REF_INVALID", 400);
+  }
+  return value;
+}
+
+function normalizedText(value, { code, max }) {
+  if (typeof value !== "string") throw new AdminApiError(code, 400);
+  const normalized = value.trim();
+  if (normalized.length < 1 || normalized.length > max) {
+    throw new AdminApiError(code, 400);
+  }
+  return normalized;
+}
+
 function validTimestamp(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function safeWorkspaceSummary(value) {
+  if (
+    !isRecord(value) ||
+    value.protocolVersion !== 1 ||
+    !Array.isArray(value.agents) ||
+    value.agents.length > 100
+  ) {
+    throw new AdminApiError("ADMIN_SYSTEM_WORKSPACE_INVALID", 502);
+  }
+  const seen = new Set();
+  const agents = value.agents.map((agent) => {
+    if (
+      !isRecord(agent) ||
+      !AGENT_REF.test(agent.agentRef ?? "") ||
+      typeof agent.displayName !== "string" ||
+      agent.displayName.trim() === "" ||
+      seen.has(agent.agentRef)
+    ) {
+      throw new AdminApiError("ADMIN_SYSTEM_WORKSPACE_INVALID", 502);
+    }
+    seen.add(agent.agentRef);
+    return {
+      agentRef: agent.agentRef,
+      displayName: agent.displayName
+    };
+  });
+  return { protocolVersion: 1, agents };
+}
+
+function safeAgentChat(value, expectedAgentRef) {
+  if (
+    !isRecord(value) ||
+    value.protocolVersion !== 1 ||
+    !isRecord(value.chat) ||
+    value.chat.agentRef !== expectedAgentRef ||
+    !THREAD_REF.test(value.chat.threadRef ?? "")
+  ) {
+    throw new AdminApiError("ADMIN_SYSTEM_CHAT_INVALID", 502);
+  }
+  return {
+    protocolVersion: 1,
+    chat: {
+      agentRef: expectedAgentRef,
+      threadRef: value.chat.threadRef
+    }
+  };
+}
+
+function safeWorkConversation(value, expectedAgentRef, code) {
+  if (
+    !isRecord(value) ||
+    value.agentRef !== expectedAgentRef ||
+    !THREAD_REF.test(value.threadRef ?? "") ||
+    !WORK_REF.test(value.workConversationRef ?? "") ||
+    typeof value.title !== "string" ||
+    value.title.trim() === "" ||
+    !WORK_STATUSES.has(value.status)
+  ) {
+    throw new AdminApiError(code, 502);
+  }
+  return {
+    agentRef: expectedAgentRef,
+    threadRef: value.threadRef,
+    workConversationRef: value.workConversationRef,
+    title: value.title,
+    status: value.status
+  };
+}
+
+function safeWorkList(value, expectedAgentRef) {
+  if (
+    !isRecord(value) ||
+    value.protocolVersion !== 1 ||
+    !Array.isArray(value.conversations) ||
+    value.conversations.length > 500
+  ) {
+    throw new AdminApiError("ADMIN_SYSTEM_WORKS_INVALID", 502);
+  }
+  return {
+    protocolVersion: 1,
+    conversations: value.conversations.map((conversation) =>
+      safeWorkConversation(
+        conversation,
+        expectedAgentRef,
+        "ADMIN_SYSTEM_WORKS_INVALID"
+      ))
+  };
+}
+
+function safeMessage(value, expectedThreadRef, code) {
+  const text = isRecord(value?.content) &&
+    value.content.type === "text" &&
+    typeof value.content.text === "string"
+    ? value.content.text
+    : null;
+  if (
+    !isRecord(value) ||
+    !MESSAGE_REF.test(value.messageRef ?? "") ||
+    value.threadRef !== expectedThreadRef ||
+    !Number.isSafeInteger(value.threadSequence) ||
+    value.threadSequence < 1 ||
+    text === null ||
+    text.length < 1 ||
+    text.length > 12000
+  ) {
+    throw new AdminApiError(code, 502);
+  }
+  return {
+    messageRef: value.messageRef,
+    threadRef: expectedThreadRef,
+    threadSequence: value.threadSequence,
+    content: { type: "text", text }
+  };
+}
+
+function safeMessageList(value, expectedThreadRef) {
+  if (
+    !isRecord(value) ||
+    value.protocolVersion !== 1 ||
+    value.threadRef !== expectedThreadRef ||
+    !Array.isArray(value.messages) ||
+    value.messages.length > 200
+  ) {
+    throw new AdminApiError("ADMIN_SYSTEM_MESSAGES_INVALID", 502);
+  }
+  let previousSequence = 0;
+  const messages = value.messages.map((message) => {
+    const safe = safeMessage(
+      message,
+      expectedThreadRef,
+      "ADMIN_SYSTEM_MESSAGES_INVALID"
+    );
+    if (safe.threadSequence <= previousSequence) {
+      throw new AdminApiError("ADMIN_SYSTEM_MESSAGES_INVALID", 502);
+    }
+    previousSequence = safe.threadSequence;
+    return safe;
+  });
+  return { protocolVersion: 1, threadRef: expectedThreadRef, messages };
+}
+
+function safeProgress(value, expectedWorkRef) {
+  if (
+    !isRecord(value) ||
+    value.protocolVersion !== 1 ||
+    !isRecord(value.snapshot) ||
+    value.snapshot.workConversationRef !== expectedWorkRef ||
+    !WORK_STATUSES.has(value.snapshot.status)
+  ) {
+    throw new AdminApiError("ADMIN_SYSTEM_PROGRESS_INVALID", 502);
+  }
+  const publicFields = [
+    "phaseSummary",
+    "incompleteTasks",
+    "risks",
+    "pendingConfirmations",
+    "deadlines",
+    "updatedAt"
+  ];
+  const snapshot = {
+    workConversationRef: expectedWorkRef,
+    status: value.snapshot.status
+  };
+  for (const field of publicFields) {
+    if (Object.hasOwn(value.snapshot, field)) snapshot[field] = value.snapshot[field];
+  }
+  return { protocolVersion: 1, snapshot };
 }
 
 function safeAgentStatus(value, code) {
@@ -197,7 +399,12 @@ export function normalizeActivationCode(value) {
   return normalized;
 }
 
-export function createAdminApi({ fetchImpl = fetch, credential = null } = {}) {
+export function createAdminApi({
+  fetchImpl = fetch,
+  credential = null,
+  uuid = () => crypto.randomUUID(),
+  now = () => new Date()
+} = {}) {
   const validatedCredential = credential === null
     ? null
     : validateAdminCredential(credential);
@@ -425,6 +632,122 @@ export function createAdminApi({ fetchImpl = fetch, credential = null } = {}) {
         }
       );
       return validateMemberMounts(value, normalizedPersonRef);
+    },
+
+    async systemWorkspace() {
+      requireEntryCredential(validatedCredential);
+      return safeWorkspaceSummary(
+        await request("/api/v1/admin/system-workspace")
+      );
+    },
+
+    async systemAgentChat(agentRef) {
+      requireEntryCredential(validatedCredential);
+      const normalizedAgentRef = normalizeAgentRef(agentRef);
+      const value = await request(
+        `/api/v1/admin/system-workspace/agents/` +
+          `${encodeURIComponent(normalizedAgentRef)}/chat`
+      );
+      return safeAgentChat(value, normalizedAgentRef);
+    },
+
+    async systemAgentWorkConversations(agentRef) {
+      requireEntryCredential(validatedCredential);
+      const normalizedAgentRef = normalizeAgentRef(agentRef);
+      const value = await request(
+        `/api/v1/admin/system-workspace/agents/` +
+          `${encodeURIComponent(normalizedAgentRef)}/work-conversations`
+      );
+      return safeWorkList(value, normalizedAgentRef);
+    },
+
+    async createSystemAgentWork(agentRef, input) {
+      requireEntryCredential(validatedCredential);
+      const normalizedAgentRef = normalizeAgentRef(agentRef);
+      const value = await request(
+        `/api/v1/admin/system-workspace/agents/` +
+          `${encodeURIComponent(normalizedAgentRef)}/work-conversations`,
+        {
+          method: "POST",
+          expectedStatus: 201,
+          body: {
+            protocolVersion: 1,
+            title: normalizedText(input?.title, {
+              code: "ADMIN_WORK_TITLE_INVALID",
+              max: 120
+            }),
+            goal: normalizedText(input?.goal, {
+              code: "ADMIN_WORK_GOAL_INVALID",
+              max: 4000
+            })
+          }
+        }
+      );
+      if (!isRecord(value) || value.protocolVersion !== 1) {
+        throw new AdminApiError("ADMIN_SYSTEM_WORK_INVALID", 502);
+      }
+      return {
+        protocolVersion: 1,
+        conversation: safeWorkConversation(
+          value.conversation,
+          normalizedAgentRef,
+          "ADMIN_SYSTEM_WORK_INVALID"
+        )
+      };
+    },
+
+    async systemThreadMessages(threadRef) {
+      requireEntryCredential(validatedCredential);
+      const normalizedThreadRef = normalizeThreadRef(threadRef);
+      const value = await request(
+        `/api/v1/admin/system-workspace/threads/` +
+          `${encodeURIComponent(normalizedThreadRef)}/messages`
+      );
+      return safeMessageList(value, normalizedThreadRef);
+    },
+
+    async sendSystemThreadMessage(threadRef, text) {
+      requireEntryCredential(validatedCredential);
+      const normalizedThreadRef = normalizeThreadRef(threadRef);
+      const normalizedContent = normalizedText(text, {
+        code: "ADMIN_MESSAGE_INVALID",
+        max: 12000
+      });
+      const value = await request(
+        `/api/v1/admin/system-workspace/threads/` +
+          `${encodeURIComponent(normalizedThreadRef)}/messages`,
+        {
+          method: "POST",
+          expectedStatus: 201,
+          body: {
+            protocolVersion: 1,
+            clientMessageId: `admin-web:${uuid()}`,
+            occurredAt: now().toISOString(),
+            content: { type: "text", text: normalizedContent }
+          }
+        }
+      );
+      if (!isRecord(value) || value.protocolVersion !== 1) {
+        throw new AdminApiError("ADMIN_SYSTEM_MESSAGE_INVALID", 502);
+      }
+      return {
+        protocolVersion: 1,
+        message: safeMessage(
+          value.message,
+          normalizedThreadRef,
+          "ADMIN_SYSTEM_MESSAGE_INVALID"
+        )
+      };
+    },
+
+    async systemWorkProgress(workRef) {
+      requireEntryCredential(validatedCredential);
+      const normalizedWorkRef = normalizeWorkRef(workRef);
+      const value = await request(
+        `/api/v1/admin/system-workspace/work-conversations/` +
+          `${encodeURIComponent(normalizedWorkRef)}/progress`
+      );
+      return safeProgress(value, normalizedWorkRef);
     },
 
     async createPairing(personRef) {

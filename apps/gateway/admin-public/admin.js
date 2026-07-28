@@ -7,6 +7,7 @@ import {
 } from "./admin-entry.js";
 import { AdminApiError, createAdminApi } from "./admin-api.js";
 import { renderMemberAgentControls } from "./admin-agents.js";
+import { createAdminWorkspace } from "./admin-workspace.js";
 import {
   createPairingDismissalGuard,
   memberHandoffUrl,
@@ -32,9 +33,17 @@ const activationMessage = document.querySelector("#admin-activation-message");
 let activePairingDialog = null;
 let activePairingTimer = null;
 let activePairingDismissal = null;
+let activeWorkspace = null;
+let activeManagementApi = null;
+
+function destroyAdminWorkspace() {
+  activeWorkspace?.destroy();
+  activeWorkspace = null;
+}
 
 export function showAdminState(name) {
   if (!states.has(name)) throw new Error("ADMIN_STATE_INVALID");
+  if (name !== "management") destroyAdminWorkspace();
   for (const [stateName, element] of states) {
     element.hidden = stateName !== name;
   }
@@ -46,6 +55,15 @@ function showAdminPage(name) {
   }
   membersPage.hidden = name !== "members";
   workspacePage.hidden = name !== "workspace";
+  if (name === "workspace" && activeWorkspace === null && activeManagementApi) {
+    activeWorkspace = createAdminWorkspace({
+      root: workspacePage,
+      api: activeManagementApi
+    });
+    void activeWorkspace.ready;
+  } else if (name !== "workspace") {
+    destroyAdminWorkspace();
+  }
   for (const button of adminPageButtons) {
     const selected = button.dataset.adminPage === name;
     button.setAttribute("aria-selected", String(selected));
@@ -443,6 +461,8 @@ async function openPairing(api, member) {
 
 async function renderManagement(credential, persistenceWarning = "") {
   const api = createAdminApi({ credential });
+  destroyAdminWorkspace();
+  activeManagementApi = api;
   const [context, memberResult] = await Promise.all([
     api.context(),
     api.members()

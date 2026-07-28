@@ -225,6 +225,225 @@ button:disabled {
   box-shadow: 0 3px 12px rgb(25 67 43 / 10%);
 }
 
+#admin-workspace-page {
+  min-width: 0;
+}
+
+.agent-monitor {
+  position: sticky;
+  z-index: 10;
+  top: 10px;
+  display: grid;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 12px 14px;
+  border: 1px solid #cfddd3;
+  border-radius: 15px;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 8px 24px rgb(31 61 43 / 10%);
+}
+
+.agent-monitor.compact {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.agent-monitor-title {
+  white-space: nowrap;
+}
+
+.agent-monitor-statuses {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.agent-monitor-item,
+.agent-monitor-summary {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.agent-monitor.detail .agent-monitor-item {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.agent-status-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #2d9858;
+}
+
+.status-working .agent-status-dot {
+  background: #dd8a22;
+}
+
+.status-problem .agent-status-dot {
+  background: #ca463d;
+}
+
+.agent-monitor-detail {
+  color: #637169;
+  font-size: 0.78rem;
+}
+
+.agent-monitor-toggle {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid #c5d3c9;
+  border-radius: 10px;
+  color: #315342;
+  background: #fff;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 720;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.admin-agent-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.agent-pane {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid #d7e1da;
+  border-radius: 18px;
+  background: #f9fbf9;
+}
+
+.agent-pane-heading h3 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.agent-pane-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 16px 0;
+  padding: 4px;
+  border-radius: 12px;
+  background: #eaf0eb;
+}
+
+.agent-pane-modes button,
+.agent-work-item,
+.agent-work-create button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 9px;
+  color: #526158;
+  background: transparent;
+  font: inherit;
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.agent-pane-modes button.is-selected,
+.agent-work-item.is-selected {
+  color: #17472f;
+  background: #fff;
+  box-shadow: 0 2px 8px rgb(25 67 43 / 10%);
+}
+
+.agent-work-list {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin-bottom: 10px;
+}
+
+.agent-work-item {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border: 1px solid #d3ddd6;
+  background: #fff;
+}
+
+.agent-work-create {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.agent-work-create input,
+.agent-pane-composer textarea {
+  min-width: 0;
+  border: 1px solid #cad7ce;
+  border-radius: 10px;
+  color: #17251d;
+  background: #fff;
+  font: inherit;
+}
+
+.agent-work-create input {
+  min-height: 38px;
+  padding: 0 10px;
+}
+
+.agent-work-create button {
+  padding: 0 10px;
+  color: #245c42;
+  background: #e4efe7;
+}
+
+.agent-work-progress {
+  margin: 0 0 10px;
+  color: #52675a;
+  font-size: 0.84rem;
+}
+
+.agent-pane-messages {
+  min-height: 220px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #e0e7e2;
+  border-radius: 13px;
+  background: #fff;
+}
+
+.agent-pane-message {
+  margin: 0 0 9px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: #eef5f0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.agent-pane-empty {
+  color: #718077;
+}
+
+.agent-pane-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.agent-pane-composer textarea {
+  min-height: 76px;
+  padding: 10px;
+  resize: vertical;
+}
+
+.agent-pane-error {
+  margin: 10px 0 0;
+  color: #a34235;
+}
+
 .member-card {
   padding: 18px;
   border: 1px solid #dce5df;
@@ -594,6 +813,22 @@ button:disabled {
 }
 
 @media (max-width: 700px) {
+  .agent-monitor.compact {
+    grid-template-columns: 1fr auto;
+  }
+
+  .agent-monitor.compact .agent-monitor-title {
+    grid-column: 1 / -1;
+  }
+
+  .admin-agent-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-work-create {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .admin-shell {
     padding-top: 28px;
   }

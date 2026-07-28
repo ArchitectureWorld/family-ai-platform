@@ -60,6 +60,10 @@ describe("development Admin Web product entry", () => {
       expect(admin.body).toContain('data-admin-page="workspace"');
       expect(admin.body).toContain('id="admin-members-page"');
       expect(admin.body).toContain('id="admin-workspace-page"');
+      expect(admin.body).toContain('id="admin-agent-monitor"');
+      expect(admin.body).toContain('id="admin-agent-workspace"');
+      expect(admin.body.indexOf('id="admin-agent-monitor"'))
+        .toBeLessThan(admin.body.indexOf('id="admin-agent-workspace"'));
       expect(admin.body).not.toContain("Provider Session");
       expect(admin.body).not.toContain("消息正文");
 
@@ -69,6 +73,7 @@ describe("development Admin Web product entry", () => {
         ["/admin/assets/admin-entry.js", "text/javascript"],
         ["/admin/assets/admin-api.js", "text/javascript"],
         ["/admin/assets/admin-agents.js", "text/javascript"],
+        ["/admin/assets/admin-workspace.js", "text/javascript"],
         ["/admin/assets/admin-pairing.js", "text/javascript"],
         ["/admin/assets/qr.js", "text/javascript"],
         ["/admin/assets/qr-v10.mjs", "text/javascript"]
@@ -101,6 +106,7 @@ describe("development Admin Web product entry", () => {
           "/admin/assets/admin-entry.js",
           "/admin/assets/admin-api.js",
           "/admin/assets/admin-agents.js",
+          "/admin/assets/admin-workspace.js",
           "/admin/assets/admin-pairing.js",
           "/admin/assets/qr.js",
           "/admin/assets/qr-v10.mjs"
