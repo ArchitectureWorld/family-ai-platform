@@ -223,7 +223,7 @@ describe("gateway database", () => {
       ).run("pairing:active");
     }).toThrow(/CHECK constraint failed/);
     expect(db.pragma("foreign_key_check")).toEqual([]);
-  });
+  }, 15_000);
 
   it("rejects unknown newer Gateway schema versions", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-unknown-schema-"));

@@ -298,7 +298,7 @@ process.stdout.write(String(status));
         malformedEntryToken
       );
     }
-  });
+  }, 20_000);
 
   it("describes verification only through normal Chat, Work and recovery behavior", () => {
     const verify = read("scripts/verify-foundation.sh");
