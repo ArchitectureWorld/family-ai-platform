@@ -223,6 +223,68 @@ describe("Admin Web API client", () => {
     });
   });
 
+  it("exchanges a normalized short code publicly and strictly validates the credential", async () => {
+    const {
+      createAdminApi,
+      normalizeActivationCode
+    } = await apiModule();
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      requests.push({ url: String(input), init });
+      return Response.json({
+        adminCredential: {
+          kind: "entry",
+          entrySessionRef: "entry-session:preview-admin",
+          token
+        }
+      });
+    });
+
+    expect(normalizeActivationCode(" abcde-fghjk ")).toBe("ABCDE-FGHJK");
+    for (const value of [
+      "ABCDE-FGHIJ",
+      "ABCDE-FGHJ",
+      "ABCDE_FGHJK",
+      "ABCDE-FGHJK-extra",
+      null
+    ]) {
+      expect(() => normalizeActivationCode(value), String(value))
+        .toThrow("ADMIN_ACTIVATION_CODE_INVALID");
+    }
+
+    const credential = await createAdminApi({ fetchImpl })
+      .exchangePreviewActivation(" abcde-fghjk ");
+    expect(credential).toEqual({
+      kind: "entry",
+      entrySessionRef: "entry-session:preview-admin",
+      token
+    });
+    expect(requests).toEqual([{
+      url: "/api/v1/admin/preview-activation",
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: "ABCDE-FGHJK" })
+      }
+    }]);
+
+    const malformedApi = createAdminApi({
+      fetchImpl: async () => Response.json({
+        adminCredential: {
+          kind: "entry",
+          entrySessionRef: "entry-session:preview-admin",
+          token: "short"
+        }
+      })
+    });
+    await expect(malformedApi.exchangePreviewActivation("ABCDE-FGHJK"))
+      .rejects.toMatchObject({
+        name: "AdminApiError",
+        code: "ADMIN_PREVIEW_ACTIVATION_RESPONSE_INVALID",
+        status: 502
+      });
+  });
+
   it("creates and revokes pairing material only through the selected member", async () => {
     const { createAdminApi } = await apiModule();
     const requests: Array<{ url: string; init: RequestInit }> = [];

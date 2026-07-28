@@ -4,6 +4,7 @@ const FAMILY_ROLES = new Set(["adult", "child", "elder"]);
 const PERSON_REF = /^person:[a-zA-Z0-9][a-zA-Z0-9._:-]{1,126}$/u;
 const PAIRING_REF = /^pairing:[a-z0-9][a-z0-9._:-]{1,126}$/u;
 const PAIRING_CODE = /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/u;
+const ACTIVATION_CODE = /^[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5}$/u;
 
 export class AdminApiError extends Error {
   constructor(code, status) {
@@ -64,6 +65,17 @@ export function normalizeFamilyRole(value) {
   return value;
 }
 
+export function normalizeActivationCode(value) {
+  if (typeof value !== "string") {
+    throw new Error("ADMIN_ACTIVATION_CODE_INVALID");
+  }
+  const normalized = value.trim().toUpperCase();
+  if (!ACTIVATION_CODE.test(normalized)) {
+    throw new Error("ADMIN_ACTIVATION_CODE_INVALID");
+  }
+  return normalized;
+}
+
 export function createAdminApi({ fetchImpl = fetch, credential = null } = {}) {
   const validatedCredential = credential === null
     ? null
@@ -96,6 +108,32 @@ export function createAdminApi({ fetchImpl = fetch, credential = null } = {}) {
   }
 
   return Object.freeze({
+    async exchangePreviewActivation(code) {
+      const value = await request("/api/v1/admin/preview-activation", {
+        method: "POST",
+        body: { code: normalizeActivationCode(code) },
+        publicRequest: true
+      });
+      if (
+        !isRecord(value) ||
+        Object.keys(value).length !== 1 ||
+        !isRecord(value.adminCredential)
+      ) {
+        throw new AdminApiError(
+          "ADMIN_PREVIEW_ACTIVATION_RESPONSE_INVALID",
+          502
+        );
+      }
+      try {
+        return validateAdminCredential(value.adminCredential);
+      } catch {
+        throw new AdminApiError(
+          "ADMIN_PREVIEW_ACTIVATION_RESPONSE_INVALID",
+          502
+        );
+      }
+    },
+
     async onboardingStatus() {
       const value = await request("/api/v1/onboarding/status", {
         publicRequest: true
