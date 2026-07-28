@@ -193,6 +193,8 @@ export class CodexCliProviderAdapter implements ProviderAdapter {
     }
 
     const globalArgs = [
+      "-c",
+      'model_reasoning_effort="low"',
       "-s",
       "workspace-write",
       "-a",

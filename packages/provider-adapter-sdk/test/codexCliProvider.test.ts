@@ -130,11 +130,12 @@ describe("CodexCliProviderAdapter", () => {
 
     expect(second.output).toEqual([{ type: "text", text: "Codex 第二轮。" }]);
     expect(invocations[0]).toEqual({
-      args: ["-s", "workspace-write", "-a", "never", "-C", cwd, "exec", "--json"],
+      args: ["-c", 'model_reasoning_effort="low"', "-s", "workspace-write", "-a", "never", "-C", cwd, "exec", "--json"],
       prompt: "第一轮。",
       envKeys: ["CODEX_HOME", "HOME", "LANG", "PATH", "TERM"]
     });
     expect(invocations[1]?.args).toEqual([
+      "-c", 'model_reasoning_effort="low"',
       "-s", "workspace-write", "-a", "never", "-C", cwd,
       "exec", "resume", "thread_abc-42", "--json"
     ]);
