@@ -333,11 +333,20 @@ export function createApiClient(
       "/api/v1/web-entry/cookies/clear",
       { method: "POST" }
     ),
-    getWebContext: () => apiRequest("/api/v1/web-entry/context"),
+    getWebContext: async () => ({
+      protocolVersion: 2,
+      context: await apiRequest("/api/v1/portal/context")
+    }),
     renewWebSession: () => apiRequest("/api/v1/web-entry/session/renew", { method: "POST" }),
     logoutWebSession: () => apiRequest("/api/v1/web-entry/logout", { method: "POST" }),
     revokeWebDevice: () => apiRequest("/api/v1/web-entry/device", { method: "DELETE" }),
-    getHomeChat: (timezone) => apiRequest(queryPath("/api/v1/chat", { timezone })),
+    getHomeChat: (agentRef, timezone) => {
+      const legacyTimeZone = timezone === undefined && !String(agentRef).startsWith("agent:")
+        ? agentRef
+        : timezone;
+      const selectedAgentRef = legacyTimeZone === agentRef ? undefined : agentRef;
+      return apiRequest(queryPath("/api/v1/chat", { agentRef: selectedAgentRef, timezone: legacyTimeZone }));
+    },
     getThreadMessages: (threadRef, options = {}) => apiRequest(queryPath(
       `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
       {
@@ -349,7 +358,8 @@ export function createApiClient(
       `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
       { method: "POST", body: request }
     ),
-    listWorks: () => apiRequest("/api/v1/work-conversations"),
+    listWorks: (agentRef) =>
+      apiRequest(queryPath("/api/v1/work-conversations", { agentRef })),
     createWork: (request) => apiRequest("/api/v1/work-conversations", {
       method: "POST",
       body: request

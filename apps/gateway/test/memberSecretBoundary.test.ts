@@ -446,11 +446,11 @@ describe("Member Web five-sentinel boundary", () => {
     expect(sentinels.pairingCode).toMatch(/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/u);
     expect(new URL(sentinels.handoff).hash).toContain("pairingRef=");
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input) === "/api/v1/web-entry/context") {
-        return new Response(JSON.stringify({
-          protocolVersion: 1,
-          context: memberContextFixture()
-        }), { status: 200, headers: { "content-type": "application/json" } });
+      if (String(input) === "/api/v1/portal/context") {
+        return new Response(JSON.stringify(memberContextFixture()), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
       }
       return new Response(
         JSON.stringify({
@@ -485,7 +485,7 @@ describe("Member Web five-sentinel boundary", () => {
     expectNoBoundaryLeaks(error);
     const ordinary = await api.getWebContext();
     expect(ordinary).toEqual({
-      protocolVersion: 1,
+      protocolVersion: 2,
       context: memberContextFixture()
     });
     expectNoBoundaryLeaks(ordinary);

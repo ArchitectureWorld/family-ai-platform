@@ -207,13 +207,15 @@ export async function openMemberCache(
   };
 }
 
-export async function readBootstrapSnapshot(cache) {
+export async function readBootstrapSnapshot(cache, agentRef = null) {
   return cache.transaction(MEMBER_CACHE_STORES, async (transaction) => {
     const [
       contextRecord,
       sequenceRecord,
       selectedSectionRecord,
       selectedWorkRecord,
+      selectedAgentRecord,
+      chatRecord,
       threads,
       messages,
       works,
@@ -224,7 +226,14 @@ export async function readBootstrapSnapshot(cache) {
       transaction.get("meta", "context"),
       transaction.get("meta", "localAppliedSequence"),
       transaction.get("meta", "selectedSection"),
-      transaction.get("meta", "selectedWorkRef"),
+      transaction.get(
+        "meta",
+        agentRef ? `selectedWorkRef:${agentRef}` : "selectedWorkRef"
+      ),
+      transaction.get("meta", "selectedAgentRef"),
+      agentRef
+        ? transaction.get("meta", `chat:${agentRef}`)
+        : Promise.resolve(null),
       transaction.getAll("threads"),
       transaction.getAll("messages"),
       transaction.getAll("works"),
@@ -232,6 +241,23 @@ export async function readBootstrapSnapshot(cache) {
       transaction.getAll("drafts"),
       transaction.getAll("outgoing")
     ]);
+    const projectedWorks = agentRef
+      ? works.filter((work) => work.agentRef === agentRef)
+      : works;
+    const allowedThreadRefs = new Set([
+      ...projectedWorks.map((work) => work.threadRef),
+      ...(chatRecord?.value?.chat?.threadRef
+        ? [chatRecord.value.chat.threadRef]
+        : [])
+    ]);
+    const projectByThread = (items) => !agentRef
+      ? items
+      : items.filter((item) =>
+          item.agentRef === agentRef || allowedThreadRefs.has(item.threadRef)
+        );
+    const projectedWorkRefs = new Set(
+      projectedWorks.map((work) => work.workConversationRef)
+    );
     return {
       context: contextRecord?.value ?? null,
       localAppliedSequence: Number(sequenceRecord?.value ?? 0),
@@ -239,13 +265,30 @@ export async function readBootstrapSnapshot(cache) {
       selectedWorkRef: typeof selectedWorkRecord?.value === "string"
         ? selectedWorkRecord.value
         : null,
-      threads,
-      messages: sortMessages(messages),
-      works: sortWorks(works),
-      progress,
-      drafts,
-      outgoing
+      ...(agentRef
+        ? {
+            selectedAgentRef: typeof selectedAgentRecord?.value === "string"
+              ? selectedAgentRecord.value
+              : null,
+            chat: chatRecord?.value ?? null
+          }
+        : {}),
+      threads: projectByThread(threads),
+      messages: sortMessages(projectByThread(messages)),
+      works: sortWorks(projectedWorks),
+      progress: agentRef
+        ? progress.filter((item) => projectedWorkRefs.has(item.workConversationRef))
+        : progress,
+      drafts: projectByThread(drafts),
+      outgoing: projectByThread(outgoing)
     };
+  });
+}
+
+export async function readSelectedAgentRef(cache) {
+  return cache.transaction(["meta"], async (transaction) => {
+    const record = await transaction.get("meta", "selectedAgentRef");
+    return typeof record?.value === "string" ? record.value : null;
   });
 }
 
@@ -269,6 +312,21 @@ export async function mergeThreadPage(cache, _threadRef, messages) {
   });
 }
 
+export async function saveWorksForAgent(cache, agentRef, works) {
+  return cache.transaction(["works"], async (transaction) => {
+    const all = await transaction.getAll("works");
+    for (const work of all) {
+      if (work.agentRef === agentRef) {
+        await transaction.delete("works", work.workConversationRef);
+      }
+    }
+    for (const work of works) {
+      await transaction.put("works", { ...work, agentRef });
+    }
+  });
+}
+
+// Compatibility for pre-Agent cache tests and one-time legacy migrations.
 export async function saveWorks(cache, works) {
   return cache.transaction(["works"], async (transaction) => {
     await transaction.clear("works");
@@ -280,7 +338,7 @@ export async function saveProgress(cache, snapshot) {
   return cache.transaction(["progress"], (transaction) => transaction.put("progress", snapshot));
 }
 
-export async function saveDraft(cache, threadRef, text) {
+export async function saveDraft(cache, threadRef, text, agentRef = null) {
   return cache.transaction(["drafts"], async (transaction) => {
     if (text.length === 0) {
       await transaction.delete("drafts", threadRef);
@@ -288,6 +346,7 @@ export async function saveDraft(cache, threadRef, text) {
     }
     await transaction.put("drafts", {
       threadRef,
+      ...(agentRef ? { agentRef } : {}),
       text,
       updatedAt: new Date().toISOString()
     });

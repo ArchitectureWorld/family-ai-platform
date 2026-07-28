@@ -27,6 +27,7 @@ export function createOutgoingMessage(input) {
   return {
     threadRef: input.threadRef,
     clientMessageId: input.clientMessageId,
+    ...(input.agentRef ? { agentRef: input.agentRef } : {}),
     occurredAt: input.occurredAt,
     content: structuredClone(input.content),
     status: "sending",
@@ -103,6 +104,28 @@ export function createThreadController(input) {
   const now = input.now ?? (() => new Date());
   const uuid = input.uuid ?? (() => crypto.randomUUID());
 
+  function selectedAgentRef() {
+    const state = store.getState();
+    if (!Object.prototype.hasOwnProperty.call(state, "currentAgentRef")) {
+      return state.context?.agent?.agentRef ?? "agent:personal-assistant";
+    }
+    const agentRef = state.currentAgentRef;
+    if (!agentRef) throw new Error("AGENT_SELECTION_REQUIRED");
+    return agentRef;
+  }
+
+  function assertStillSelected(agentRef) {
+    const state = store.getState();
+    if (!Object.prototype.hasOwnProperty.call(state, "currentAgentRef")) {
+      return;
+    }
+    if (state.currentAgentRef !== agentRef) {
+      const error = new Error("Agent selection changed.");
+      error.code = "AGENT_SELECTION_CHANGED";
+      throw error;
+    }
+  }
+
   async function persistReconciledOutgoing(previous, next) {
     const nextIds = new Set(next.map((item) => item.clientMessageId));
     for (const item of previous) {
@@ -110,8 +133,10 @@ export function createThreadController(input) {
     }
   }
 
-  async function applyPage(threadRef, page, mode) {
+  async function applyPage(agentRef, threadRef, page, mode) {
+    assertStillSelected(agentRef);
     await mergeThreadPage(cache, threadRef, page.messages);
+    assertStillSelected(agentRef);
 
     const before = store.getState();
     const existing = before.messagesByThread?.[threadRef] ?? [];
@@ -141,26 +166,33 @@ export function createThreadController(input) {
   }
 
   async function loadLatest(threadRef, limit = 100) {
+    const agentRef = selectedAgentRef();
     const page = await api.getThreadMessages(threadRef, { limit });
-    return applyPage(threadRef, page, "latest");
+    return applyPage(agentRef, threadRef, page, "latest");
   }
 
   async function loadEarlier(threadRef, limit = 100) {
+    const agentRef = selectedAgentRef();
     const beforeSequence = store.getState().paginationByThread?.[threadRef];
     if (beforeSequence === null || beforeSequence === undefined) return null;
     const page = await api.getThreadMessages(threadRef, { beforeSequence, limit });
-    return applyPage(threadRef, page, "earlier");
+    return applyPage(agentRef, threadRef, page, "earlier");
   }
 
   async function saveDraft(threadRef, text) {
-    await persistDraft(cache, threadRef, text);
+    const agentRef = selectedAgentRef();
+    await persistDraft(cache, threadRef, text, agentRef);
+    assertStillSelected(agentRef);
     updateDraftState(store, threadRef, text);
   }
 
   async function transmit(outgoing) {
     try {
+      assertStillSelected(outgoing.agentRef);
       await api.sendThreadMessage(outgoing.threadRef, retryPayload(outgoing));
+      assertStillSelected(outgoing.agentRef);
       await loadLatest(outgoing.threadRef);
+      assertStillSelected(outgoing.agentRef);
       await removeOutgoing(cache, outgoing.clientMessageId);
       const remaining = (store.getState().outgoing ?? []).filter(
         (item) => item.clientMessageId !== outgoing.clientMessageId
@@ -169,6 +201,7 @@ export function createThreadController(input) {
       await saveDraft(outgoing.threadRef, "");
       return { status: "succeeded" };
     } catch (error) {
+      if (error?.code === "AGENT_SELECTION_CHANGED") throw error;
       const failed = {
         ...outgoing,
         status: "failed",
@@ -193,8 +226,10 @@ export function createThreadController(input) {
       await saveDraft(threadRef, text);
       return { status: "draft" };
     }
+    const agentRef = selectedAgentRef();
     const outgoing = createOutgoingMessage({
       threadRef,
+      agentRef,
       clientMessageId: `web:${uuid()}`,
       occurredAt: now().toISOString(),
       content: {
@@ -204,18 +239,24 @@ export function createThreadController(input) {
       }
     });
     await saveOutgoing(cache, outgoing);
+    assertStillSelected(agentRef);
     setOutgoing(store, [...(store.getState().outgoing ?? []), outgoing]);
     return transmit(outgoing);
   }
 
   async function retry(clientMessageId) {
+    const agentRef = selectedAgentRef();
     const existing = (store.getState().outgoing ?? []).find(
       (item) => item.clientMessageId === clientMessageId
     );
     if (!existing) throw new Error("OUTGOING_MESSAGE_NOT_FOUND");
+    if (existing.agentRef && existing.agentRef !== agentRef) {
+      throw new Error("OUTGOING_AGENT_MISMATCH");
+    }
     if (!isOnline()) return { status: "draft" };
-    const sending = { ...existing, status: "sending", error: null };
+    const sending = { ...existing, agentRef, status: "sending", error: null };
     await saveOutgoing(cache, sending);
+    assertStillSelected(agentRef);
     setOutgoing(store, (store.getState().outgoing ?? []).map((item) =>
       item.clientMessageId === clientMessageId ? sending : item
     ));

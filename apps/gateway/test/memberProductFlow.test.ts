@@ -92,18 +92,18 @@ async function createClaimedMemberApp() {
   const cookie = cookieHeader(initialClaim.headers["set-cookie"]);
   const context = await app.inject({
     method: "GET",
-    url: "/api/v1/web-entry/context",
+    url: "/api/v1/portal/context",
     headers: { cookie }
   });
   expect(context.statusCode).toBe(200);
   expect(context.json()).toMatchObject({
-    protocolVersion: 2,
-    context: {
-      protocolVersion: 1,
-      person: { personRef: initialized.owner.personRef }
-    }
+    protocolVersion: 1,
+    person: { personRef: initialized.owner.personRef },
+    mountedAgents: [{ agentRef: "agent:personal-assistant", isDefault: true }],
+    defaultAgentRef: "agent:personal-assistant"
   });
-  return { app, databasePath, cookie };
+  const agentRef = (context.json() as { defaultAgentRef: string }).defaultAgentRef;
+  return { app, databasePath, cookie, agentRef };
 }
 
 function cookieWriteHeaders(cookie: string) {
@@ -128,7 +128,7 @@ describe("Member Web normal product flow", () => {
     try {
       const chatResponse = await setup.app.inject({
         method: "GET",
-        url: "/api/v1/chat?timezone=America%2FLos_Angeles",
+        url: `/api/v1/chat?agentRef=${encodeURIComponent(setup.agentRef)}&timezone=America%2FLos_Angeles`,
         headers: { cookie: setup.cookie }
       });
       expect(chatResponse.statusCode).toBe(200);
@@ -176,6 +176,7 @@ describe("Member Web normal product flow", () => {
         headers: cookieWriteHeaders(setup.cookie),
         payload: {
           protocolVersion: 1,
+          agentRef: setup.agentRef,
           title: "家庭 AI 产品工作台",
           goal: "验证独立 Work 对话"
         }
@@ -230,7 +231,7 @@ describe("Member Web normal product flow", () => {
 
       const works = await setup.app.inject({
         method: "GET",
-        url: "/api/v1/work-conversations",
+        url: `/api/v1/work-conversations?agentRef=${encodeURIComponent(setup.agentRef)}`,
         headers: { cookie: setup.cookie }
       });
       expect(works.statusCode).toBe(200);
@@ -276,7 +277,7 @@ describe("Member Web normal product flow", () => {
     const setup = await createClaimedMemberApp();
     const chat = await setup.app.inject({
       method: "GET",
-      url: "/api/v1/chat?timezone=UTC",
+      url: `/api/v1/chat?agentRef=${encodeURIComponent(setup.agentRef)}&timezone=UTC`,
       headers: { cookie: setup.cookie }
     });
     const threadRef = (chat.json() as { chat: { threadRef: string } }).chat.threadRef;
@@ -303,14 +304,14 @@ describe("Member Web normal product flow", () => {
     try {
       const context = await restarted.inject({
         method: "GET",
-        url: "/api/v1/web-entry/context",
+        url: "/api/v1/portal/context",
         headers: { cookie: setup.cookie }
       });
       expect(context.statusCode).toBe(200);
 
       const restoredChat = await restarted.inject({
         method: "GET",
-        url: "/api/v1/chat",
+        url: `/api/v1/chat?agentRef=${encodeURIComponent(setup.agentRef)}`,
         headers: { cookie: setup.cookie }
       });
       expect(restoredChat.statusCode).toBe(200);

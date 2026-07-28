@@ -8,9 +8,28 @@ export function createChatController(input) {
   const { api, cache, store, threadController } = input;
   const timeZone = input.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
 
+  function selectedAgentRef() {
+    const agentRef = store.getState().currentAgentRef;
+    if (!agentRef) throw new Error("AGENT_SELECTION_REQUIRED");
+    return agentRef;
+  }
+
+  function assertStillSelected(agentRef) {
+    if (store.getState().currentAgentRef !== agentRef) {
+      const error = new Error("Agent selection changed.");
+      error.code = "AGENT_SELECTION_CHANGED";
+      throw error;
+    }
+  }
+
   async function initialize() {
-    const response = await api.getHomeChat(timeZone);
-    await saveMeta(cache, "chat", response);
+    const agentRef = selectedAgentRef();
+    const response = store.getState().legacyAgentProjection
+      ? await api.getHomeChat(timeZone)
+      : await api.getHomeChat(agentRef, timeZone);
+    assertStillSelected(agentRef);
+    await saveMeta(cache, `chat:${agentRef}`, response);
+    assertStillSelected(agentRef);
     store.setState((current) => ({
       ...current,
       chat: response.chat,
@@ -18,12 +37,18 @@ export function createChatController(input) {
       activeThreadRef: response.chat.threadRef
     }));
     await threadController.loadLatest(response.chat.threadRef);
+    assertStillSelected(agentRef);
     return response;
   }
 
   async function refresh() {
-    const response = await api.getHomeChat(timeZone);
-    await saveMeta(cache, "chat", response);
+    const agentRef = selectedAgentRef();
+    const response = store.getState().legacyAgentProjection
+      ? await api.getHomeChat(timeZone)
+      : await api.getHomeChat(agentRef, timeZone);
+    assertStillSelected(agentRef);
+    await saveMeta(cache, `chat:${agentRef}`, response);
+    assertStillSelected(agentRef);
     store.setState((current) => ({
       ...current,
       chat: response.chat,
@@ -47,7 +72,9 @@ export function createChatController(input) {
 
   async function convertSelectionToWork(command) {
     const current = store.getState();
+    const agentRef = selectedAgentRef();
     const messageRefs = uniqueRefs(current.selectedMessageRefs ?? []);
+    if (!current.currentAgentRef) throw new Error("AGENT_SELECTION_REQUIRED");
     if (!current.chat || messageRefs.length === 0) throw new Error("CHAT_SELECTION_REQUIRED");
     const result = await api.convertChatToWork({
       protocolVersion: 1,
@@ -61,6 +88,7 @@ export function createChatController(input) {
       decisions: command.decisions ?? [],
       openQuestions: command.openQuestions ?? []
     });
+    assertStillSelected(agentRef);
     clearSelection();
     return result;
   }

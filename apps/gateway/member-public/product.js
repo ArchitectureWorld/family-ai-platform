@@ -2,6 +2,7 @@ import { createApiClient } from "./api.js";
 import {
   applyEventTransaction,
   readBootstrapSnapshot,
+  readSelectedAgentRef,
   saveMeta
 } from "./cache.js";
 import {
@@ -9,6 +10,7 @@ import {
   openIdentityMemberCache,
   sameCacheIdentity
 } from "./cache-identity.js";
+import { chooseInitialAgent, isMountedAgent } from "./agent-selector.js";
 import { createChatController } from "./chat.js";
 import { createRenderer } from "./render.js";
 import { createStore } from "./store.js";
@@ -68,16 +70,21 @@ export function nextNavigationState(state, section) {
   };
 }
 
-function initialState(context, snapshot) {
+function initialState(context, snapshot, selection) {
   const section = snapshot.selectedSection === "work" ? "work" : "chat";
+  const currentAgentRef = selection.kind === "selected" ? selection.agentRef : null;
+  const cachedChat = currentAgentRef ? snapshot.chat : null;
   return {
     context,
+    currentAgentRef,
+    legacyAgentProjection: !Array.isArray(context?.mountedAgents),
+    agentSelectionKind: selection.kind,
     section,
-    chat: null,
-    currentEpisode: null,
+    chat: cachedChat?.chat ?? null,
+    currentEpisode: cachedChat?.currentEpisode ?? null,
     works: snapshot.works ?? [],
     selectedWorkRef: snapshot.selectedWorkRef ?? null,
-    activeThreadRef: null,
+    activeThreadRef: cachedChat?.chat?.threadRef ?? null,
     messagesByThread: groupByThread(snapshot.messages),
     paginationByThread: {},
     outgoing: snapshot.outgoing ?? [],
@@ -96,6 +103,35 @@ function initialState(context, snapshot) {
   };
 }
 
+export function projectAgentState(current, context, snapshot, agentRef) {
+  const projected = initialState(
+    context,
+    snapshot,
+    agentRef
+      ? { kind: "selected", agentRef }
+      : {
+          kind: context.mountedAgents?.length
+            ? "selection_required"
+            : "unconfigured"
+        }
+  );
+  return {
+    ...projected,
+    network: current.network,
+    sync: current.sync,
+    section: current.section,
+    activeThreadRef: current.section === "work"
+      ? selectedWork(projected)?.threadRef ?? null
+      : projected.chat?.threadRef ?? null
+  };
+}
+
+function agentUnavailableError() {
+  const error = new Error("当前 Agent 已不可用，请重新选择。");
+  error.code = "AGENT_NOT_MOUNTED";
+  return error;
+}
+
 function isEntryFailure(error) {
   return [
     "ENTRY_SESSION_EXPIRED",
@@ -106,22 +142,51 @@ function isEntryFailure(error) {
 }
 
 async function reloadCacheIntoStore(cache, store) {
-  const snapshot = await readBootstrapSnapshot(cache);
-  store.setState((current) => ({
-    ...current,
-    works: snapshot.works,
-    messagesByThread: groupByThread(snapshot.messages),
-    outgoing: snapshot.outgoing,
-    drafts: draftMap(snapshot.drafts),
-    progressByWork: mapBy(snapshot.progress, "workConversationRef"),
-    sync: {
-      ...current.sync,
-      localAppliedSequence: Math.max(
-        current.sync?.localAppliedSequence ?? 0,
-        snapshot.localAppliedSequence
-      )
+  const agentRef = store.getState().currentAgentRef ?? null;
+  const cached = await readBootstrapSnapshot(cache, agentRef);
+  const snapshot = agentRef
+    ? cached
+    : {
+        ...cached,
+        works: [],
+        messages: [],
+        outgoing: [],
+        drafts: [],
+        progress: [],
+        chat: null,
+        selectedWorkRef: null
+      };
+
+  store.setState((current) => {
+    if ((current.currentAgentRef ?? null) !== agentRef) {
+      return current;
     }
-  }));
+
+    const workRefs = new Set(snapshot.works.map((work) => work.workConversationRef));
+    const selectedWorkRef = workRefs.has(current.selectedWorkRef)
+      ? current.selectedWorkRef
+      : workRefs.has(snapshot.selectedWorkRef)
+        ? snapshot.selectedWorkRef
+        : snapshot.works[0]?.workConversationRef ?? null;
+
+    return {
+      ...current,
+      chat: snapshot.chat,
+      works: snapshot.works,
+      selectedWorkRef,
+      messagesByThread: groupByThread(snapshot.messages),
+      outgoing: snapshot.outgoing,
+      drafts: draftMap(snapshot.drafts),
+      progressByWork: mapBy(snapshot.progress, "workConversationRef"),
+      sync: {
+        ...current.sync,
+        localAppliedSequence: Math.max(
+          current.sync?.localAppliedSequence ?? 0,
+          snapshot.localAppliedSequence
+        )
+      }
+    };
+  });
 }
 
 function userMessageForEvent(target, threadPages, state) {
@@ -162,9 +227,33 @@ export function createEventApplier(input) {
       throw new Error("SYNC_SEQUENCE_GAP");
     }
 
+    const selectionState = store.getState();
+    const hasAgentProjection = Object.prototype.hasOwnProperty.call(
+      selectionState,
+      "currentAgentRef"
+    );
+    const agentRef = hasAgentProjection
+      ? selectionState.currentAgentRef
+      : selectionState.context?.agent?.agentRef ?? "agent:personal-assistant";
+    const eventAgentRef = target.payload?.agentRef ?? null;
+    if (!agentRef || (eventAgentRef && eventAgentRef !== agentRef)) {
+      return applyEventTransaction(
+        cache,
+        target.eventSequence,
+        async () => undefined
+      );
+    }
     const plan = eventRefreshPlan(target, store.getState().activeThreadRef);
-    const chatResponse = plan.chat ? await api.getHomeChat(timeZone) : null;
-    const worksResponse = plan.works ? await api.listWorks() : null;
+    const chatResponse = plan.chat
+      ? hasAgentProjection
+        ? await api.getHomeChat(agentRef, timeZone)
+        : await api.getHomeChat(timeZone)
+      : null;
+    const worksResponse = plan.works
+      ? hasAgentProjection
+        ? await api.listWorks(agentRef)
+        : await api.listWorks()
+      : null;
     const threadPages = new Map();
     for (const threadRef of plan.threads) {
       threadPages.set(threadRef, await api.getThreadMessages(threadRef, { limit: 100 }));
@@ -179,23 +268,33 @@ export function createEventApplier(input) {
 
     const currentState = store.getState();
     const userMessage = userMessageForEvent(target, threadPages, currentState);
-    const failure = target.eventType === "thread.provider_turn.failed"
+    const failureBase = target.eventType === "thread.provider_turn.failed"
       ? failedOutgoing(target, userMessage)
       : null;
+    const failure = failureBase ? { ...failureBase, agentRef } : null;
     const succeededClientMessageId = target.eventType === "thread.provider_turn.succeeded"
       ? userMessage?.clientMessageId ?? null
       : null;
 
     const committed = await applyEventTransaction(cache, target.eventSequence, async (transaction) => {
       if (chatResponse) {
-        await transaction.put("meta", { key: "chat", value: chatResponse });
+        await transaction.put("meta", {
+          key: `chat:${agentRef}`,
+          value: chatResponse
+        });
         await transaction.put("threads", chatResponse.chat);
       }
       if (worksResponse) {
-        await transaction.clear("works");
+        const allWorks = await transaction.getAll("works");
+        for (const work of allWorks) {
+          if (work.agentRef === agentRef) {
+            await transaction.delete("works", work.workConversationRef);
+          }
+        }
         for (const work of worksResponse.conversations) {
-          await transaction.put("works", work);
-          await transaction.put("threads", work);
+          const projectedWork = { ...work, agentRef };
+          await transaction.put("works", projectedWork);
+          await transaction.put("threads", projectedWork);
         }
       }
       for (const page of threadPages.values()) {
@@ -221,7 +320,7 @@ export function createEventApplier(input) {
     });
     if (!committed) return false;
 
-    const afterSnapshot = await readBootstrapSnapshot(cache);
+    const afterSnapshot = await readBootstrapSnapshot(cache, agentRef);
     store.setState((current) => {
       const paginationByThread = { ...(current.paginationByThread ?? {}) };
       for (const [threadRef, page] of threadPages) {
@@ -229,7 +328,9 @@ export function createEventApplier(input) {
           paginationByThread[threadRef] = page.nextBeforeSequence ?? null;
         }
       }
-      const works = worksResponse?.conversations ?? afterSnapshot.works;
+      const works = worksResponse?.conversations?.map(
+        (work) => ({ ...work, agentRef })
+      ) ?? afterSnapshot.works;
       const selectedStillExists = works.some(
         (work) => work.workConversationRef === current.selectedWorkRef
       );
@@ -347,6 +448,8 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
   const openCache = options.openCache ?? openIdentityMemberCache;
   const rendererFactory = options.rendererFactory ?? createRenderer;
   const syncFactory = options.syncFactory ?? createSyncController;
+  const setIntervalFn = options.setIntervalFn ?? globalThis.setInterval.bind(globalThis);
+  const clearIntervalFn = options.clearIntervalFn ?? globalThis.clearInterval.bind(globalThis);
   const globalTarget = options.globalTarget ?? globalThis;
   const withIdentityOpenLock = options.withIdentityOpenLock ?? (async (operation) => operation());
   const acquireProductFlight = options.acquireProductFlight ?? (async () => ({
@@ -382,6 +485,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
   let disposePromise = null;
   let online = () => undefined;
   let offline = () => undefined;
+  let contextRefreshTimer = null;
 
   function assertCurrentGeneration() {
     if (generation !== requestedGeneration) {
@@ -602,6 +706,11 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
           offlineAttached = false;
         }
       });
+      await settleStage(() => {
+        if (contextRefreshTimer === null) return;
+        clearIntervalFn(contextRefreshTimer);
+        contextRefreshTimer = null;
+      });
       await settleStage(() => cache?.close?.());
       await settleStage(() => releaseProductFlight());
       if (disposalErrors.length === 1) throw disposalErrors[0];
@@ -634,10 +743,30 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       assertStartupOwnership();
     });
     assertStartupOwnership();
-    const snapshot = await readBootstrapSnapshot(cache);
+    const baseSnapshot = await readBootstrapSnapshot(cache);
+    const savedAgentRef = Array.isArray(context?.mountedAgents)
+      ? await readSelectedAgentRef(cache)
+      : null;
+    const selection = chooseInitialAgent(context, savedAgentRef);
+    const snapshot = selection.kind === "selected" &&
+      Array.isArray(context?.mountedAgents)
+      ? await readBootstrapSnapshot(cache, selection.agentRef)
+      : selection.kind === "selected"
+        ? baseSnapshot
+      : {
+          ...baseSnapshot,
+          chat: null,
+          selectedWorkRef: null,
+          threads: [],
+          messages: [],
+          works: [],
+          progress: [],
+          drafts: [],
+          outgoing: []
+        };
     assertStartupOwnership();
   cache = guardedCache(cache);
-  const store = guardedStore(createStore(initialState(context, snapshot)));
+  const store = guardedStore(createStore(initialState(context, snapshot, selection)));
   const threadController = createThreadController({
     api,
     cache,
@@ -657,6 +786,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
   const workController = createWorkController({ api, cache, store, threadController });
   const applyEvent = createEventApplier({ api, cache, store, timeZone });
 
+  let agentSwitchGeneration = 0;
   let startupSettled = false;
   let startupEntryFailure = null;
   let entryRecoveryPromise = null;
@@ -709,7 +839,107 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     }
   }
 
+  function emptyAgentSnapshot(base = {}) {
+    return {
+      ...base,
+      chat: null,
+      selectedWorkRef: null,
+      threads: [],
+      messages: [],
+      works: [],
+      progress: [],
+      drafts: [],
+      outgoing: []
+    };
+  }
+
+  function assertUsableAgent() {
+    const state = store.getState();
+    if (
+      !state.currentAgentRef ||
+      !isMountedAgent(state.context, state.currentAgentRef)
+    ) {
+      throw agentUnavailableError();
+    }
+    return state.currentAgentRef;
+  }
+
+  async function refreshAgentContext() {
+    const response = await api.getWebContext();
+    const nextContext = response.context;
+    const current = store.getState();
+    const currentAgentRef = current.currentAgentRef;
+    if (currentAgentRef && !isMountedAgent(nextContext, currentAgentRef)) {
+      agentSwitchGeneration += 1;
+      store.setState((state) => projectAgentState(
+        state,
+        nextContext,
+        emptyAgentSnapshot(),
+        null
+      ));
+      await saveMeta(cache, "selectedAgentRef", null);
+      renderer?.showToast("当前 Agent 已被管理员移除，请重新选择。", "error");
+      return { kind: "revoked" };
+    }
+    store.setState((state) => ({ ...state, context: nextContext }));
+    return { kind: "current" };
+  }
+
+  async function switchAgent(agentRef) {
+    const current = store.getState();
+    if (!isMountedAgent(current.context, agentRef)) {
+      throw agentUnavailableError();
+    }
+    const switchGeneration = ++agentSwitchGeneration;
+    store.setState((state) => projectAgentState(
+      state,
+      state.context,
+      emptyAgentSnapshot({ selectedSection: state.section }),
+      agentRef
+    ));
+    await saveMeta(cache, "selectedAgentRef", agentRef);
+    const projected = await readBootstrapSnapshot(cache, agentRef);
+    if (
+      switchGeneration !== agentSwitchGeneration ||
+      !isMountedAgent(store.getState().context, agentRef)
+    ) {
+      throw agentUnavailableError();
+    }
+    store.setState((state) => projectAgentState(
+      state,
+      state.context,
+      projected,
+      agentRef
+    ));
+    const results = await Promise.allSettled([
+      chatController.initialize(),
+      workController.initialize()
+    ]);
+    if (switchGeneration !== agentSwitchGeneration) return null;
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) {
+      if (failure.reason?.code === "AGENT_NOT_MOUNTED") {
+        await refreshAgentContext();
+      }
+      throw failure.reason;
+    }
+    const savedWork = projected.selectedWorkRef && store.getState().works.some(
+      (work) => work.workConversationRef === projected.selectedWorkRef
+    )
+      ? projected.selectedWorkRef
+      : null;
+    if (projected.selectedSection === "work" && savedWork) {
+      await workController.open(savedWork);
+      store.setState((state) => nextNavigationState(state, "work"));
+    } else {
+      store.setState((state) => nextNavigationState(state, "chat"));
+    }
+    return agentRef;
+  }
+
   const actionImplementations = {
+    switchAgent,
+    refreshAgentContext,
     navigate(section) {
       store.setState((current) => nextNavigationState(current, section));
       void trackActionPromise(saveMeta(cache, "selectedSection", section));
@@ -729,6 +959,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       }
     },
     async createWork(command) {
+      assertUsableAgent();
       return guarded(async () => {
         const work = await workController.create(command);
         store.setState((current) => ({ ...current, section: "work" }));
@@ -737,6 +968,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       });
     },
     async send(target, text) {
+      assertUsableAgent();
       const state = store.getState();
       const threadRef = target === "chat"
         ? state.chat?.threadRef
@@ -747,6 +979,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       return result;
     },
     async saveDraft(target, text) {
+      assertUsableAgent();
       const state = store.getState();
       const threadRef = target === "chat"
         ? state.chat?.threadRef
@@ -754,6 +987,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       if (threadRef) await threadController.saveDraft(threadRef, text);
     },
     async loadEarlier(target) {
+      assertUsableAgent();
       return guarded(async () => {
         const state = store.getState();
         const threadRef = target === "chat"
@@ -763,12 +997,14 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       });
     },
     async retry(clientMessageId) {
+      assertUsableAgent();
       const result = await threadController.retry(clientMessageId);
       if (result?.status === "failed") handleEntryFailure(result.error);
       return result;
     },
     toggleMessageSelection: (messageRef) => chatController.toggleMessageSelection(messageRef),
     async convertChatToWork(command) {
+      assertUsableAgent();
       return guarded(async () => {
         const result = await chatController.convertSelectionToWork({
           ...command,
@@ -783,6 +1019,12 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
   };
 
   const actions = {
+    switchAgent: (...args) => runTrackedAction(
+      () => actionImplementations.switchAgent(...args)
+    ),
+    refreshAgentContext: (...args) => runTrackedAction(
+      () => actionImplementations.refreshAgentContext(...args)
+    ),
     navigate: (...args) => runOwnedAction(
       () => actionImplementations.navigate(...args)
     ),
@@ -870,10 +1112,12 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
   activeWorkbench = ownedWorkbench;
 
   try {
-    const initializerResults = await trackActionPromise(Promise.allSettled([
-      chatController.initialize(),
-      workController.initialize()
-    ]));
+    const initializerResults = store.getState().currentAgentRef
+      ? await trackActionPromise(Promise.allSettled([
+          chatController.initialize(),
+          workController.initialize()
+        ]))
+      : [];
     assertStartupOwnership();
     if (startupEntryFailure) throw startupEntryFailure;
     const initializerFailures = initializerResults.filter(
@@ -885,17 +1129,19 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       (result) => isEntryFailure(result.reason)
     ) ?? initializerFailures[0];
     if (initializerFailure) throw initializerFailure.reason;
-    const savedWork = snapshot.selectedWorkRef && store.getState().works.some(
+    const savedWork = store.getState().currentAgentRef &&
+      snapshot.selectedWorkRef &&
+      store.getState().works.some(
       (work) => work.workConversationRef === snapshot.selectedWorkRef
     )
       ? snapshot.selectedWorkRef
       : null;
-    if (snapshot.selectedSection === "work" && savedWork) {
+    if (store.getState().currentAgentRef && snapshot.selectedSection === "work" && savedWork) {
       await workController.open(savedWork);
       assertStartupOwnership();
       if (startupEntryFailure) throw startupEntryFailure;
       store.setState((current) => nextNavigationState(current, "work"));
-    } else {
+    } else if (store.getState().currentAgentRef) {
       store.setState((current) => nextNavigationState(current, "chat"));
       if (snapshot.selectedSection === "work") {
         await saveMeta(cache, "selectedSection", "chat");
@@ -907,6 +1153,12 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     await syncController.start();
     assertStartupOwnership();
     if (startupEntryFailure) throw startupEntryFailure;
+    contextRefreshTimer = setIntervalFn(() => {
+      void actions.refreshAgentContext().catch((error) => {
+        if (runtimeInactive() || handleEntryFailure(error)) return;
+        renderer?.showToast("Agent 状态刷新失败，请稍后重试。", "error");
+      });
+    }, 5000);
   } catch (error) {
     assertCurrentGeneration();
     if (isOwnershipGuardFailure(error)) throw error;

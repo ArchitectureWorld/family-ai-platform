@@ -11,6 +11,7 @@ import { createWorkController } from "../member-public/work.js";
 
 function state() {
   return {
+    currentAgentRef: "agent:personal-assistant",
     chat: null,
     currentEpisode: null,
     works: [],
@@ -54,6 +55,42 @@ const assistantMessage = {
 };
 
 describe("Member Web Thread controller", () => {
+  it("does not project a late message page after the selected Agent changes", async () => {
+    let resolvePage!: (value: Record<string, unknown>) => void;
+    const page = new Promise<Record<string, unknown>>((resolve) => {
+      resolvePage = resolve;
+    });
+    const store = createStore(state());
+    const controller = createThreadController({
+      api: {
+        getThreadMessages: vi.fn(() => page),
+        sendThreadMessage: vi.fn()
+      },
+      cache: createMemoryCache(),
+      store
+    });
+
+    const loading = controller.loadLatest("thread:chat-0001");
+    store.setState((current) => ({
+      ...current,
+      currentAgentRef: "agent:second"
+    }));
+    resolvePage({
+      protocolVersion: 1,
+      threadRef: "thread:chat-0001",
+      messages: [personMessage],
+      nextBeforeSequence: null
+    });
+
+    await expect(loading).rejects.toMatchObject({
+      code: "AGENT_SELECTION_CHANGED"
+    });
+    expect(store.getState()).toMatchObject({
+      currentAgentRef: "agent:second",
+      messagesByThread: {}
+    });
+  });
+
   it("keeps offline input as a draft and never reports it as sent", async () => {
     const cache = createMemoryCache();
     const store = createStore(state());
@@ -194,6 +231,48 @@ describe("Member Web Thread controller", () => {
 });
 
 describe("Member Web Chat and Work controllers", () => {
+  it("does not project a late Home Chat response after the selected Agent changes", async () => {
+    let resolveChat!: (value: Record<string, unknown>) => void;
+    const response = new Promise<Record<string, unknown>>((resolve) => {
+      resolveChat = resolve;
+    });
+    const store = createStore(state());
+    const controller = createChatController({
+      api: { getHomeChat: vi.fn(() => response) },
+      cache: createMemoryCache(),
+      store,
+      threadController: { loadLatest: vi.fn() },
+      timeZone: "UTC"
+    });
+
+    const initialization = controller.initialize();
+    store.setState((current) => ({
+      ...current,
+      currentAgentRef: "agent:second"
+    }));
+    resolveChat({
+      protocolVersion: 1,
+      chat: {
+        threadRef: "thread:chat-late",
+        threadKind: "home_chat",
+        personRef: "person:alice",
+        agentRef: "agent:personal-assistant",
+        homeChatStreamRef: "home-chat:late",
+        status: "active"
+      },
+      currentEpisode: null
+    });
+
+    await expect(initialization).rejects.toMatchObject({
+      code: "AGENT_SELECTION_CHANGED"
+    });
+    expect(store.getState()).toMatchObject({
+      currentAgentRef: "agent:second",
+      chat: null,
+      messagesByThread: {}
+    });
+  });
+
   it("initializes the one Home Chat and converts a unique message selection into Work", async () => {
     const cache = createMemoryCache();
     const store = createStore(state());
@@ -205,6 +284,7 @@ describe("Member Web Chat and Work controllers", () => {
           threadRef: "thread:chat-0001",
           threadKind: "home_chat",
           personRef: "person:alice",
+          agentRef: "agent:personal-assistant",
           lastSequence: 2,
           createdAt: "2026-07-25T09:00:00.000Z",
           lastActiveAt: "2026-07-25T10:00:01.000Z",
@@ -241,7 +321,10 @@ describe("Member Web Chat and Work controllers", () => {
     });
 
     await controller.initialize();
-    expect(api.getHomeChat).toHaveBeenCalledWith("America/Los_Angeles");
+    expect(api.getHomeChat).toHaveBeenCalledWith(
+      "agent:personal-assistant",
+      "America/Los_Angeles"
+    );
     expect(threadController.loadLatest).toHaveBeenCalledWith("thread:chat-0001");
     controller.toggleMessageSelection("message:person-0001");
     controller.toggleMessageSelection("message:person-0001");
@@ -281,6 +364,7 @@ describe("Member Web Chat and Work controllers", () => {
       archivedAt: null,
       threadKind: "work",
       personRef: "person:alice",
+      agentRef: "agent:personal-assistant",
       lastSequence: 0,
       createdAt: "2026-07-25T10:00:00.000Z",
       lastActiveAt: "2026-07-25T10:00:00.000Z"
@@ -294,10 +378,12 @@ describe("Member Web Chat and Work controllers", () => {
     const controller = createWorkController({ api, cache, store, threadController });
 
     await controller.initialize();
+    expect(api.listWorks).toHaveBeenCalledWith("agent:personal-assistant");
     expect(store.getState().works).toEqual([work]);
     await controller.create({ title: "家庭 AI", goal: "持续开发" });
     expect(api.createWork).toHaveBeenCalledWith({
       protocolVersion: 1,
+      agentRef: "agent:personal-assistant",
       title: "家庭 AI",
       goal: "持续开发"
     });

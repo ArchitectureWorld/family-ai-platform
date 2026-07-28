@@ -122,6 +122,62 @@ function ensureMobileWorkSelect(documentRef, listenerOptions, actions) {
   return select;
 }
 
+function publicAgentStatus(agent) {
+  const labels = {
+    idle: "空闲",
+    working: "工作中",
+    problem: "有问题"
+  };
+  return labels[agent.status] ?? agent.statusLabel ?? "有问题";
+}
+
+function renderAgentSelector(documentRef, listenerOptions, state, actions, onError) {
+  const agents = state.context?.mountedAgents ?? [];
+  const list = $(documentRef, "agentChipList");
+  const empty = $(documentRef, "agentEmptyState");
+  const mobile = $(documentRef, "mobileAgentSelect");
+  if (!list || !empty || !mobile) return;
+  clear(list);
+  clear(mobile);
+
+  const placeholder = documentRef.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = agents.length
+    ? "选择一个 Agent 开始"
+    : "管理员尚未为你配置 Agent";
+  placeholder.selected = !state.currentAgentRef;
+  mobile.append(placeholder);
+
+  const emptyMessage = agents.length
+    ? "选择一个 Agent 开始"
+    : "管理员尚未为你配置 Agent";
+  empty.textContent = emptyMessage;
+  empty.classList.toggle("hidden", Boolean(state.currentAgentRef));
+
+  for (const agent of agents) {
+    const selected = state.currentAgentRef === agent.agentRef;
+    const button = element(documentRef, "button", `agent-chip ${agent.status}`);
+    button.type = "button";
+    button.dataset.agentRef = agent.agentRef;
+    button.setAttribute("role", "radio");
+    button.setAttribute("aria-checked", selected ? "true" : "false");
+    button.append(element(documentRef, "span", "agent-status-dot"));
+    button.append(element(documentRef, "span", "agent-chip-name", agent.displayName));
+    button.append(element(documentRef, "span", "agent-status", publicAgentStatus(agent)));
+    button.addEventListener("click", () => {
+      void actions.switchAgent(agent.agentRef).catch(onError);
+    }, listenerOptions);
+    list.append(button);
+
+    const option = documentRef.createElement("option");
+    option.value = agent.agentRef;
+    option.textContent = `${agent.displayName} · ${publicAgentStatus(agent)}`;
+    option.selected = selected;
+    mobile.append(option);
+  }
+  mobile.disabled = agents.length === 0;
+}
+
 function renderWorkList(documentRef, listenerOptions, state, actions) {
   const list = $(documentRef, "workList");
   const select = $(documentRef, "mobileWorkSelect");
@@ -213,6 +269,12 @@ export function createRenderer(input) {
   function navigate(section) {
     actions.navigate(section);
   }
+
+  $(documentRef, "mobileAgentSelect")?.addEventListener("change", (event) => {
+    if (!event.target.value) return;
+    void actions.switchAgent(event.target.value)
+      .catch((error) => showToast(error.message ?? "Agent 切换失败。", "error"));
+  }, listenerOptions);
 
   documentRef.querySelectorAll("[data-section]").forEach((button) => {
     button.addEventListener("click", () => navigate(button.dataset.section), listenerOptions);
@@ -310,6 +372,19 @@ export function createRenderer(input) {
   }, listenerOptions);
 
   function render(state) {
+    const agentReady = Boolean(state.currentAgentRef);
+    renderAgentSelector(
+      documentRef,
+      listenerOptions,
+      state,
+      actions,
+      (error) => showToast(error.message ?? "Agent 切换失败。", "error")
+    );
+    documentRef.querySelectorAll(
+      "[data-section], #createWorkButton, #mobileCreateWorkButton, #convertSelectionButton"
+    ).forEach((button) => {
+      button.disabled = !agentReady;
+    });
     const section = state.section ?? "chat";
     $(documentRef, "chatSection").classList.toggle("hidden", section !== "chat");
     $(documentRef, "workSection").classList.toggle("hidden", section !== "work");
@@ -368,9 +443,15 @@ export function createRenderer(input) {
     if (documentRef.activeElement !== $(documentRef, "messageInput") && $(documentRef, "messageInput").value !== chatDraft) {
       $(documentRef, "messageInput").value = chatDraft;
     }
+    $(documentRef, "messageInput").disabled = !agentReady;
+    $(documentRef, "sendMessageButton").disabled = !agentReady;
     $(documentRef, "composerStatus").textContent = state.network?.online === false
       ? "当前离线，输入会保存为草稿"
-      : "Enter 发送 · Shift+Enter 换行";
+      : agentReady
+        ? "Enter 发送 · Shift+Enter 换行"
+        : state.agentSelectionKind === "unconfigured"
+          ? "管理员尚未为你配置 Agent"
+          : "选择一个 Agent 开始";
 
     const work = state.works?.find((item) => item.workConversationRef === state.selectedWorkRef) ?? null;
     $(documentRef, "workStatus").textContent = work ? workStatusLabel(work.status) : "尚未选择";
@@ -394,8 +475,8 @@ export function createRenderer(input) {
       onSelect: () => undefined,
       onRetry: retryOutgoing
     });
-    $(documentRef, "workMessageInput").disabled = !work;
-    $(documentRef, "workSendMessageButton").disabled = !work;
+    $(documentRef, "workMessageInput").disabled = !agentReady || !work;
+    $(documentRef, "workSendMessageButton").disabled = !agentReady || !work;
     const workDraft = workThreadRef ? state.drafts?.[workThreadRef] ?? "" : "";
     if (documentRef.activeElement !== $(documentRef, "workMessageInput") && $(documentRef, "workMessageInput").value !== workDraft) {
       $(documentRef, "workMessageInput").value = workDraft;

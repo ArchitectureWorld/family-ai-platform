@@ -71,6 +71,7 @@ describe("Member Web product entry", () => {
         "cache.js",
         "thread.js",
         "sync.js",
+        "agent-selector.js",
         "chat.js",
         "work.js",
         "render.js",

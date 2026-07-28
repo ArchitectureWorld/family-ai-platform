@@ -54,6 +54,7 @@ const productModules = [
   ["/member/assets/cache.js", "cache.js"],
   ["/member/assets/thread.js", "thread.js"],
   ["/member/assets/sync.js", "sync.js"],
+  ["/member/assets/agent-selector.js", "agent-selector.js"],
   ["/member/assets/chat.js", "chat.js"],
   ["/member/assets/work.js", "work.js"],
   ["/member/assets/render.js", "render.js"],

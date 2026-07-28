@@ -75,6 +75,15 @@
           </div>
         </div>
 
+        <section class="agent-picker" aria-labelledby="agentPickerTitle">
+          <div class="agent-picker-heading">
+            <strong id="agentPickerTitle">选择 Agent</strong>
+            <span id="agentPickerHint">本次设备临时选择</span>
+          </div>
+          <div class="agent-chip-list" id="agentChipList" role="radiogroup" aria-label="已配置的 Agent"></div>
+          <p class="agent-empty hidden" id="agentEmptyState" role="status"></p>
+        </section>
+
         <nav id="primaryNavigation" aria-label="个人工作台">
           <button class="nav-item active" type="button" data-section="chat" aria-current="page">
             <span class="nav-icon" aria-hidden="true">✦</span>
@@ -103,6 +112,10 @@
       </aside>
 
       <section class="workspace-main">
+        <label class="mobile-agent-picker" for="mobileAgentSelect">
+          <span>Agent</span>
+          <select id="mobileAgentSelect" aria-label="选择 Agent"></select>
+        </label>
         <header class="workspace-header">
           <div>
             <p class="panel-kicker" id="workspaceKicker">PERSONAL CHAT</p>
