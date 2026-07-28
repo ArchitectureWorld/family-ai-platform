@@ -224,6 +224,34 @@ describe("Admin system workspace routes", () => {
     }
   });
 
+  it.each([
+    { goalLength: 2000, expectedStatus: 201 },
+    { goalLength: 2001, expectedStatus: 201 },
+    { goalLength: 4000, expectedStatus: 201 },
+    { goalLength: 4001, expectedStatus: 400 }
+  ])(
+    "returns $expectedStatus for an Admin Work goal of $goalLength characters",
+    async ({ goalLength, expectedStatus }) => {
+      const response = await app.inject({
+        method: "POST",
+        url:
+          "/api/v1/admin/system-workspace/agents/" +
+          "agent%3Ahermes-jarvis/work-conversations",
+        headers: entryHeaders(admin),
+        payload: {
+          protocolVersion: 1,
+          title: `Goal boundary ${goalLength}`,
+          goal: "目".repeat(goalLength)
+        }
+      });
+
+      expect(response.statusCode).toBe(expectedStatus);
+      if (expectedStatus === 201) {
+        expect(response.json().conversation.goal).toHaveLength(goalLength);
+      }
+    }
+  );
+
   it("creates, lists, messages, and reads progress for one Agent Work only", async () => {
     const created = await app.inject({
       method: "POST",

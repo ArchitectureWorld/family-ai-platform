@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   CHAT_WORK_PROTOCOL_VERSION,
   agentRefSchema,
+  createWorkConversationRequestSchema,
   createWorkConversationResponseSchema,
   homeChatStreamResponseSchema,
   interactionThreadRefSchema,
@@ -32,11 +33,9 @@ const pageSchema = z.object({
   beforeSequence: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(200).optional()
 }).strict();
-const createWorkSchema = z.object({
-  protocolVersion: z.literal(CHAT_WORK_PROTOCOL_VERSION),
-  title: z.string().trim().min(1).max(120),
-  goal: z.string().trim().min(1).max(2000)
-}).strict();
+const createWorkSchema = createWorkConversationRequestSchema.omit({
+  agentRef: true
+});
 
 function invalidRequest(message: string): GatewayDomainError {
   return new GatewayDomainError("REQUEST_INVALID", 400, "validation", false, message);
