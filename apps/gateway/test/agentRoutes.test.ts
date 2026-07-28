@@ -7,6 +7,7 @@ import {
   memberAgentMountsResponseSchema
 } from "@family-ai/contracts";
 import { buildGatewayApp } from "../src/app.js";
+import { openGatewayDatabase } from "../src/database.js";
 
 const deviceToken = "agent-routes-test-device-token-long-enough";
 const configuredAgentRuntimes = [{
@@ -29,8 +30,25 @@ function entryHeaders(entry: Entry) {
   };
 }
 
+function expectBoundedAgentError(
+  response: { statusCode: number; body: string; json(): unknown },
+  code: "AGENT_RUNTIME_UNAVAILABLE" | "AGENT_NOT_MOUNTED"
+) {
+  expect(response.statusCode).toBe(409);
+  expect(response.json()).toEqual({
+    code,
+    category: "conflict",
+    message: expect.any(String),
+    retryable: false
+  });
+  expect(response.body).not.toContain("provider-profile");
+  expect(response.body).not.toContain("assignment:");
+  expect(response.body).not.toContain("content_text");
+}
+
 describe("Admin Agent routes", () => {
   let directory = "";
+  let databasePath = "";
   let app: Awaited<ReturnType<typeof buildGatewayApp>>;
   let admin: Entry;
   let personal: Entry;
@@ -38,8 +56,9 @@ describe("Admin Agent routes", () => {
 
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-agent-routes-"));
+    databasePath = join(directory, "gateway.sqlite");
     app = await buildGatewayApp({
-      databasePath: join(directory, "gateway.sqlite"),
+      databasePath,
       deviceToken,
       mode: "test",
       configuredAgentRuntimes
@@ -59,6 +78,40 @@ describe("Admin Agent routes", () => {
     admin = body.entries.admin;
     personal = body.entries.personal;
   });
+
+  function setRuntimeStatus(status: "active" | "disabled") {
+    const db = openGatewayDatabase(databasePath);
+    try {
+      db.prepare(
+        "UPDATE agent_runtime_bindings SET status = ? WHERE agent_ref = ?"
+      ).run(status, "agent:codex-cli");
+    } finally {
+      db.close();
+    }
+  }
+
+  function codexAssignment() {
+    const db = openGatewayDatabase(databasePath);
+    try {
+      return db.prepare(
+        `SELECT status, is_default
+         FROM assistant_assignments
+         WHERE person_ref = ? AND agent_ref = ?`
+      ).get(personRef, "agent:codex-cli");
+    } finally {
+      db.close();
+    }
+  }
+
+  async function mountCodex() {
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts`,
+      headers: entryHeaders(admin),
+      payload: { agentRef: "agent:codex-cli" }
+    });
+    expect(response.statusCode).toBe(201);
+  }
 
   afterEach(async () => {
     await app.close();
@@ -145,5 +198,52 @@ describe("Admin Agent routes", () => {
     });
     expect(unavailable.statusCode).toBe(409);
     expect(unavailable.body).not.toContain("provider-profile");
+  });
+
+  it("rejects absent, unconfigured, and disabled Agent deletes without ending a mount", async () => {
+    const configuredAbsent = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/agent%3Acodex-cli`,
+      headers: entryHeaders(admin)
+    });
+    expectBoundedAgentError(configuredAbsent, "AGENT_NOT_MOUNTED");
+
+    const unconfigured = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/agent%3Anot-configured`,
+      headers: entryHeaders(admin)
+    });
+    expectBoundedAgentError(unconfigured, "AGENT_RUNTIME_UNAVAILABLE");
+
+    await mountCodex();
+    setRuntimeStatus("disabled");
+    const disabled = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/agent%3Acodex-cli`,
+      headers: entryHeaders(admin)
+    });
+    expectBoundedAgentError(disabled, "AGENT_RUNTIME_UNAVAILABLE");
+    expect(codexAssignment()).toEqual({ status: "active", is_default: 0 });
+  });
+
+  it("rejects unconfigured and disabled non-null defaults without selecting a hidden mount", async () => {
+    const unconfigured = await app.inject({
+      method: "PUT",
+      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/default-agent`,
+      headers: entryHeaders(admin),
+      payload: { agentRef: "agent:not-configured" }
+    });
+    expectBoundedAgentError(unconfigured, "AGENT_RUNTIME_UNAVAILABLE");
+
+    await mountCodex();
+    setRuntimeStatus("disabled");
+    const disabled = await app.inject({
+      method: "PUT",
+      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/default-agent`,
+      headers: entryHeaders(admin),
+      payload: { agentRef: "agent:codex-cli" }
+    });
+    expectBoundedAgentError(disabled, "AGENT_RUNTIME_UNAVAILABLE");
+    expect(codexAssignment()).toEqual({ status: "active", is_default: 0 });
   });
 });

@@ -173,11 +173,20 @@ export class AgentManagementRepository {
   unmountMemberAgent(input: { familyRef: string; personRef: string; agentRef: string }): void {
     this.db.transaction(() => {
       this.requireActiveMember(input.familyRef, input.personRef);
+      const runtime = this.runtimeForAgent(input.agentRef);
+      this.requireActiveMount(input.personRef, input.agentRef, runtime.providerProfileRef);
       this.db.prepare(
         `UPDATE assistant_assignments
          SET status = ?, effective_to = ?, is_default = 0
-         WHERE person_ref = ? AND agent_ref = ? AND status = ?`
-      ).run(ended, this.now().toISOString(), input.personRef, input.agentRef, active);
+         WHERE person_ref = ? AND agent_ref = ? AND provider_profile_ref = ? AND status = ?`
+      ).run(
+        ended,
+        this.now().toISOString(),
+        input.personRef,
+        input.agentRef,
+        runtime.providerProfileRef,
+        active
+      );
     })();
   }
 
@@ -185,11 +194,8 @@ export class AgentManagementRepository {
     this.db.transaction(() => {
       this.requireActiveMember(input.familyRef, input.personRef);
       if (input.agentRef !== null) {
-        const mounted = this.db.prepare(
-          `SELECT 1 FROM assistant_assignments
-           WHERE person_ref = ? AND agent_ref = ? AND status = ?`
-        ).get(input.personRef, input.agentRef, active);
-        if (!mounted) throw this.agentNotMounted();
+        const runtime = this.runtimeForAgent(input.agentRef);
+        this.requireActiveMount(input.personRef, input.agentRef, runtime.providerProfileRef);
       }
       this.db.prepare(
         "UPDATE assistant_assignments SET is_default = 0 WHERE person_ref = ? AND status = ?"
@@ -259,6 +265,18 @@ export class AgentManagementRepository {
       );
     }
     return { providerProfileRef: String(runtime.provider_profile_ref), displayName: String(runtime.display_name) };
+  }
+
+  private requireActiveMount(
+    personRef: string,
+    agentRef: string,
+    providerProfileRef: string
+  ): void {
+    const mounted = this.db.prepare(
+      `SELECT 1 FROM assistant_assignments
+       WHERE person_ref = ? AND agent_ref = ? AND provider_profile_ref = ? AND status = ?`
+    ).get(personRef, agentRef, providerProfileRef, active);
+    if (!mounted) throw this.agentNotMounted();
   }
 
   private mapMount(row: Record<string, unknown>): MountedAgent {
