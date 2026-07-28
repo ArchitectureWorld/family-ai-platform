@@ -70,6 +70,7 @@ COPY --from=build --chown=node:node /app/packages/provider-adapter-sdk/dist /app
 COPY --from=build --chown=node:node /app/apps/gateway/package.json /app/apps/gateway/package.json
 COPY --from=build --chown=node:node /app/apps/gateway/dist /app/apps/gateway/dist
 COPY --from=build --chown=node:node /app/apps/gateway/member-public /app/apps/gateway/member-public
+COPY --from=build --chown=node:node /app/apps/gateway/admin-public /app/apps/gateway/admin-public
 
 USER node
 EXPOSE 8790

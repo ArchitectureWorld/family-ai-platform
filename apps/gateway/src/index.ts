@@ -1,11 +1,17 @@
 import { buildGatewayApp } from "./app.js";
-import { loadGatewayConfig } from "./config.js";
+import {
+  buildProviderRuntime,
+  loadGatewayConfig
+} from "./config.js";
 
 const config = loadGatewayConfig();
+const runtime = buildProviderRuntime(config.providerRuntime);
 const app = await buildGatewayApp({
   databasePath: config.databasePath,
   deviceToken: config.deviceToken,
   mode: config.mode,
+  providerRouter: runtime.router,
+  configuredAgentRuntimes: runtime.agents,
   ...(config.previewAdminEntryPath === undefined
     ? {}
     : {

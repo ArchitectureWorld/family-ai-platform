@@ -1,5 +1,46 @@
+import {
+  accessSync,
+  constants,
+  lstatSync,
+  realpathSync
+} from "node:fs";
 import { resolve } from "node:path";
+import {
+  CodexCliProviderAdapter,
+  FakeProviderAdapter,
+  HermesCliProviderAdapter,
+  ProviderAdapterRouter,
+  type ProviderAdapter
+} from "@family-ai/provider-adapter-sdk";
 import type { GatewayMode } from "./app.js";
+import type { ConfiguredAgentRuntime } from "./agentManagement.js";
+
+export interface FakeGatewayProviderRuntimeConfig {
+  mode: "fake";
+}
+
+export interface RealGatewayProviderRuntimeConfig {
+  mode: "real";
+  hermes: {
+    executable: string;
+    jarvisHome: string;
+    personalHome: string;
+    profiles: readonly string[];
+  };
+  codex: {
+    executable: string;
+    workingDirectory: string;
+  };
+}
+
+export type GatewayProviderRuntimeConfig =
+  | FakeGatewayProviderRuntimeConfig
+  | RealGatewayProviderRuntimeConfig;
+
+export interface GatewayProviderRuntime {
+  router: ProviderAdapterRouter;
+  agents: readonly ConfiguredAgentRuntime[];
+}
 
 export interface GatewayConfig {
   host: string;
@@ -7,6 +48,7 @@ export interface GatewayConfig {
   databasePath: string;
   deviceToken: string;
   mode: GatewayMode;
+  providerRuntime: GatewayProviderRuntimeConfig;
   previewAdminEntryPath?: string;
   previewAdminOrigin?: string;
 }
@@ -19,15 +61,179 @@ function positiveInteger(raw: string | undefined, fallback: number, name: string
   return value;
 }
 
+function runtimeConfigurationError(): Error {
+  return new Error("Provider runtime configuration is invalid");
+}
+
+function existingExecutable(raw: string | undefined): string {
+  if (!raw) throw runtimeConfigurationError();
+  try {
+    const path = resolve(raw);
+    const information = lstatSync(path);
+    if (!information.isFile() || information.isSymbolicLink()) {
+      throw runtimeConfigurationError();
+    }
+    accessSync(path, constants.X_OK);
+    return realpathSync(path);
+  } catch {
+    throw runtimeConfigurationError();
+  }
+}
+
+function existingDirectory(raw: string | undefined): string {
+  if (!raw) throw runtimeConfigurationError();
+  try {
+    const path = resolve(raw);
+    const information = lstatSync(path);
+    if (!information.isDirectory() || information.isSymbolicLink()) {
+      throw runtimeConfigurationError();
+    }
+    return realpathSync(path);
+  } catch {
+    throw runtimeConfigurationError();
+  }
+}
+
+function profileNames(raw: string | undefined): readonly string[] {
+  if (!raw) throw runtimeConfigurationError();
+  const profiles = raw.split(",").map(value => value.trim().toLowerCase());
+  if (
+    profiles.length === 0 ||
+    profiles.some(profile => !/^[a-z0-9_-]+$/.test(profile)) ||
+    new Set(profiles).size !== profiles.length
+  ) {
+    throw runtimeConfigurationError();
+  }
+  return profiles;
+}
+
+function providerRuntimeConfig(env: NodeJS.ProcessEnv): GatewayProviderRuntimeConfig {
+  const mode = env.FAMILY_AI_PROVIDER_MODE ?? "fake";
+  if (mode === "fake") return { mode };
+  if (mode !== "real") throw runtimeConfigurationError();
+  const runtime: RealGatewayProviderRuntimeConfig = {
+    mode,
+    hermes: {
+      executable: existingExecutable(env.FAMILY_AI_HERMES_EXECUTABLE),
+      jarvisHome: existingDirectory(env.FAMILY_AI_HERMES_JARVIS_HOME),
+      personalHome: existingDirectory(env.FAMILY_AI_HERMES_PERSONAL_HOME),
+      profiles: profileNames(env.FAMILY_AI_HERMES_PROFILES)
+    },
+    codex: {
+      executable: existingExecutable(env.FAMILY_AI_CODEX_EXECUTABLE),
+      workingDirectory: existingDirectory(
+        env.FAMILY_AI_CODEX_WORKING_DIRECTORY
+      )
+    }
+  };
+  Object.defineProperty(runtime, "toJSON", {
+    value: () => ({ mode: "real" }),
+    enumerable: false
+  });
+  return runtime;
+}
+
+function controlledEnvironment(
+  additional: ReadonlyArray<readonly [string, string]> = []
+): Array<readonly [string, string]> {
+  return [
+    ["HOME", process.env.HOME ?? "/tmp"],
+    ["LANG", process.env.LANG ?? "C.UTF-8"],
+    ["PATH", process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"],
+    ["TERM", process.env.TERM ?? "dumb"],
+    ...additional
+  ];
+}
+
+export function buildProviderRuntime(
+  config: GatewayProviderRuntimeConfig
+): GatewayProviderRuntime {
+  if (config.mode === "fake") {
+    const adapter = new FakeProviderAdapter();
+    return {
+      router: ProviderAdapterRouter.single(
+        "provider-profile:fake-local",
+        adapter
+      ),
+      agents: []
+    };
+  }
+
+  const routes: Array<readonly [string, ProviderAdapter]> = [];
+  const agents: ConfiguredAgentRuntime[] = [];
+  const jarvisProviderRef = "provider-profile:hermes-jarvis";
+  routes.push([
+    jarvisProviderRef,
+    new HermesCliProviderAdapter({
+      executable: config.hermes.executable,
+      cwd: config.hermes.jarvisHome,
+      allowedEnvironment: controlledEnvironment([
+        ["HERMES_HOME", config.hermes.jarvisHome]
+      ]),
+      providerProfileRef: jarvisProviderRef
+    })
+  ] as const);
+  agents.push({
+    agentRef: "agent:hermes-jarvis",
+    providerProfileRef: jarvisProviderRef,
+    providerKind: "hermes",
+    displayName: "Jarvis"
+  });
+
+  for (const profileName of config.hermes.profiles) {
+    const providerProfileRef = `provider-profile:hermes-${profileName}`;
+    routes.push([
+      providerProfileRef,
+      new HermesCliProviderAdapter({
+        executable: config.hermes.executable,
+        cwd: config.hermes.personalHome,
+        allowedEnvironment: controlledEnvironment([
+          ["HERMES_HOME", config.hermes.personalHome]
+        ]),
+        profileName,
+        providerProfileRef
+      })
+    ] as const);
+    agents.push({
+      agentRef: `agent:hermes-${profileName}`,
+      providerProfileRef,
+      providerKind: "hermes",
+      displayName: profileName
+    });
+  }
+
+  const codexProviderRef = "provider-profile:codex-cli";
+  routes.push([
+    codexProviderRef,
+    new CodexCliProviderAdapter({
+      executable: config.codex.executable,
+      cwd: config.codex.workingDirectory,
+      allowedEnvironment: controlledEnvironment(),
+      providerProfileRef: codexProviderRef
+    })
+  ] as const);
+  agents.push({
+    agentRef: "agent:codex-cli",
+    providerProfileRef: codexProviderRef,
+    providerKind: "codex",
+    displayName: "Codex"
+  });
+
+  return {
+    router: new ProviderAdapterRouter(routes),
+    agents
+  };
+}
+
 export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const mode = (env.GATEWAY_MODE ?? "development") as GatewayMode;
   if (!("test development production".split(" ") as GatewayMode[]).includes(mode)) {
     throw new Error("GATEWAY_MODE must be test, development, or production");
   }
-  if (mode === "production") {
+  const providerRuntime = providerRuntimeConfig(env);
+  if (mode === "production" && providerRuntime.mode !== "real") {
     throw new Error(
-      "GATEWAY_MODE=production requires an explicit production runtime composition; " +
-        "the development binary must not bootstrap test identities or a Fake Provider."
+      "GATEWAY_MODE=production requires an explicit real Provider runtime"
     );
   }
 
@@ -59,7 +265,7 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     throw new Error("Admin Preview persistence is development-only");
   }
 
-  return {
+  const config = {
     host,
     port,
     databasePath: resolve(env.GATEWAY_DATABASE_PATH ?? ".runtime/data/gateway.sqlite"),
@@ -72,4 +278,9 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
           previewAdminOrigin: previewAdminOrigin!
         })
   };
+  Object.defineProperty(config, "providerRuntime", {
+    value: providerRuntime,
+    enumerable: false
+  });
+  return config as GatewayConfig;
 }

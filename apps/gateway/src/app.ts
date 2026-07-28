@@ -244,9 +244,34 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
 
   const repository = new GatewayRepository(db);
   const agentManagementRepository = new AgentManagementRepository(db, now);
+  const configuredAgentRuntimes = options.configuredAgentRuntimes ?? [];
+  agentManagementRepository.reconcileRuntimeCatalog(configuredAgentRuntimes);
+  const configuredAgentRefs = new Set(
+    configuredAgentRuntimes.map(runtime => runtime.agentRef)
+  );
+  if (
+    configuredAgentRefs.has("agent:hermes-jarvis") &&
+    configuredAgentRefs.has("agent:codex-cli")
+  ) {
+    const owners = db.prepare(
+      `SELECT fm.family_ref, fm.person_ref
+       FROM family_memberships fm
+       JOIN persons p ON p.person_ref = fm.person_ref
+       WHERE fm.family_role = 'owner'
+         AND fm.status = 'active'
+         AND p.status = 'active'`
+    ).all() as Array<{ family_ref: string; person_ref: string }>;
+    for (const owner of owners) {
+      agentManagementRepository.ensureOwnerAdminAssignments({
+        familyRef: owner.family_ref,
+        personRef: owner.person_ref,
+        agentRefs: ["agent:hermes-jarvis", "agent:codex-cli"]
+      });
+    }
+  }
   const familyRepository = new FamilyDomainRepository(db, {
     repository: agentManagementRepository,
-    configuredRuntimes: options.configuredAgentRuntimes ?? []
+    configuredRuntimes: configuredAgentRuntimes
   });
   const entryAuthenticator = new EntrySessionAuthenticator(db, familyRepository, now);
   const deviceSyncRepository = new DeviceSyncRepository(db, domainEventStore, now);

@@ -69,6 +69,20 @@ function lifecycleFixture(
   const binDirectory = join(fixture, "bin");
   mkdirSync(scriptsDirectory, { recursive: true, mode: 0o700 });
   mkdirSync(binDirectory, { recursive: true, mode: 0o700 });
+  const localBin = join(fakeHome, ".local", "bin");
+  const jarvisHome = join(fakeHome, ".hermes");
+  const personalProfiles = join(fakeHome, "hermes-personal-assistants", "profiles");
+  mkdirSync(localBin, { recursive: true, mode: 0o700 });
+  mkdirSync(jarvisHome, { recursive: true, mode: 0o700 });
+  mkdirSync(personalProfiles, { recursive: true, mode: 0o700 });
+  writeFileSync(join(jarvisHome, "config.yaml"), "fixture: true\n", {
+    mode: 0o600
+  });
+  for (const profile of ["zzh", "nsy", "zzg"]) {
+    mkdirSync(join(personalProfiles, profile), { mode: 0o700 });
+  }
+  executable(join(localBin, "hermes"), "#!/usr/bin/env bash\nexit 0\n");
+  executable(join(localBin, "codex"), "#!/usr/bin/env bash\nexit 0\n");
   const branch = spawnSync(
     "git",
     ["init", "-q", "-b", "fix/member-web-entry-hardening"],
@@ -267,6 +281,38 @@ describe("isolated Member Web Preview scripts", () => {
     expect(up).not.toContain('dev-reset');
   });
 
+  it("discovers explicit real Provider inputs into the protected Gateway config", () => {
+    const up = read("scripts/member-preview-up.sh");
+    for (const key of [
+      "FAMILY_AI_PROVIDER_MODE",
+      "FAMILY_AI_HERMES_EXECUTABLE",
+      "FAMILY_AI_HERMES_JARVIS_HOME",
+      "FAMILY_AI_HERMES_PERSONAL_HOME",
+      "FAMILY_AI_HERMES_PROFILES",
+      "FAMILY_AI_CODEX_EXECUTABLE",
+      "FAMILY_AI_CODEX_WORKING_DIRECTORY"
+    ]) {
+      expect(up).toContain(key);
+    }
+    expect(up).toContain("PREVIEW_PROVIDER_DISCOVERY_FAILED");
+    expect(up).not.toMatch(/\b(?:echo|printf)\b[^\n]*(?:HERMES|CODEX)_[A-Z_]*PATH/);
+  });
+
+  it("ships Admin assets without copying host Provider state into the runtime image", () => {
+    const dockerfile = read("Dockerfile");
+    expect(dockerfile).toContain(
+      "/app/apps/gateway/admin-public /app/apps/gateway/admin-public"
+    );
+    for (const forbidden of [
+      ".hermes",
+      "hermes-personal-assistants",
+      ".local/bin/codex",
+      ".local/bin/hermes"
+    ]) {
+      expect(dockerfile).not.toContain(forbidden);
+    }
+  });
+
   it("uses PID-scoped fail-closed shutdown without production controls", () => {
     const down = read("scripts/member-preview-down.sh");
     expect(down).toContain('gateway.pid.json');
@@ -429,6 +475,7 @@ describe("isolated Member Web Preview scripts", () => {
     const result = runFixture(fixture);
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("LIFECYCLE_FIXTURE_PASS\n");
+    expect(result.stderr).toBe("");
     for (const directory of directories) expect(permissions(directory)).toBe(0o700);
     for (const path of [
       ...reusedFiles,
@@ -437,6 +484,28 @@ describe("isolated Member Web Preview scripts", () => {
       join(runtime, "run/test.pid.json"),
       join(runtime, "run/test.snapshot")
     ]) expect(permissions(path)).toBe(0o600);
+    const gatewayEnvironment = readFileSync(
+      join(runtime, "config/gateway.env"),
+      "utf8"
+    ).trimEnd().split("\n");
+    expect(gatewayEnvironment.map(line => line.slice(0, line.indexOf("=")))).toEqual([
+      "GATEWAY_MODE",
+      "GATEWAY_HOST",
+      "GATEWAY_PORT",
+      "GATEWAY_DATABASE_PATH",
+      "GATEWAY_DEVICE_TOKEN",
+      "GATEWAY_PREVIEW_ADMIN_ENTRY_PATH",
+      "GATEWAY_PREVIEW_ADMIN_ORIGIN",
+      "FAMILY_AI_PROVIDER_MODE",
+      "FAMILY_AI_HERMES_EXECUTABLE",
+      "FAMILY_AI_HERMES_JARVIS_HOME",
+      "FAMILY_AI_HERMES_PERSONAL_HOME",
+      "FAMILY_AI_HERMES_PROFILES",
+      "FAMILY_AI_CODEX_EXECUTABLE",
+      "FAMILY_AI_CODEX_WORKING_DIRECTORY"
+    ]);
+    expect(gatewayEnvironment).toContain("FAMILY_AI_PROVIDER_MODE=real");
+    expect(gatewayEnvironment).toContain("FAMILY_AI_HERMES_PROFILES=nsy,zzg,zzh");
     expect(
       ["config", "run"].flatMap(directory =>
         readdirSync(join(runtime, directory)).filter(name => name.includes(".tmp."))

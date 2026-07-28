@@ -198,8 +198,65 @@ prepare_runtime() {
   done < <(find "$DATA_DIR" -maxdepth 1 -mindepth 1 -name 'gateway.sqlite*' -print0)
 }
 
+discover_provider_runtime() {
+  local candidate profile_path profile_name
+  HERMES_EXECUTABLE=""
+  CODEX_EXECUTABLE=""
+  for candidate in \
+    "$REMOTE_USER_HOME/.local/bin/hermes" \
+    "$REMOTE_USER_HOME/.hermes/hermes-agent/hermes"; do
+    if [[ -f "$candidate" && ! -L "$candidate" && -x "$candidate" && -O "$candidate" ]]; then
+      HERMES_EXECUTABLE="$candidate"
+      break
+    fi
+  done
+  for candidate in "$REMOTE_USER_HOME/.local/bin/codex"; do
+    if [[ -f "$candidate" && ! -L "$candidate" && -x "$candidate" && -O "$candidate" ]]; then
+      CODEX_EXECUTABLE="$candidate"
+      break
+    fi
+  done
+  HERMES_JARVIS_HOME="$REMOTE_USER_HOME/.hermes"
+  HERMES_PERSONAL_HOME="$REMOTE_USER_HOME/hermes-personal-assistants"
+  CODEX_WORKING_DIRECTORY="$ROOT_DIR"
+  [[ -n "$HERMES_EXECUTABLE" && -n "$CODEX_EXECUTABLE" ]] ||
+    fail PREVIEW_PROVIDER_DISCOVERY_FAILED
+  [[ -d "$HERMES_JARVIS_HOME" && ! -L "$HERMES_JARVIS_HOME" &&
+     -O "$HERMES_JARVIS_HOME" &&
+     -f "$HERMES_JARVIS_HOME/config.yaml" &&
+     ! -L "$HERMES_JARVIS_HOME/config.yaml" ]] ||
+    fail PREVIEW_PROVIDER_DISCOVERY_FAILED
+  [[ -d "$HERMES_PERSONAL_HOME" && ! -L "$HERMES_PERSONAL_HOME" &&
+     -O "$HERMES_PERSONAL_HOME" &&
+     -d "$HERMES_PERSONAL_HOME/profiles" &&
+     ! -L "$HERMES_PERSONAL_HOME/profiles" ]] ||
+    fail PREVIEW_PROVIDER_DISCOVERY_FAILED
+  [[ -d "$CODEX_WORKING_DIRECTORY" && ! -L "$CODEX_WORKING_DIRECTORY" &&
+     -O "$CODEX_WORKING_DIRECTORY" ]] ||
+    fail PREVIEW_PROVIDER_DISCOVERY_FAILED
+
+  HERMES_PROFILES=""
+  while IFS= read -r -d '' profile_path; do
+    [[ -d "$profile_path" && ! -L "$profile_path" && -O "$profile_path" ]] ||
+      fail PREVIEW_PROVIDER_DISCOVERY_FAILED
+    profile_name="${profile_path##*/}"
+    [[ "$profile_name" =~ ^[a-z0-9_-]+$ ]] ||
+      fail PREVIEW_PROVIDER_DISCOVERY_FAILED
+    if [[ -z "$HERMES_PROFILES" ]]; then
+      HERMES_PROFILES="$profile_name"
+    else
+      HERMES_PROFILES="$HERMES_PROFILES,$profile_name"
+    fi
+  done < <(
+    find "$HERMES_PERSONAL_HOME/profiles" -mindepth 1 -maxdepth 1 -print0 |
+      LC_ALL=C sort -z
+  )
+  [[ -n "$HERMES_PROFILES" ]] || fail PREVIEW_PROVIDER_DISCOVERY_FAILED
+}
+
 prepare_config() {
-  local token_file="$CONFIG_DIR/device-token" env_file="$CONFIG_DIR/gateway.env" token temporary
+  local token_file="$CONFIG_DIR/device-token" env_file="$CONFIG_DIR/gateway.env" token
+  discover_provider_runtime
   write_gateway_env() {
     local current_token="$1" env_text
     env_text="$(
@@ -210,6 +267,13 @@ prepare_config() {
       builtin printf 'GATEWAY_DEVICE_TOKEN=%s\n' "$current_token"
       builtin printf 'GATEWAY_PREVIEW_ADMIN_ENTRY_PATH=%s\n' "$CONFIG_DIR/admin-entry.json"
       builtin printf 'GATEWAY_PREVIEW_ADMIN_ORIGIN=http://127.0.0.1:8791\n'
+      builtin printf 'FAMILY_AI_PROVIDER_MODE=real\n'
+      builtin printf 'FAMILY_AI_HERMES_EXECUTABLE=%s\n' "$HERMES_EXECUTABLE"
+      builtin printf 'FAMILY_AI_HERMES_JARVIS_HOME=%s\n' "$HERMES_JARVIS_HOME"
+      builtin printf 'FAMILY_AI_HERMES_PERSONAL_HOME=%s\n' "$HERMES_PERSONAL_HOME"
+      builtin printf 'FAMILY_AI_HERMES_PROFILES=%s\n' "$HERMES_PROFILES"
+      builtin printf 'FAMILY_AI_CODEX_EXECUTABLE=%s\n' "$CODEX_EXECUTABLE"
+      builtin printf 'FAMILY_AI_CODEX_WORKING_DIRECTORY=%s\n' "$CODEX_WORKING_DIRECTORY"
     )"
     atomic_text_file "$env_file" "$env_text"$'\n'
   }
@@ -217,48 +281,22 @@ prepare_config() {
     token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
     [[ "$token" =~ ^[A-Za-z0-9_-]{43}$ ]] || fail PREVIEW_CONFIG_INVALID
     atomic_text_file "$token_file" "$token"$'\n'
-    write_gateway_env "$token"
-    unset token
   fi
-  [[ -e "$token_file" && -e "$env_file" ]] || fail PREVIEW_CONFIG_INVALID
-  for path in "$token_file" "$env_file"; do
-    [[ -f "$path" && ! -L "$path" ]] || fail PREVIEW_CONFIG_INVALID
-    chmod 0600 "$path"
-  done
-  if [[ "$(grep -Ec '^GATEWAY_PREVIEW_ADMIN_(ENTRY_PATH|ORIGIN)=' "$env_file")" -ne 2 ]]; then
-    node --input-type=module - "$token_file" "$env_file" "$DATA_DIR/gateway.sqlite" <<'NODE'
-import { readFileSync } from "node:fs";
-const [tokenFile, envFile, databasePath] = process.argv.slice(2);
-const tokenText = readFileSync(tokenFile, "utf8");
-const token = tokenText.endsWith("\n") ? tokenText.slice(0, -1) : tokenText;
-if (!/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(token) || tokenText !== `${token}\n`) process.exit(1);
-const lines = readFileSync(envFile, "utf8").split("\n");
-if (lines.at(-1) !== "") process.exit(1);
-lines.pop();
-const expected = [
-  "GATEWAY_MODE", "GATEWAY_HOST", "GATEWAY_PORT",
-  "GATEWAY_DATABASE_PATH", "GATEWAY_DEVICE_TOKEN"
-];
-const values = new Map(lines.map(line => {
-  const at = line.indexOf("=");
-  return [line.slice(0, at), line.slice(at + 1)];
-}));
-if (
-  lines.length !== expected.length ||
-  values.size !== expected.length ||
-  expected.some(key => !values.has(key)) ||
-  values.get("GATEWAY_MODE") !== "development" ||
-  values.get("GATEWAY_HOST") !== "127.0.0.1" ||
-  values.get("GATEWAY_PORT") !== "8791" ||
-  values.get("GATEWAY_DATABASE_PATH") !== databasePath ||
-  values.get("GATEWAY_DEVICE_TOKEN") !== token
-) process.exit(1);
-NODE
-    IFS= read -r token <"$token_file"
-    [[ "$token" =~ ^[A-Za-z0-9_-]{43}$ ]] || fail PREVIEW_CONFIG_INVALID
-    write_gateway_env "$token"
-    unset token
+  [[ -e "$token_file" ]] || fail PREVIEW_CONFIG_INVALID
+  [[ -f "$token_file" && ! -L "$token_file" && -O "$token_file" ]] ||
+    fail PREVIEW_CONFIG_INVALID
+  chmod 0600 "$token_file"
+  if [[ -e "$env_file" || -L "$env_file" ]]; then
+    [[ -f "$env_file" && ! -L "$env_file" && -O "$env_file" ]] ||
+      fail PREVIEW_CONFIG_INVALID
   fi
+  IFS= read -r token <"$token_file"
+  [[ "$token" =~ ^[A-Za-z0-9_-]{43}$ ]] || fail PREVIEW_CONFIG_INVALID
+  write_gateway_env "$token"
+  unset token
+  [[ -f "$env_file" && ! -L "$env_file" && -O "$env_file" ]] ||
+    fail PREVIEW_CONFIG_INVALID
+  chmod 0600 "$env_file"
   node --input-type=module - "$token_file" "$env_file" "$DATA_DIR/gateway.sqlite" \
     "$CONFIG_DIR/admin-entry.json" <<'NODE'
 import { readFileSync } from "node:fs";
@@ -271,7 +309,10 @@ if (lines.at(-1) !== "") process.exit(1); lines.pop();
 const expected = [
   "GATEWAY_MODE", "GATEWAY_HOST", "GATEWAY_PORT", "GATEWAY_DATABASE_PATH",
   "GATEWAY_DEVICE_TOKEN", "GATEWAY_PREVIEW_ADMIN_ENTRY_PATH",
-  "GATEWAY_PREVIEW_ADMIN_ORIGIN"
+  "GATEWAY_PREVIEW_ADMIN_ORIGIN", "FAMILY_AI_PROVIDER_MODE",
+  "FAMILY_AI_HERMES_EXECUTABLE", "FAMILY_AI_HERMES_JARVIS_HOME",
+  "FAMILY_AI_HERMES_PERSONAL_HOME", "FAMILY_AI_HERMES_PROFILES",
+  "FAMILY_AI_CODEX_EXECUTABLE", "FAMILY_AI_CODEX_WORKING_DIRECTORY"
 ];
 if (lines.length !== expected.length) process.exit(1);
 const values = new Map(lines.map(line => { const at = line.indexOf("="); return [line.slice(0, at), line.slice(at + 1)]; }));
@@ -284,7 +325,18 @@ if (
   values.get("GATEWAY_DATABASE_PATH") !== databasePath ||
   values.get("GATEWAY_DEVICE_TOKEN") !== token ||
   values.get("GATEWAY_PREVIEW_ADMIN_ENTRY_PATH") !== adminEntryPath ||
-  values.get("GATEWAY_PREVIEW_ADMIN_ORIGIN") !== "http://127.0.0.1:8791"
+  values.get("GATEWAY_PREVIEW_ADMIN_ORIGIN") !== "http://127.0.0.1:8791" ||
+  values.get("FAMILY_AI_PROVIDER_MODE") !== "real" ||
+  !/^(?:[a-z0-9_-]+)(?:,[a-z0-9_-]+)*$/.test(
+    values.get("FAMILY_AI_HERMES_PROFILES") ?? ""
+  ) ||
+  [
+    "FAMILY_AI_HERMES_EXECUTABLE",
+    "FAMILY_AI_HERMES_JARVIS_HOME",
+    "FAMILY_AI_HERMES_PERSONAL_HOME",
+    "FAMILY_AI_CODEX_EXECUTABLE",
+    "FAMILY_AI_CODEX_WORKING_DIRECTORY"
+  ].some(key => !(values.get(key) ?? "").startsWith("/"))
 ) process.exit(1);
 NODE
 }
