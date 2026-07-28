@@ -55,6 +55,8 @@ describe("development Admin Web product entry", () => {
       for (const [path, contentType] of [
         ["/admin/assets/admin.css", "text/css"],
         ["/admin/assets/admin.js", "text/javascript"],
+        ["/admin/assets/admin-entry.js", "text/javascript"],
+        ["/admin/assets/admin-api.js", "text/javascript"],
         ["/admin/assets/qr.js", "text/javascript"],
         ["/admin/assets/qr-v10.mjs", "text/javascript"]
       ] as const) {
@@ -83,6 +85,8 @@ describe("development Admin Web product entry", () => {
           "/admin/",
           "/admin/assets/admin.css",
           "/admin/assets/admin.js",
+          "/admin/assets/admin-entry.js",
+          "/admin/assets/admin-api.js",
           "/admin/assets/qr.js",
           "/admin/assets/qr-v10.mjs"
         ]) {

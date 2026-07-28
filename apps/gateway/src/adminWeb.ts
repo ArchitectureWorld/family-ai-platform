@@ -61,6 +61,18 @@ export function registerAdminWeb(app: FastifyInstance, mode: AdminWebMode): void
   );
   registerTextAsset(
     app,
+    "/admin/assets/admin-entry.js",
+    "admin-entry.js",
+    "text/javascript; charset=utf-8"
+  );
+  registerTextAsset(
+    app,
+    "/admin/assets/admin-api.js",
+    "admin-api.js",
+    "text/javascript; charset=utf-8"
+  );
+  registerTextAsset(
+    app,
     "/admin/assets/qr.js",
     "qr.js",
     "text/javascript; charset=utf-8",

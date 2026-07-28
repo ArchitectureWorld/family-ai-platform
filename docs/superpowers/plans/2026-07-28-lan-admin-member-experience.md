@@ -118,7 +118,7 @@ Add API tests with a fake `fetch` for:
 - `GET /api/v1/admin/members`
 - `POST /api/v1/admin/members`
 
-Assert every privileged request sends `Authorization: Entry <token>` and `X-Entry-Session-Ref`.
+Assert every privileged Entry request sends the existing formal contract, `Authorization: Bearer <token>` and `X-Entry-Session-Ref`.
 
 - [ ] **Step 2: Run the focused tests and verify RED**
 
@@ -136,7 +136,7 @@ Implement:
 
 ```js
 export function captureAdminHandoff(fragment) { /* exact keys and formats */ }
-export function adminHeaders(session) { /* Entry authentication */ }
+export function adminHeaders(session) { /* existing Bearer Entry authentication */ }
 export function createAdminApi({ fetchImpl, session }) { /* typed response checks */ }
 ```
 
