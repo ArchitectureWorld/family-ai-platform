@@ -189,8 +189,19 @@ describe("Family onboarding and dual-entry sessions", () => {
       family: { familyRef: result.family.familyRef },
       person: { personRef: result.owner.personRef },
       device: { deviceRef: result.device.deviceRef },
-      agent: { agentRef: "agent:personal-assistant", displayName: "个人助理" }
+      mountedAgents: [{
+        agentRef: "agent:personal-assistant",
+        displayName: "个人助理",
+        isDefault: true,
+        status: "problem",
+        statusLabel: "有问题"
+      }],
+      defaultAgentRef: "agent:personal-assistant"
     });
+    expect(personalContext.json()).not.toHaveProperty("agent");
+    expect(personalContext.body).not.toContain("activeTurnCount");
+    expect(personalContext.body).not.toContain("lastCheckedAt");
+    expect(personalContext.body).not.toContain("publicProblem");
     expect(personalContext.body).not.toContain(personal.token);
 
     expect(adminContext.json().person.personRef).toBe(personalContext.json().person.personRef);
@@ -407,9 +418,9 @@ describe("Family onboarding and dual-entry sessions", () => {
     await app.close();
     await openApp();
 
-    for (const [entry, expectedAgent] of [
-      [admin, "agent:family-manager"],
-      [personal, "agent:personal-assistant"]
+    for (const [entry, expectedAudience] of [
+      [admin, "family_admin"],
+      [personal, "personal"]
     ] as const) {
       const context = await app.inject({
         method: "GET",
@@ -421,9 +432,17 @@ describe("Family onboarding and dual-entry sessions", () => {
         protocolVersion: 1,
         entrySessionRef: entry.entrySessionRef,
         person: { personRef: result.owner.personRef },
-        device: { deviceRef: result.device.deviceRef },
-        agent: { agentRef: expectedAgent }
+        device: { deviceRef: result.device.deviceRef }
       });
+      if (expectedAudience === "family_admin") {
+        expect(context.json()).toMatchObject({ agent: { agentRef: "agent:family-manager" } });
+      } else {
+        expect(context.json()).toMatchObject({
+          mountedAgents: [{ agentRef: "agent:personal-assistant", isDefault: true }],
+          defaultAgentRef: "agent:personal-assistant"
+        });
+        expect(context.json()).not.toHaveProperty("agent");
+      }
     }
   });
 });

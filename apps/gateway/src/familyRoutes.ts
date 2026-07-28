@@ -9,6 +9,8 @@ import {
 } from "./entrySessionAuth.js";
 import { MobileDeviceSummaryRepository } from "./mobileDeviceSummary.js";
 import { GatewayDomainError } from "./service.js";
+import { AgentManagementRepository } from "./agentManagement.js";
+import type { AgentStatusLookup } from "./agentRoutes.js";
 
 const onboardingSchema = z
   .object({
@@ -48,6 +50,8 @@ export function registerFamilyRoutes(
     gatewayRepository: GatewayRepository;
     entryAuthenticator: EntrySessionAuthenticator;
     mobileDeviceSummaryRepository: MobileDeviceSummaryRepository;
+    agentRepository: AgentManagementRepository;
+    agentStatus: AgentStatusLookup;
   }
 ): void {
   function requireSetupDevice(request: FastifyRequest) {
@@ -99,9 +103,19 @@ export function registerFamilyRoutes(
   app.get("/api/v1/portal/context", async (request) => {
     const context = requireEntryRequest(request, input.entryAuthenticator);
     if (context.audience === "personal") {
+      const mounts = input.agentRepository.listMemberMounts(
+        context.family.familyRef,
+        context.person.personRef
+      );
+      const { agent: _agent, ...personalContext } = context;
       return personalPortalContextSchema.parse({
         protocolVersion: MOBILE_ENTRY_PROTOCOL_VERSION,
-        ...context
+        ...personalContext,
+        mountedAgents: mounts.mountedAgents.map((mount) => {
+          const status = input.agentStatus.snapshot(mount.agentRef);
+          return { ...mount, status: status.status, statusLabel: status.statusLabel };
+        }),
+        defaultAgentRef: mounts.defaultAgentRef
       });
     }
     return {

@@ -121,6 +121,12 @@ describe("Agent management protocol v1", () => {
     expect(
       adminAgentCatalogResponseSchema.safeParse({
         protocolVersion: 1,
+        agents: [{ ...agent, publicProblem: "Agent 状态尚未初始化。" }]
+      }).success
+    ).toBe(true);
+    expect(
+      adminAgentCatalogResponseSchema.safeParse({
+        protocolVersion: 1,
         agents: [{ ...agent, publicProblem: "provider error: token expired" }]
       }).success
     ).toBe(false);

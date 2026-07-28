@@ -40,6 +40,7 @@ import {
 } from "./eventStream.js";
 import { FamilyDomainRepository } from "./familyDomain.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
+import { registerAgentRoutes, type AgentStatusLookup } from "./agentRoutes.js";
 import { registerAdminWeb } from "./adminWeb.js";
 import { registerAdminPreviewActivation } from "./adminPreviewActivation.js";
 import { registerAdminPreviewPersistence } from "./adminPreviewPersistence.js";
@@ -233,6 +234,15 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
 
   const repository = new GatewayRepository(db);
   const agentManagementRepository = new AgentManagementRepository(db, now);
+  const agentStatus: AgentStatusLookup = {
+    snapshot: () => ({
+      status: "problem",
+      statusLabel: "有问题",
+      activeTurnCount: 0,
+      lastCheckedAt: now().toISOString(),
+      publicProblem: "Agent 状态尚未初始化。"
+    })
+  };
   const familyRepository = new FamilyDomainRepository(db, {
     repository: agentManagementRepository,
     configuredRuntimes: options.configuredAgentRuntimes ?? []
@@ -286,7 +296,14 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     familyRepository,
     gatewayRepository: repository,
     entryAuthenticator,
-    mobileDeviceSummaryRepository
+    mobileDeviceSummaryRepository,
+    agentRepository: agentManagementRepository,
+    agentStatus
+  });
+  registerAgentRoutes(app, {
+    repository: agentManagementRepository,
+    entryAuthenticator,
+    agentStatus
   });
   registerAdminPreviewPersistence(app, {
     mode: options.mode,

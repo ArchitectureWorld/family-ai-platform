@@ -21,6 +21,7 @@ const publicProblemSchema = z
   .enum([
     "Agent 尚未配置。",
     "Agent 当前无法连接。",
+    "Agent 状态尚未初始化。",
     "Agent 任务执行超时。",
     "Agent 最近一次调用失败。"
   ])
