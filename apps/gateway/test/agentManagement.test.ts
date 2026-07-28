@@ -75,4 +75,18 @@ describe("Agent management repository", () => {
     expect(db.prepare(`SELECT assignment_ref, agent_ref, provider_profile_ref, status FROM admin_agent_assignments WHERE family_ref = ? AND person_ref = ? ORDER BY agent_ref`).all(familyRef, alice)).toEqual(first);
     expect(first).toHaveLength(2);
   });
+
+  it("rejects a runtime remap without hiding an existing mount", () => {
+    const mount = repository.mountMemberAgent({ familyRef, personRef: alice, agentRef: "agent:shared" });
+    const beforeBinding = db.prepare("SELECT agent_ref, provider_profile_ref, status FROM agent_runtime_bindings WHERE agent_ref = ?").get("agent:shared");
+    const beforeAssignment = db.prepare("SELECT assignment_ref, provider_profile_ref, status FROM assistant_assignments WHERE assignment_ref = ?").get(mount.assignmentRef);
+    expect(() => repository.reconcileRuntimeCatalog([{
+      ...configuredAgents[0]!, providerProfileRef: "provider-profile:remapped"
+    }])).toThrow(/Provider/);
+    expect(db.prepare("SELECT agent_ref, provider_profile_ref, status FROM agent_runtime_bindings WHERE agent_ref = ?").get("agent:shared")).toEqual(beforeBinding);
+    expect(db.prepare("SELECT assignment_ref, provider_profile_ref, status FROM assistant_assignments WHERE assignment_ref = ?").get(mount.assignmentRef)).toEqual(beforeAssignment);
+    expect(repository.listMemberMounts(familyRef, alice).mountedAgents).toContainEqual(
+      expect.objectContaining({ assignmentRef: mount.assignmentRef, agentRef: "agent:shared" })
+    );
+  });
 });

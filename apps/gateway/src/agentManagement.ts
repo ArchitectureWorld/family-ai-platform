@@ -37,6 +37,13 @@ export class AgentManagementRepository {
 
     const now = this.now().toISOString();
     this.db.transaction(() => {
+      const existingBinding = this.db.prepare("SELECT provider_profile_ref FROM agent_runtime_bindings WHERE agent_ref = ?");
+      for (const definition of definitions) {
+        const existing = existingBinding.get(definition.agentRef) as { provider_profile_ref: string } | undefined;
+        if (existing && existing.provider_profile_ref !== definition.providerProfileRef) {
+          throw new GatewayDomainError("AGENT_RUNTIME_REMAP_FORBIDDEN", 409, "conflict", false, "Agent 已绑定到另一个 Provider。");
+        }
+      }
       const insertProfile = this.db.prepare(
         `INSERT OR IGNORE INTO provider_profiles
          (provider_profile_ref, provider_kind, display_name, created_at)
