@@ -7,6 +7,8 @@ export interface GatewayConfig {
   databasePath: string;
   deviceToken: string;
   mode: GatewayMode;
+  previewAdminEntryPath?: string;
+  previewAdminOrigin?: string;
 }
 
 function positiveInteger(raw: string | undefined, fallback: number, name: string): number {
@@ -43,11 +45,31 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     throw new Error("GATEWAY_DEVICE_TOKEN must contain at least 24 characters");
   }
 
+  const previewAdminEntryPath = env.GATEWAY_PREVIEW_ADMIN_ENTRY_PATH;
+  const previewAdminOrigin = env.GATEWAY_PREVIEW_ADMIN_ORIGIN;
+  if ((previewAdminEntryPath === undefined) !== (previewAdminOrigin === undefined)) {
+    throw new Error(
+      "GATEWAY_PREVIEW_ADMIN_ENTRY_PATH and GATEWAY_PREVIEW_ADMIN_ORIGIN must be configured together"
+    );
+  }
+  if (
+    (previewAdminEntryPath !== undefined || previewAdminOrigin !== undefined) &&
+    mode !== "development"
+  ) {
+    throw new Error("Admin Preview persistence is development-only");
+  }
+
   return {
     host,
     port,
     databasePath: resolve(env.GATEWAY_DATABASE_PATH ?? ".runtime/data/gateway.sqlite"),
     deviceToken,
-    mode
+    mode,
+    ...(previewAdminEntryPath === undefined
+      ? {}
+      : {
+          previewAdminEntryPath: resolve(previewAdminEntryPath),
+          previewAdminOrigin: previewAdminOrigin!
+        })
   };
 }

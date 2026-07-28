@@ -160,6 +160,19 @@ export function createAdminApi({ fetchImpl = fetch, credential = null } = {}) {
       return value;
     },
 
+    async persistPreviewCredential() {
+      if (validatedCredential?.kind !== "entry") {
+        throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
+      }
+      const value = await request("/api/v1/admin/preview-entry", {
+        method: "POST"
+      });
+      if (!isRecord(value) || value.persisted !== true) {
+        throw new AdminApiError("ADMIN_PREVIEW_PERSISTENCE_INVALID", 502);
+      }
+      return value;
+    },
+
     async members() {
       if (validatedCredential?.kind !== "entry") {
         throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);

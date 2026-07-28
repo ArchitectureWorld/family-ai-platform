@@ -116,6 +116,8 @@ Web Device + HttpOnly Personal Entry
 - Chat 消息选择并转成 Work；
 - IndexedDB 本地投影、离线草稿、SSE 重连和 BroadcastChannel 多标签页通知；
 - 页面刷新与 Gateway 重启后的产品状态恢复。
+- 仅 development 模式开放的 Admin Web 家庭、成员与配对管理预览；
+- 同一局域网可访问的独立 HTTPS 体验入口（不改变 8790 正式服务）。
 
 当前开发顺序：
 
@@ -170,6 +172,40 @@ iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、i
 ```
 
 产品页面不提供专门的验证按钮、调试面板或测试业务状态。自动验证日志只保存在 Git 忽略的本机 runtime 目录。
+
+### 局域网直接体验 Admin Web 与 Member Web
+
+目标 Linux 上已安装 Node.js、OpenSSL 与 Nginx 时，可在受保护的开发工作树运行：
+
+```bash
+./scripts/member-preview-lan-up.sh
+```
+
+该命令只启动仓库自管的 Preview Gateway（`127.0.0.1:8791`）和隔离 Nginx
+（`0.0.0.0:9080/9443`），不会改写 `/etc/nginx`、系统服务、Docker Compose 或
+现有 `127.0.0.1:8790`。命令会输出不含凭据的 CA 下载地址、产品入口和证书指纹。
+
+首次使用的设备需要：
+
+1. 从输出的 `http://<LAN-IP>:9080/family-ai-preview-ca.crt` 下载本地 CA；
+2. 核对命令输出的 SHA-256 指纹后，将 CA 设为该设备上的受信任根证书；
+3. 由授权操作员把 `.runtime-preview/config/admin-web-url-9443` 以不打印、不记录
+   URL 内容的方式交给管理员浏览器；
+4. 管理员添加家庭成员并生成五分钟有效的配对码或二维码；
+5. 成员设备打开 `https://<LAN-IP>:9443/member/`，扫码或输入配对码进入。
+
+管理员入口凭据只保存在权限 0600 的 runtime 文件与当前浏览器 `sessionStorage`；
+首次网页建家后会通过 development-only、管理员认证的端点原子保存恢复入口。
+关闭配对弹窗会撤销仍有效且未使用的配对码。
+
+只停止局域网代理、保留 Gateway 数据与证书：
+
+```bash
+./scripts/member-preview-lan-down.sh
+```
+
+详细边界和验收步骤见
+[`docs/development/2026-07-28-lan-admin-member-experience.md`](docs/development/2026-07-28-lan-admin-member-experience.md)。
 
 ### 分步骤运行
 

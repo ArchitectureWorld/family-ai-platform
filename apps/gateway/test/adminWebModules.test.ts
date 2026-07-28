@@ -138,6 +138,9 @@ describe("Admin Web API client", () => {
           device: { deviceRef: "device:preview-admin", displayName: "管理电脑" }
         });
       }
+      if (url === "/api/v1/admin/preview-entry" && init.method === "POST") {
+        return Response.json({ persisted: true });
+      }
       if (url === "/api/v1/admin/members" && (init.method ?? "GET") === "GET") {
         return Response.json({
           members: [{
@@ -190,6 +193,7 @@ describe("Admin Web API client", () => {
       fetchImpl,
       credential: initialized.adminCredential
     });
+    expect(await entryApi.persistPreviewCredential()).toEqual({ persisted: true });
     expect((await entryApi.context()).audience).toBe("family_admin");
     expect((await entryApi.members()).members).toHaveLength(1);
     expect((await entryApi.addMember({
@@ -213,6 +217,10 @@ describe("Admin Web API client", () => {
         "X-Entry-Session-Ref": "entry-session:preview-admin"
       });
     }
+    expect(requests[2]).toMatchObject({
+      url: "/api/v1/admin/preview-entry",
+      init: { method: "POST" }
+    });
   });
 
   it("creates and revokes pairing material only through the selected member", async () => {
@@ -284,6 +292,50 @@ describe("Admin Web API client", () => {
 });
 
 describe("Admin Web pairing presentation", () => {
+  it("revokes an unconsumed active code once when its dialog is dismissed", async () => {
+    const { createPairingDismissalGuard } = await pairingModule();
+    const revokePairing = vi.fn(async () => ({ status: "revoked" }));
+    const guard = createPairingDismissalGuard({
+      pairing: {
+        pairingRef: "pairing:preview",
+        code: "ABCD-EFGH",
+        expiresAt: "2030-01-01T00:05:00.000Z"
+      },
+      revokePairing,
+      now: () => Date.parse("2030-01-01T00:04:00.000Z")
+    });
+
+    await expect(guard.revoke()).resolves.toBe(true);
+    await expect(guard.revoke()).resolves.toBe(false);
+    expect(revokePairing).toHaveBeenCalledTimes(1);
+    expect(revokePairing).toHaveBeenCalledWith("pairing:preview");
+
+    const expired = createPairingDismissalGuard({
+      pairing: {
+        pairingRef: "pairing:expired",
+        code: "ABCD-EFGH",
+        expiresAt: "2030-01-01T00:05:00.000Z"
+      },
+      revokePairing,
+      now: () => Date.parse("2030-01-01T00:05:00.000Z")
+    });
+    await expect(expired.revoke()).resolves.toBe(false);
+    expect(revokePairing).toHaveBeenCalledTimes(1);
+
+    const disarmed = createPairingDismissalGuard({
+      pairing: {
+        pairingRef: "pairing:disarmed",
+        code: "ABCD-EFGH",
+        expiresAt: "2030-01-01T00:05:00.000Z"
+      },
+      revokePairing,
+      now: () => Date.parse("2030-01-01T00:04:00.000Z")
+    });
+    disarmed.disarm();
+    await expect(disarmed.revoke()).resolves.toBe(false);
+    expect(revokePairing).toHaveBeenCalledTimes(1);
+  });
+
   it("builds a same-origin fragment handoff, QR, and deterministic expiry", async () => {
     const {
       memberHandoffUrl,

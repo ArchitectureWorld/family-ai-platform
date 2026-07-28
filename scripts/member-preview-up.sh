@@ -200,37 +200,92 @@ prepare_runtime() {
 
 prepare_config() {
   local token_file="$CONFIG_DIR/device-token" env_file="$CONFIG_DIR/gateway.env" token temporary
-  if [[ ! -e "$token_file" && ! -e "$env_file" ]]; then
-    token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
-    [[ "$token" =~ ^[A-Za-z0-9_-]{43}$ ]] || fail PREVIEW_CONFIG_INVALID
-    atomic_text_file "$token_file" "$token"$'\n'
-    local env_text
+  write_gateway_env() {
+    local current_token="$1" env_text
     env_text="$(
       builtin printf 'GATEWAY_MODE=development\n'
       builtin printf 'GATEWAY_HOST=127.0.0.1\n'
       builtin printf 'GATEWAY_PORT=8791\n'
       builtin printf 'GATEWAY_DATABASE_PATH=%s\n' "$DATA_DIR/gateway.sqlite"
-      builtin printf 'GATEWAY_DEVICE_TOKEN=%s\n' "$token"
+      builtin printf 'GATEWAY_DEVICE_TOKEN=%s\n' "$current_token"
+      builtin printf 'GATEWAY_PREVIEW_ADMIN_ENTRY_PATH=%s\n' "$CONFIG_DIR/admin-entry.json"
+      builtin printf 'GATEWAY_PREVIEW_ADMIN_ORIGIN=http://127.0.0.1:8791\n'
     )"
     atomic_text_file "$env_file" "$env_text"$'\n'
+  }
+  if [[ ! -e "$token_file" && ! -e "$env_file" ]]; then
+    token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
+    [[ "$token" =~ ^[A-Za-z0-9_-]{43}$ ]] || fail PREVIEW_CONFIG_INVALID
+    atomic_text_file "$token_file" "$token"$'\n'
+    write_gateway_env "$token"
     unset token
   fi
+  [[ -e "$token_file" && -e "$env_file" ]] || fail PREVIEW_CONFIG_INVALID
   for path in "$token_file" "$env_file"; do
     [[ -f "$path" && ! -L "$path" ]] || fail PREVIEW_CONFIG_INVALID
     chmod 0600 "$path"
   done
-  node --input-type=module - "$token_file" "$env_file" "$DATA_DIR/gateway.sqlite" <<'NODE'
+  if [[ "$(grep -Ec '^GATEWAY_PREVIEW_ADMIN_(ENTRY_PATH|ORIGIN)=' "$env_file")" -ne 2 ]]; then
+    node --input-type=module - "$token_file" "$env_file" "$DATA_DIR/gateway.sqlite" <<'NODE'
 import { readFileSync } from "node:fs";
 const [tokenFile, envFile, databasePath] = process.argv.slice(2);
 const tokenText = readFileSync(tokenFile, "utf8");
 const token = tokenText.endsWith("\n") ? tokenText.slice(0, -1) : tokenText;
 if (!/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(token) || tokenText !== `${token}\n`) process.exit(1);
 const lines = readFileSync(envFile, "utf8").split("\n");
+if (lines.at(-1) !== "") process.exit(1);
+lines.pop();
+const expected = [
+  "GATEWAY_MODE", "GATEWAY_HOST", "GATEWAY_PORT",
+  "GATEWAY_DATABASE_PATH", "GATEWAY_DEVICE_TOKEN"
+];
+const values = new Map(lines.map(line => {
+  const at = line.indexOf("=");
+  return [line.slice(0, at), line.slice(at + 1)];
+}));
+if (
+  lines.length !== expected.length ||
+  values.size !== expected.length ||
+  expected.some(key => !values.has(key)) ||
+  values.get("GATEWAY_MODE") !== "development" ||
+  values.get("GATEWAY_HOST") !== "127.0.0.1" ||
+  values.get("GATEWAY_PORT") !== "8791" ||
+  values.get("GATEWAY_DATABASE_PATH") !== databasePath ||
+  values.get("GATEWAY_DEVICE_TOKEN") !== token
+) process.exit(1);
+NODE
+    IFS= read -r token <"$token_file"
+    [[ "$token" =~ ^[A-Za-z0-9_-]{43}$ ]] || fail PREVIEW_CONFIG_INVALID
+    write_gateway_env "$token"
+    unset token
+  fi
+  node --input-type=module - "$token_file" "$env_file" "$DATA_DIR/gateway.sqlite" \
+    "$CONFIG_DIR/admin-entry.json" <<'NODE'
+import { readFileSync } from "node:fs";
+const [tokenFile, envFile, databasePath, adminEntryPath] = process.argv.slice(2);
+const tokenText = readFileSync(tokenFile, "utf8");
+const token = tokenText.endsWith("\n") ? tokenText.slice(0, -1) : tokenText;
+if (!/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(token) || tokenText !== `${token}\n`) process.exit(1);
+const lines = readFileSync(envFile, "utf8").split("\n");
 if (lines.at(-1) !== "") process.exit(1); lines.pop();
-const expected = ["GATEWAY_MODE", "GATEWAY_HOST", "GATEWAY_PORT", "GATEWAY_DATABASE_PATH", "GATEWAY_DEVICE_TOKEN"];
+const expected = [
+  "GATEWAY_MODE", "GATEWAY_HOST", "GATEWAY_PORT", "GATEWAY_DATABASE_PATH",
+  "GATEWAY_DEVICE_TOKEN", "GATEWAY_PREVIEW_ADMIN_ENTRY_PATH",
+  "GATEWAY_PREVIEW_ADMIN_ORIGIN"
+];
 if (lines.length !== expected.length) process.exit(1);
 const values = new Map(lines.map(line => { const at = line.indexOf("="); return [line.slice(0, at), line.slice(at + 1)]; }));
-if (values.size !== 5 || expected.some(key => !values.has(key)) || values.get("GATEWAY_MODE") !== "development" || values.get("GATEWAY_HOST") !== "127.0.0.1" || values.get("GATEWAY_PORT") !== "8791" || values.get("GATEWAY_DATABASE_PATH") !== databasePath || values.get("GATEWAY_DEVICE_TOKEN") !== token) process.exit(1);
+if (
+  values.size !== expected.length ||
+  expected.some(key => !values.has(key)) ||
+  values.get("GATEWAY_MODE") !== "development" ||
+  values.get("GATEWAY_HOST") !== "127.0.0.1" ||
+  values.get("GATEWAY_PORT") !== "8791" ||
+  values.get("GATEWAY_DATABASE_PATH") !== databasePath ||
+  values.get("GATEWAY_DEVICE_TOKEN") !== token ||
+  values.get("GATEWAY_PREVIEW_ADMIN_ENTRY_PATH") !== adminEntryPath ||
+  values.get("GATEWAY_PREVIEW_ADMIN_ORIGIN") !== "http://127.0.0.1:8791"
+) process.exit(1);
 NODE
 }
 

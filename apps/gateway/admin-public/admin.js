@@ -7,6 +7,7 @@ import {
 } from "./admin-entry.js";
 import { AdminApiError, createAdminApi } from "./admin-api.js";
 import {
+  createPairingDismissalGuard,
   memberHandoffUrl,
   pairingCountdown,
   pairingQrSvg
@@ -22,6 +23,7 @@ const summaryRoot = document.querySelector("#family-summary");
 const membersRoot = document.querySelector("#member-management-root");
 let activePairingDialog = null;
 let activePairingTimer = null;
+let activePairingDismissal = null;
 
 export function showAdminState(name) {
   if (!states.has(name)) throw new Error("ADMIN_STATE_INVALID");
@@ -101,7 +103,15 @@ function renderFamilySetup(bootstrapCredential) {
         deviceName: data.get("deviceName")
       });
       writeStoredAdminCredential(sessionStorage, result.adminCredential);
-      await renderManagement(result.adminCredential);
+      let persistenceWarning = "";
+      try {
+        await createAdminApi({
+          credential: result.adminCredential
+        }).persistPreviewCredential();
+      } catch {
+        persistenceWarning = "家庭已创建，但管理员入口未能持久保存；请保持当前标签页并重新启动预览。";
+      }
+      await renderManagement(result.adminCredential, persistenceWarning);
     } catch (error) {
       feedback.textContent = errorText(error);
       submit.disabled = false;
@@ -143,6 +153,9 @@ function memberCard(member, onPair) {
 }
 
 function closePairingDialog() {
+  const dismissal = activePairingDismissal;
+  activePairingDismissal = null;
+  if (dismissal !== null) void dismissal.revoke();
   if (activePairingTimer !== null) {
     window.clearInterval(activePairingTimer);
     activePairingTimer = null;
@@ -191,6 +204,13 @@ async function openPairing(api, member) {
 
   try {
     let result = await api.createPairing(member.personRef);
+    if (activePairingDialog !== dialog) {
+      await createPairingDismissalGuard({
+        pairing: result.pairing,
+        revokePairing: pairingRef => api.revokePairing(pairingRef)
+      }).revoke();
+      return;
+    }
 
     const render = () => {
       if (activePairingDialog !== dialog) return;
@@ -199,6 +219,11 @@ async function openPairing(api, member) {
         activePairingTimer = null;
       }
       const pairing = result.pairing;
+      let dismissal = createPairingDismissalGuard({
+        pairing,
+        revokePairing: pairingRef => api.revokePairing(pairingRef)
+      });
+      activePairingDismissal = dismissal;
       const handoff = memberHandoffUrl(window.location.origin, pairing);
       const code = element("p", {
         className: "pairing-code",
@@ -243,6 +268,10 @@ async function openPairing(api, member) {
           ? "配对码已过期"
           : `剩余 ${state.label}`;
         if (state.expired) {
+          dismissal.disarm();
+          if (activePairingDismissal === dismissal) {
+            activePairingDismissal = null;
+          }
           if (activePairingTimer !== null) {
             window.clearInterval(activePairingTimer);
             activePairingTimer = null;
@@ -253,26 +282,66 @@ async function openPairing(api, member) {
       revoke.addEventListener("click", async () => {
         revoke.disabled = true;
         feedback.textContent = "正在撤销…";
+        dismissal.disarm();
         try {
           await api.revokePairing(pairing.pairingRef);
+          if (activePairingDismissal === dismissal) {
+            activePairingDismissal = null;
+          }
           disable("配对码已撤销。");
         } catch (error) {
-          feedback.textContent = errorText(error);
-          revoke.disabled = false;
+          const retryDismissal = createPairingDismissalGuard({
+            pairing,
+            revokePairing: pairingRef => api.revokePairing(pairingRef)
+          });
+          if (activePairingDialog === dialog) {
+            dismissal = retryDismissal;
+            activePairingDismissal = dismissal;
+            feedback.textContent = errorText(error);
+            revoke.disabled = false;
+          } else {
+            void retryDismissal.revoke();
+          }
         }
       });
       renew.addEventListener("click", async () => {
         renew.disabled = true;
         feedback.textContent = "正在生成新码…";
+        dismissal.disarm();
+        let previousRevoked = pairingCountdown(pairing.expiresAt).expired;
         try {
-          if (!pairingCountdown(pairing.expiresAt).expired) {
+          if (!previousRevoked) {
             await api.revokePairing(pairing.pairingRef);
+            previousRevoked = true;
           }
           result = await api.createPairing(member.personRef);
+          if (activePairingDialog !== dialog) {
+            await createPairingDismissalGuard({
+              pairing: result.pairing,
+              revokePairing: pairingRef => api.revokePairing(pairingRef)
+            }).revoke();
+            return;
+          }
           render();
         } catch (error) {
-          feedback.textContent = errorText(error);
-          renew.disabled = false;
+          if (!previousRevoked) {
+            const retryDismissal = createPairingDismissalGuard({
+              pairing,
+              revokePairing: pairingRef => api.revokePairing(pairingRef)
+            });
+            if (activePairingDialog === dialog) {
+              dismissal = retryDismissal;
+              activePairingDismissal = dismissal;
+            } else {
+              void retryDismissal.revoke();
+            }
+          } else if (activePairingDismissal === dismissal) {
+            activePairingDismissal = null;
+          }
+          if (activePairingDialog === dialog) {
+            feedback.textContent = errorText(error);
+            renew.disabled = false;
+          }
         }
       });
       content.replaceChildren(
@@ -297,7 +366,7 @@ async function openPairing(api, member) {
   }
 }
 
-async function renderManagement(credential) {
+async function renderManagement(credential, persistenceWarning = "") {
   const api = createAdminApi({ credential });
   const [context, memberResult] = await Promise.all([
     api.context(),
@@ -315,6 +384,13 @@ async function renderManagement(credential) {
       text: `${context.person.displayName} · 家庭管理员`
     })
   );
+  if (persistenceWarning) {
+    summaryRoot.append(element("p", {
+      className: "form-message",
+      text: persistenceWarning,
+      attributes: { role: "status" }
+    }));
+  }
 
   membersRoot.replaceChildren();
   const list = element("div", {

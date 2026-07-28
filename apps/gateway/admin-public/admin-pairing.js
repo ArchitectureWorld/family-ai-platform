@@ -76,6 +76,34 @@ export function pairingCountdown(expiresAt, now = Date.now()) {
   };
 }
 
+export function createPairingDismissalGuard({
+  pairing,
+  revokePairing,
+  now = Date.now
+}) {
+  const validated = validatePairing(pairing);
+  if (typeof revokePairing !== "function" || typeof now !== "function") {
+    throw new Error("ADMIN_PAIRING_DISMISSAL_INVALID");
+  }
+  let armed = true;
+  return Object.freeze({
+    disarm() {
+      armed = false;
+    },
+    async revoke() {
+      if (!armed) return false;
+      armed = false;
+      if (pairingCountdown(validated.expiresAt, now()).expired) return false;
+      try {
+        await revokePairing(validated.pairingRef);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  });
+}
+
 export function pairingQrSvg(url, encoder) {
   if (typeof encoder !== "function") {
     throw new Error("ADMIN_PAIRING_QR_ENCODER_INVALID");

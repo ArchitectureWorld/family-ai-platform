@@ -37,6 +37,7 @@ import {
 import { FamilyDomainRepository } from "./familyDomain.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
 import { registerAdminWeb } from "./adminWeb.js";
+import { registerAdminPreviewPersistence } from "./adminPreviewPersistence.js";
 import { registerMemberWeb } from "./memberWeb.js";
 import { MobileDeviceSummaryRepository } from "./mobileDeviceSummary.js";
 import { MobilePairingRepository } from "./mobilePairing.js";
@@ -60,6 +61,8 @@ export interface BuildGatewayAppOptions {
   mode: GatewayMode;
   providerAdapter?: ProviderAdapter;
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
+  previewAdminEntryPath?: string;
+  previewAdminOrigin?: string;
   now?: () => Date;
 }
 
@@ -202,6 +205,12 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   if (options.mode === "production" && !options.providerAdapter) {
     throw new Error("production requires an explicit provider adapter");
   }
+  if (
+    (options.previewAdminEntryPath === undefined) !==
+    (options.previewAdminOrigin === undefined)
+  ) {
+    throw new Error("Admin Preview persistence requires both path and origin");
+  }
 
   const app = Fastify({ logger: false });
   const db = openGatewayDatabase(options.databasePath);
@@ -268,6 +277,16 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     gatewayRepository: repository,
     entryAuthenticator,
     mobileDeviceSummaryRepository
+  });
+  registerAdminPreviewPersistence(app, {
+    mode: options.mode,
+    entryAuthenticator,
+    ...(options.previewAdminEntryPath === undefined
+      ? {}
+      : {
+          adminEntryPath: options.previewAdminEntryPath,
+          origin: options.previewAdminOrigin!
+        })
   });
   registerMobileRoutes(app, {
     mobileRepository,

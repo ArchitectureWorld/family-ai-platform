@@ -40,6 +40,32 @@ describe("Gateway configuration", () => {
     ).toBe("0.0.0.0");
   });
 
+  it("requires the development Admin Preview persistence path and origin together", () => {
+    expect(loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      GATEWAY_PREVIEW_ADMIN_ENTRY_PATH: "/tmp/family-ai/admin-entry.json",
+      GATEWAY_PREVIEW_ADMIN_ORIGIN: "http://127.0.0.1:8791"
+    })).toMatchObject({
+      previewAdminEntryPath: "/tmp/family-ai/admin-entry.json",
+      previewAdminOrigin: "http://127.0.0.1:8791"
+    });
+    for (const env of [
+      { GATEWAY_PREVIEW_ADMIN_ENTRY_PATH: "/tmp/family-ai/admin-entry.json" },
+      { GATEWAY_PREVIEW_ADMIN_ORIGIN: "http://127.0.0.1:8791" }
+    ]) {
+      expect(() => loadGatewayConfig({
+        GATEWAY_DEVICE_TOKEN: token,
+        ...env
+      })).toThrow("configured together");
+    }
+    expect(() => loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      GATEWAY_MODE: "test",
+      GATEWAY_PREVIEW_ADMIN_ENTRY_PATH: "/tmp/family-ai/admin-entry.json",
+      GATEWAY_PREVIEW_ADMIN_ORIGIN: "http://127.0.0.1:8791"
+    })).toThrow("development-only");
+  });
+
   it("rejects missing or short development Tokens", () => {
     expect(() => loadGatewayConfig({})).toThrow("GATEWAY_DEVICE_TOKEN");
     expect(() => loadGatewayConfig({ GATEWAY_DEVICE_TOKEN: "short" })).toThrow(

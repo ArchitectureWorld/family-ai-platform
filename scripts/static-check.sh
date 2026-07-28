@@ -259,9 +259,20 @@ preview_scripts=(
   scripts/member-preview-down.sh
   scripts/member-preview-claim-loss-proxy.mjs
 )
+lan_preview_scripts=(
+  scripts/member-preview-lan-lib.mjs
+  scripts/member-preview-lan-up.sh
+  scripts/member-preview-lan-down.sh
+)
 for preview_script in "${preview_scripts[@]}"; do
   [[ -f "$preview_script" && ! -L "$preview_script" ]] || {
     printf 'Missing protected Preview entrypoint: %s\n' "$preview_script" >&2
+    exit 1
+  }
+done
+for lan_preview_script in "${lan_preview_scripts[@]}"; do
+  [[ -f "$lan_preview_script" && ! -L "$lan_preview_script" ]] || {
+    printf 'Missing protected LAN Preview entrypoint: %s\n' "$lan_preview_script" >&2
     exit 1
   }
 done
@@ -274,7 +285,7 @@ for ignore_file in .gitignore .dockerignore; do
 done
 
 preview_static_home="$(printf '/%s/%s/' home youran)"
-if grep -Fq "$preview_static_home" "${preview_scripts[@]}"; then
+if grep -Fq "$preview_static_home" "${preview_scripts[@]}" "${lan_preview_scripts[@]}"; then
   printf 'Preview scripts must derive the approved home dynamically.\n' >&2
   exit 1
 fi
@@ -298,6 +309,16 @@ fi
 if grep -Eq '(^|[^[:alnum:]_])kill[[:space:]]+-TERM([^[:alnum:]_]|$)' \
   scripts/member-preview-up.sh scripts/member-preview-down.sh; then
   printf 'Preview lifecycle TERM must use a validated pidfd.\n' >&2
+  exit 1
+fi
+if grep -Eq '/etc/nginx|systemctl|service[[:space:]]+nginx|ufw|docker[[:space:]]+compose' \
+  "${lan_preview_scripts[@]}"; then
+  printf 'LAN Preview must remain isolated from system services and Compose.\n' >&2
+  exit 1
+fi
+if grep -Eq 'pkill|killall|fuser|member-preview-down\.sh' \
+  scripts/member-preview-lan-down.sh; then
+  printf 'LAN Preview down must remain exact-process scoped.\n' >&2
   exit 1
 fi
 for required in \
@@ -327,6 +348,41 @@ for required in \
   'claim-loss-proxy.pid.json'; do
   grep -Fq "$required" scripts/member-preview-down.sh || {
     printf 'Preview down is missing required ownership contract: %s\n' "$required" >&2
+    exit 1
+  }
+done
+for required in \
+  'hostname -s' \
+  'id -un' \
+  'getent passwd' \
+  'fix/member-web-entry-hardening' \
+  'umask 077' \
+  'member-preview-up.sh' \
+  '9080' \
+  '9443' \
+  'lan-tls' \
+  'prime256v1' \
+  'nginx -p' \
+  'daemon off' \
+  'baseline-8790' \
+  'member-preview-admin.mjs'; do
+  grep -Fq "$required" scripts/member-preview-lan-up.sh || {
+    printf 'LAN Preview up is missing required lifecycle contract: %s\n' "$required" >&2
+    exit 1
+  }
+done
+for required in \
+  '/proc/' \
+  'starttime' \
+  'os.pidfd_open' \
+  'signal.pidfd_send_signal' \
+  'select.poll' \
+  'lan-nginx.pid.json' \
+  '9080' \
+  '9443' \
+  'baseline-8790'; do
+  grep -Fq "$required" scripts/member-preview-lan-down.sh || {
+    printf 'LAN Preview down is missing required ownership contract: %s\n' "$required" >&2
     exit 1
   }
 done

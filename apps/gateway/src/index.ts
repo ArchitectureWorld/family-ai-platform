@@ -5,7 +5,13 @@ const config = loadGatewayConfig();
 const app = await buildGatewayApp({
   databasePath: config.databasePath,
   deviceToken: config.deviceToken,
-  mode: config.mode
+  mode: config.mode,
+  ...(config.previewAdminEntryPath === undefined
+    ? {}
+    : {
+        previewAdminEntryPath: config.previewAdminEntryPath,
+        previewAdminOrigin: config.previewAdminOrigin!
+      })
 });
 
 const shutdown = async (signal: string) => {
