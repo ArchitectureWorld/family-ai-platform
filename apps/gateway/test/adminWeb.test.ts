@@ -50,6 +50,11 @@ describe("development Admin Web product entry", () => {
       expect(admin.body).toContain('data-state="create-family"');
       expect(admin.body).toContain('data-state="management"');
       expect(admin.body).toContain('data-state="recovery-required"');
+      expect(admin.body).toContain('id="admin-activation-form"');
+      expect(admin.body).toContain('id="admin-activation-code"');
+      expect(admin.body).toContain('autocomplete="one-time-code"');
+      expect(admin.body).toContain('placeholder="XXXXX-XXXXX"');
+      expect(admin.body).toContain("激活管理员设备");
       expect(admin.body).not.toContain(token);
 
       for (const [path, contentType] of [

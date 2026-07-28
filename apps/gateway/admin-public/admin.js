@@ -21,6 +21,10 @@ const states = new Map(
 const setupRoot = document.querySelector("#family-setup-root");
 const summaryRoot = document.querySelector("#family-summary");
 const membersRoot = document.querySelector("#member-management-root");
+const activationForm = document.querySelector("#admin-activation-form");
+const activationInput = document.querySelector("#admin-activation-code");
+const activationSubmit = document.querySelector("#admin-activation-submit");
+const activationMessage = document.querySelector("#admin-activation-message");
 let activePairingDialog = null;
 let activePairingTimer = null;
 let activePairingDismissal = null;
@@ -64,7 +68,25 @@ function messageNode() {
 }
 
 function errorText(error) {
+  if (error instanceof Error && error.message === "ADMIN_ACTIVATION_CODE_INVALID") {
+    return "激活码不正确，请检查后重试。";
+  }
   if (error instanceof AdminApiError) {
+    if (error.code === "PREVIEW_ACTIVATION_INVALID") {
+      return "激活码不正确，请检查后重试。";
+    }
+    if (error.code === "PREVIEW_ACTIVATION_EXPIRED") {
+      return "激活码已过期，请生成新码。";
+    }
+    if (error.code === "PREVIEW_ACTIVATION_UNAVAILABLE") {
+      return "当前没有可用的激活码，请生成新码。";
+    }
+    if (error.code === "PREVIEW_ADMIN_ENTRY_INVALID") {
+      return "管理员入口已失效，请重新启动预览。";
+    }
+    if (error.code === "ADMIN_PREVIEW_ACTIVATION_RESPONSE_INVALID") {
+      return "暂时无法激活，请检查连接后重试。";
+    }
     if (["ENTRY_SESSION_INVALID", "ENTRY_SESSION_EXPIRED", "DEVICE_REVOKED"].includes(error.code)) {
       return "管理员入口已失效，请重新生成入口后再试。";
     }
@@ -72,6 +94,25 @@ function errorText(error) {
   }
   return "暂时无法完成操作，请稍后重试。";
 }
+
+activationForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  activationSubmit.disabled = true;
+  activationMessage.textContent = "正在验证激活码…";
+  try {
+    const credential = await createAdminApi().exchangePreviewActivation(
+      new FormData(activationForm).get("activationCode")
+    );
+    activationInput.value = "";
+    writeStoredAdminCredential(sessionStorage, credential);
+    activationMessage.textContent = "验证成功，正在进入家庭管理…";
+    await renderManagement(credential);
+  } catch (error) {
+    activationMessage.textContent = errorText(error);
+    activationSubmit.disabled = false;
+    activationInput.focus();
+  }
+});
 
 function renderFamilySetup(bootstrapCredential) {
   setupRoot.replaceChildren();

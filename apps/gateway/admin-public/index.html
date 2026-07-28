@@ -41,7 +41,37 @@
       <section class="state-card recovery" data-state="recovery-required" hidden>
         <p class="eyebrow">需要管理员入口</p>
         <h2>无法验证管理员身份</h2>
-        <p>请重新使用受保护的管理员入口打开本页面。成员端仍可从原设备继续使用。</p>
+        <p>输入五分钟有效的一次性管理员激活码，验证后即可管理家庭成员。</p>
+        <form class="activation-form" id="admin-activation-form">
+          <label class="field" for="admin-activation-code">
+            <span>管理员激活码</span>
+            <input
+              id="admin-activation-code"
+              name="activationCode"
+              autocomplete="one-time-code"
+              autocapitalize="characters"
+              inputmode="text"
+              maxlength="11"
+              pattern="[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5}"
+              placeholder="XXXXX-XXXXX"
+              spellcheck="false"
+              required
+            >
+          </label>
+          <button
+            class="primary-button"
+            id="admin-activation-submit"
+            type="submit"
+          >
+            激活管理员设备
+          </button>
+          <p
+            class="form-message"
+            id="admin-activation-message"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </form>
       </section>
     </main>
     <script type="module" src="/admin/assets/admin.js"></script>
