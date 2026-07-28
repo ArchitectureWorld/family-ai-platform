@@ -78,6 +78,11 @@ beforeEach(async () => {
       process.stderr.write("session_id: first_id\\nsession_id: second_id\\n");
       process.exit(0);
     }
+    if (prompt === "mismatched-resume") {
+      process.stdout.write("private-mismatched-hermes-output");
+      process.stderr.write("session_id: returned_other_session_99\\n");
+      process.exit(0);
+    }
     process.stdout.write(args.includes("--resume") ? "Hermes 第二轮。" : "Hermes 第一轮。");
     process.stderr.write("private diagnostic\\nsession_id: saved_session_42\\n");
   `, "utf8");
@@ -160,6 +165,24 @@ describe("HermesCliProviderAdapter", () => {
       error: { code: "PROVIDER_SESSION_NOT_FOUND" }
     });
     expect(JSON.stringify(result)).not.toMatch(/private-session|token|does_not_exist|stderr/i);
+  });
+
+  it("rejects a resumed response whose Session ID differs from the persisted ID", async () => {
+    const adapter = new HermesCliProviderAdapter(options());
+    const result = await adapter.invoke({
+      ...request,
+      externalSessionRef: "external-session:hermes-caller_session_11",
+      content: [{ type: "text" as const, text: "mismatched-resume" }]
+    });
+    const serialized = JSON.stringify(result);
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { code: "PROVIDER_RESPONSE_INVALID" }
+    });
+    expect(serialized).not.toMatch(
+      /caller_session_11|returned_other_session_99|private-mismatched-hermes-output|stderr/i
+    );
   });
 
   it("maps a controlled timeout to PROVIDER_TIMEOUT", async () => {

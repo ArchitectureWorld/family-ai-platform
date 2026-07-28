@@ -169,18 +169,28 @@ export async function runControlledProcess(
 ): Promise<ControlledProcessResult> {
   validateOptions(options);
   const maxConcurrency = options.maxConcurrency ?? 4;
-  const acquired = await acquireProcessSlot(maxConcurrency, options.abortSignal);
-  if (!acquired) {
-    return {
-      exitCode: null,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      aborted: true
-    };
-  }
+  const abortSignal = options.abortSignal;
+  let abortRequested = abortSignal?.aborted ?? false;
+  let abortRunningProcess: (() => void) | undefined;
+  let acquired = false;
+  const abortListener = () => {
+    abortRequested = true;
+    abortRunningProcess?.();
+  };
+  abortSignal?.addEventListener("abort", abortListener, { once: true });
 
   try {
+    acquired = await acquireProcessSlot(maxConcurrency, abortSignal);
+    if (!acquired || abortRequested || abortSignal?.aborted) {
+      return {
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        aborted: true
+      };
+    }
+
     return await new Promise<ControlledProcessResult>((resolve, reject) => {
       const prefixArgs = options.prefixArgs ?? [];
       const terminationGraceMs =
@@ -220,17 +230,18 @@ export async function runControlledProcess(
         void terminate();
       }, options.timeoutMs);
 
-      const abortListener = () => {
+      abortRunningProcess = () => {
         aborted = true;
         void terminate();
       };
-      options.abortSignal?.addEventListener("abort", abortListener, { once: true });
+      if (abortRequested || abortSignal?.aborted) {
+        abortRunningProcess();
+      }
 
       const settle = async (exitCode: number | null): Promise<void> => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        options.abortSignal?.removeEventListener("abort", abortListener);
         if (terminationPromise) await terminationPromise;
         if (limitError) {
           reject(limitError);
@@ -247,7 +258,6 @@ export async function runControlledProcess(
 
       child.once("error", () => {
         clearTimeout(timeout);
-        options.abortSignal?.removeEventListener("abort", abortListener);
         if (!settled) {
           settled = true;
           reject(new ControlledProcessError("SPAWN_FAILED"));
@@ -284,6 +294,8 @@ export async function runControlledProcess(
       child.stdin.end(options.stdin ?? "");
     });
   } finally {
-    releaseProcessSlot();
+    abortRunningProcess = undefined;
+    abortSignal?.removeEventListener("abort", abortListener);
+    if (acquired) releaseProcessSlot();
   }
 }

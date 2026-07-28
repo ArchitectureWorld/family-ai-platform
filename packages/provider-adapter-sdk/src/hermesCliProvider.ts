@@ -178,6 +178,7 @@ export class HermesCliProviderAdapter implements ProviderAdapter {
         ? externalSessionRef(sessionId)
         : undefined;
       if (
+        (continuationSession !== undefined && sessionId !== continuationSession) ||
         !safeExternalSessionRef ||
         result.stdout.length === 0 ||
         result.stdout.length > 12_000

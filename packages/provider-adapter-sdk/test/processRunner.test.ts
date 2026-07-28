@@ -170,6 +170,51 @@ describe("runControlledProcess", () => {
     expect(result).toMatchObject({ aborted: true, timedOut: false, exitCode: null });
   });
 
+  it("honors an immediate abort before spawning or exposing process data", async () => {
+    const { cwd, script } = await fixture(`
+      import { writeFile } from "node:fs/promises";
+      let prompt = "";
+      for await (const chunk of process.stdin) prompt += chunk;
+      await writeFile(process.env.HOME + "/unexpected-start.json", JSON.stringify({prompt}));
+      setTimeout(() => {
+        process.stdout.write("private-process-output:" + prompt);
+        process.stderr.write("private-process-error");
+      }, 700);
+    `);
+    const abortController = new AbortController();
+    const startedAt = Date.now();
+
+    const execution = runControlledProcess({
+      executable: process.execPath,
+      prefixArgs: [script],
+      args: [],
+      cwd,
+      allowedEnvironment: environment(cwd),
+      stdin: "private-immediate-abort-prompt",
+      abortSignal: abortController.signal,
+      timeoutMs: 1_500,
+      terminationGraceMs: 30,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxConcurrency: 2
+    });
+    abortController.abort();
+    const result = await execution;
+
+    expect(result).toEqual({
+      aborted: true,
+      timedOut: false,
+      exitCode: null,
+      stdout: "",
+      stderr: ""
+    });
+    expect(Date.now() - startedAt).toBeLessThan(250);
+    await expect(access(join(cwd, "unexpected-start.json"))).rejects.toThrow();
+    expect(JSON.stringify(result)).not.toMatch(
+      /private-immediate-abort-prompt|private-process-output|private-process-error/i
+    );
+  });
+
   it("honors the configured global concurrency bound", async () => {
     const { cwd, script } = await fixture(`
       setTimeout(() => {

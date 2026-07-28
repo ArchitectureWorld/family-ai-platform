@@ -229,7 +229,11 @@ export class CodexCliProviderAdapter implements ProviderAdapter {
         return failure(request, this.clock, "PROVIDER_UNAVAILABLE");
       }
       const parsed = parseJsonLines(result.stdout);
-      if (!parsed) {
+      if (
+        !parsed ||
+        (continuationSession !== undefined &&
+          parsed.sessionId !== continuationSession)
+      ) {
         return failure(request, this.clock, "PROVIDER_RESPONSE_INVALID");
       }
       const safeExternalSessionRef = externalSessionRef(parsed.sessionId);

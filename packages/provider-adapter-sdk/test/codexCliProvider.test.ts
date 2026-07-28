@@ -81,6 +81,14 @@ beforeEach(async () => {
       process.stdout.write(JSON.stringify({type:"thread.started",thread_id:"thread_abc-42"}) + "\\n");
       process.exit(0);
     }
+    if (prompt === "mismatched-resume") {
+      process.stdout.write(JSON.stringify({type:"thread.started",thread_id:"returned_other_thread_99"}) + "\\n");
+      process.stdout.write(JSON.stringify({
+        type:"item.completed",
+        item:{type:"agent_message",text:"private-mismatched-codex-output"}
+      }) + "\\n");
+      process.exit(0);
+    }
     process.stdout.write(JSON.stringify({type:"thread.started",thread_id:"thread_abc-42"}) + "\\n");
     process.stdout.write(JSON.stringify({
       type:"item.completed",
@@ -169,5 +177,23 @@ describe("CodexCliProviderAdapter", () => {
       error: { code: "PROVIDER_SESSION_NOT_FOUND" }
     });
     expect(JSON.stringify(result)).not.toMatch(/private-thread|token|does_not_exist|stderr/i);
+  });
+
+  it("rejects a resumed response whose thread ID differs from the persisted ID", async () => {
+    const adapter = new CodexCliProviderAdapter(options());
+    const result = await adapter.invoke({
+      ...request,
+      externalSessionRef: "external-session:codex-caller_thread_11",
+      content: [{ type: "text" as const, text: "mismatched-resume" }]
+    });
+    const serialized = JSON.stringify(result);
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { code: "PROVIDER_RESPONSE_INVALID" }
+    });
+    expect(serialized).not.toMatch(
+      /caller_thread_11|returned_other_thread_99|private-mismatched-codex-output|stderr/i
+    );
   });
 });
