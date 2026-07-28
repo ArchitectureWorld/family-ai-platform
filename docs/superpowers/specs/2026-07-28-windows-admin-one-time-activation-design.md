@@ -1,7 +1,7 @@
 # Windows Admin One-Time Activation Design
 
 Date: 2026-07-28
-Status: approved for written-spec review
+Status: approved for implementation
 
 ## 1. Objective
 
