@@ -3,9 +3,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
+import type { ConfiguredAgentRuntime } from "../src/agentManagement.js";
+import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
 import { openGatewayDatabase } from "../src/database.js";
 
 const deviceToken = "family-onboarding-test-device-token-long-enough";
+const ownerAdminRuntimes: readonly ConfiguredAgentRuntime[] = [
+  {
+    agentRef: "agent:hermes-jarvis",
+    displayName: "Hermes Jarvis",
+    providerProfileRef: "provider-profile:hermes-jarvis",
+    providerKind: "hermes"
+  },
+  {
+    agentRef: "agent:codex-cli",
+    displayName: "Codex CLI",
+    providerProfileRef: "provider-profile:codex-cli",
+    providerKind: "codex"
+  }
+];
 const bootstrapHeaders = {
   authorization: `Bearer ${deviceToken}`,
   "x-device-ref": "device:test"
@@ -51,11 +67,12 @@ describe("Family onboarding and dual-entry sessions", () => {
   let databasePath = "";
   let app: Awaited<ReturnType<typeof buildGatewayApp>>;
 
-  async function openApp() {
+  async function openApp(configuredAgentRuntimes?: readonly ConfiguredAgentRuntime[]) {
     app = await buildGatewayApp({
       databasePath,
       deviceToken,
-      mode: "test"
+      mode: "test",
+      ...(configuredAgentRuntimes === undefined ? {} : { configuredAgentRuntimes })
     });
   }
 
@@ -194,6 +211,77 @@ describe("Family onboarding and dual-entry sessions", () => {
       db.close();
     }
     await openApp();
+  });
+
+  it("provisions configured owner Admin agents without changing Personal or cross-Person isolation", async () => {
+    await app.close();
+    await openApp(ownerAdminRuntimes);
+    const result = await initialize();
+
+    const member = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/members",
+      headers: entryHeaders(result.entries.admin),
+      payload: { displayName: "另一位成人", familyRole: "adult" }
+    });
+    expect(member.statusCode).toBe(201);
+    const otherPersonRef = member.json().member.personRef as string;
+
+    await app.close();
+    const db = openGatewayDatabase(databasePath);
+    let otherThreadRef = "";
+    try {
+      expect(db.prepare(
+        `SELECT agent_ref, provider_profile_ref, status
+         FROM admin_agent_assignments
+         WHERE family_ref = ? AND person_ref = ?
+         ORDER BY agent_ref`
+      ).all(result.family.familyRef, result.owner.personRef)).toEqual([
+        {
+          agent_ref: "agent:codex-cli",
+          provider_profile_ref: "provider-profile:codex-cli",
+          status: "active"
+        },
+        {
+          agent_ref: "agent:hermes-jarvis",
+          provider_profile_ref: "provider-profile:hermes-jarvis",
+          status: "active"
+        }
+      ]);
+      expect(db.prepare(
+        `SELECT agent_ref, is_default
+         FROM assistant_assignments
+         WHERE person_ref = ? AND status = 'active'
+         ORDER BY agent_ref`
+      ).all(result.owner.personRef)).toEqual([
+        { agent_ref: "agent:personal-assistant", is_default: 1 }
+      ]);
+
+      const chatWork = new ChatWorkDomainRepository(
+        db,
+        () => new Date("2026-07-28T10:00:00.000Z")
+      );
+      otherThreadRef = chatWork.ensureHomeChat({
+        personRef: otherPersonRef,
+        timezone: "UTC",
+        localDate: "2026-07-28"
+      }).chat.threadRef;
+    } finally {
+      db.close();
+    }
+    await openApp(ownerAdminRuntimes);
+
+    const crossPersonRead = await app.inject({
+      method: "GET",
+      url: `/api/v1/threads/${encodeURIComponent(otherThreadRef)}/messages`,
+      headers: entryHeaders(result.entries.personal)
+    });
+    expect(crossPersonRead.statusCode).toBe(404);
+    expectPublicError(crossPersonRead, {
+      code: "THREAD_NOT_FOUND",
+      category: "permission",
+      retryable: false
+    });
   });
 
   it("allows setup only once and rejects client-selected identity fields", async () => {

@@ -1,4 +1,8 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  AgentManagementRepository,
+  type ConfiguredAgentRuntime
+} from "./agentManagement.js";
 import type { GatewayDatabase } from "./database.js";
 import { sha256 } from "./database.js";
 import { GatewayDomainError } from "./service.js";
@@ -10,6 +14,10 @@ const FAMILY_MANAGER_AGENT_REF = "agent:family-manager";
 const PERSONAL_ASSISTANT_AGENT_REF = "agent:personal-assistant";
 const DEVELOPMENT_PROVIDER_PROFILE_REF = "provider-profile:fake-local";
 const ENTRY_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+const OWNER_ADMIN_AGENT_REFS = [
+  "agent:hermes-jarvis",
+  "agent:codex-cli"
+] as const;
 
 export interface EntryCredential {
   entryBindingRef: string;
@@ -119,8 +127,16 @@ function mapMember(row: Record<string, unknown>): FamilyMember {
   };
 }
 
+interface FamilyAgentManagementConfiguration {
+  repository: AgentManagementRepository;
+  configuredRuntimes: readonly ConfiguredAgentRuntime[];
+}
+
 export class FamilyDomainRepository {
-  constructor(private readonly db: GatewayDatabase) {}
+  constructor(
+    private readonly db: GatewayDatabase,
+    private readonly agentManagement?: FamilyAgentManagementConfiguration
+  ) {}
 
   isInitialized(): boolean {
     const row = this.db.prepare("SELECT COUNT(*) AS count FROM families").get() as {
@@ -190,6 +206,9 @@ export class FamilyDomainRepository {
          (agent_ref, provider_profile_ref, status, created_at, updated_at)
          VALUES(?, ?, ?, ?, ?)`
       ).run(PERSONAL_ASSISTANT_AGENT_REF, DEVELOPMENT_PROVIDER_PROFILE_REF, "active", now, now);
+      this.agentManagement?.repository.reconcileRuntimeCatalog(
+        this.agentManagement.configuredRuntimes
+      );
       this.db.prepare(
         `INSERT INTO families(family_ref, display_name, status, created_at, updated_at)
          VALUES(?, ?, 'active', ?, ?)`
@@ -203,6 +222,16 @@ export class FamilyDomainRepository {
          (family_ref, person_ref, family_role, status, joined_at, updated_at)
          VALUES(?, ?, 'owner', 'active', ?, ?)`
       ).run(familyRef, personRef, now, now);
+      const configuredAgentRefs = new Set(
+        this.agentManagement?.configuredRuntimes.map((runtime) => runtime.agentRef)
+      );
+      if (OWNER_ADMIN_AGENT_REFS.every((agentRef) => configuredAgentRefs.has(agentRef))) {
+        this.agentManagement!.repository.ensureOwnerAdminAssignments({
+          familyRef,
+          personRef,
+          agentRefs: OWNER_ADMIN_AGENT_REFS
+        });
+      }
       this.db.prepare(
         `INSERT INTO managed_devices
          (device_ref, display_name, terminal_type, platform, status, credential_hash,

@@ -133,7 +133,7 @@ export class AgentManagementRepository {
   }
 
   mountMemberAgent(input: { familyRef: string; personRef: string; agentRef: string }): MountedAgent {
-    return this.db.transaction(() => {
+    const mount = this.db.transaction(() => {
       this.requireActiveMember(input.familyRef, input.personRef);
       const runtime = this.runtimeForAgent(input.agentRef);
       const existing = this.db.prepare(
@@ -166,7 +166,8 @@ export class AgentManagementRepository {
         isDefault: false,
         ...idleStatus
       };
-    })();
+    });
+    return mount.immediate();
   }
 
   unmountMemberAgent(input: { familyRef: string; personRef: string; agentRef: string }): void {

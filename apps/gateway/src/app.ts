@@ -12,6 +12,10 @@ import {
   type PublicError
 } from "@family-ai/contracts";
 import {
+  AgentManagementRepository,
+  type ConfiguredAgentRuntime
+} from "./agentManagement.js";
+import {
   FakeProviderAdapter,
   type ProviderAdapter
 } from "@family-ai/provider-adapter-sdk";
@@ -60,6 +64,7 @@ export interface BuildGatewayAppOptions {
   databasePath: string;
   deviceToken: string;
   mode: GatewayMode;
+  configuredAgentRuntimes?: readonly ConfiguredAgentRuntime[];
   providerAdapter?: ProviderAdapter;
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
   previewAdminEntryPath?: string;
@@ -227,7 +232,11 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   }
 
   const repository = new GatewayRepository(db);
-  const familyRepository = new FamilyDomainRepository(db);
+  const agentManagementRepository = new AgentManagementRepository(db, now);
+  const familyRepository = new FamilyDomainRepository(db, {
+    repository: agentManagementRepository,
+    configuredRuntimes: options.configuredAgentRuntimes ?? []
+  });
   const entryAuthenticator = new EntrySessionAuthenticator(db, familyRepository, now);
   const deviceSyncRepository = new DeviceSyncRepository(db, domainEventStore, now);
   const eventStreamHub = new PersonEventStreamHub(
