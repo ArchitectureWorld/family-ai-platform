@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
 CREATE INDEX IF NOT EXISTS outbox_events_dispatch_idx
   ON outbox_events(status, available_at, claimed_until, event_ref);
 
+DROP TRIGGER IF EXISTS domain_event_home_chat_created;
 CREATE TRIGGER IF NOT EXISTS domain_event_home_chat_created
 AFTER INSERT ON daily_episodes
 WHEN NEW.boundary_reason = 'initial'
@@ -120,7 +121,8 @@ BEGIN
     json_object(
       'homeChatStreamRef', NEW.home_chat_stream_ref,
       'dailyEpisodeRef', NEW.daily_episode_ref,
-      'threadRef', NEW.thread_ref
+      'threadRef', NEW.thread_ref,
+      'agentRef', __HOME_CHAT_AGENT_REF__
     ),
     NEW.started_at,
     NEW.started_at
@@ -134,6 +136,7 @@ BEGIN
   FROM domain_events WHERE rowid = last_insert_rowid();
 END;
 
+DROP TRIGGER IF EXISTS domain_event_work_created;
 CREATE TRIGGER IF NOT EXISTS domain_event_work_created
 AFTER INSERT ON work_conversations
 BEGIN
@@ -162,6 +165,7 @@ BEGIN
     json_object(
       'workConversationRef', NEW.work_conversation_ref,
       'threadRef', NEW.thread_ref,
+      'agentRef', __WORK_AGENT_REF__,
       'status', NEW.status
     ),
     (SELECT created_at FROM interaction_threads WHERE thread_ref = NEW.thread_ref),
@@ -373,6 +377,7 @@ BEGIN
   FROM domain_events WHERE rowid = last_insert_rowid();
 END;
 
+DROP TRIGGER IF EXISTS domain_event_provider_turn_failed;
 CREATE TRIGGER IF NOT EXISTS domain_event_provider_turn_failed
 AFTER UPDATE OF status ON thread_provider_turns
 WHEN NEW.status = 'failed' AND OLD.status <> 'failed'
@@ -404,6 +409,7 @@ BEGIN
     json_object(
       'userMessageRef', NEW.user_message_ref,
       'threadRef', NEW.thread_ref,
+      'agentRef', NEW.agent_ref,
       'attemptCount', NEW.attempt_count,
       'error', json_object(
         'code', json_extract(NEW.error_json, '$.code'),
@@ -423,6 +429,7 @@ BEGIN
   FROM domain_events WHERE rowid = last_insert_rowid();
 END;
 
+DROP TRIGGER IF EXISTS domain_event_provider_turn_succeeded;
 CREATE TRIGGER IF NOT EXISTS domain_event_provider_turn_succeeded
 AFTER UPDATE OF status ON thread_provider_turns
 WHEN NEW.status = 'succeeded' AND OLD.status <> 'succeeded'
@@ -455,6 +462,7 @@ BEGIN
       'userMessageRef', NEW.user_message_ref,
       'assistantMessageRef', NEW.assistant_message_ref,
       'threadRef', NEW.thread_ref,
+      'agentRef', NEW.agent_ref,
       'attemptCount', NEW.attempt_count
     ),
     NEW.completed_at,
@@ -469,6 +477,30 @@ BEGIN
   FROM domain_events WHERE rowid = last_insert_rowid();
 END;
 `;
+
+function eventSchemaForCoreVersion(coreVersion: number): string {
+  const homeChatAgent = coreVersion === 7
+    ? `(SELECT agent_ref FROM home_chat_streams
+        WHERE home_chat_stream_ref = NEW.home_chat_stream_ref)`
+    : `(SELECT aa.agent_ref
+        FROM assistant_assignments aa
+        WHERE aa.person_ref = (
+          SELECT person_ref FROM home_chat_streams
+          WHERE home_chat_stream_ref = NEW.home_chat_stream_ref
+        )
+          AND aa.status = 'active'
+        LIMIT 1)`;
+  const workAgent = coreVersion === 7
+    ? "NEW.agent_ref"
+    : `(SELECT aa.agent_ref
+        FROM assistant_assignments aa
+        WHERE aa.person_ref = NEW.person_ref
+          AND aa.status = 'active'
+        LIMIT 1)`;
+  return DOMAIN_EVENT_SCHEMA
+    .replace("__HOME_CHAT_AGENT_REF__", homeChatAgent)
+    .replace("__WORK_AGENT_REF__", workAgent);
+}
 
 function parseRecord(value: unknown): Record<string, unknown> {
   const parsed = JSON.parse(String(value)) as unknown;
@@ -513,7 +545,7 @@ export class DomainEventStore {
       throw new Error(`Domain Event schema requires Gateway schema version 6 or 7, got ${String(coreVersion?.version)}`);
     }
     this.db.transaction(() => {
-      this.db.exec(DOMAIN_EVENT_SCHEMA);
+      this.db.exec(eventSchemaForCoreVersion(coreVersion.version));
       this.db.prepare(
         "INSERT OR IGNORE INTO domain_event_schema_migrations(version, applied_at) VALUES(?, ?)"
       ).run(DOMAIN_EVENT_SCHEMA_VERSION, this.now().toISOString());

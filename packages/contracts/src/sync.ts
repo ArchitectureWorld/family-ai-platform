@@ -13,6 +13,7 @@ export const syncPersonRefSchema = fixedRef("person");
 export const syncDeviceRefSchema = fixedRef("device");
 export const syncThreadRefSchema = fixedRef("thread");
 export const syncMessageRefSchema = fixedRef("message");
+const syncAgentRefSchema = fixedRef("agent");
 const syncHomeChatStreamRefSchema = fixedRef("home-chat");
 const syncDailyEpisodeRefSchema = fixedRef("daily-episode");
 const syncWorkConversationRefSchema = fixedRef("work");
@@ -140,7 +141,8 @@ const chatHomeCreatedEventShape = syncEventEnvelopeSchema
       .object({
         homeChatStreamRef: syncHomeChatStreamRefSchema,
         dailyEpisodeRef: syncDailyEpisodeRefSchema,
-        threadRef: syncThreadRefSchema
+        threadRef: syncThreadRefSchema,
+        agentRef: syncAgentRefSchema.optional()
       })
       .strict()
   })
@@ -156,6 +158,7 @@ const workCreatedEventShape = syncEventEnvelopeSchema
       .object({
         workConversationRef: syncWorkConversationRefSchema,
         threadRef: syncThreadRefSchema,
+        agentRef: syncAgentRefSchema.optional(),
         status: workConversationStatusSchema
       })
       .strict()
@@ -223,6 +226,7 @@ const providerTurnFailedEventShape = syncEventEnvelopeSchema
       .object({
         userMessageRef: syncMessageRefSchema,
         threadRef: syncThreadRefSchema,
+        agentRef: syncAgentRefSchema.optional(),
         attemptCount: syncEventSequenceSchema,
         error: z
           .object({
@@ -247,6 +251,7 @@ const providerTurnSucceededEventShape = syncEventEnvelopeSchema
         userMessageRef: syncMessageRefSchema,
         assistantMessageRef: syncMessageRefSchema,
         threadRef: syncThreadRefSchema,
+        agentRef: syncAgentRefSchema.optional(),
         attemptCount: syncEventSequenceSchema
       })
       .strict()

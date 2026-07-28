@@ -342,9 +342,21 @@ export class FamilyDomainRepository {
         AND fma.family_ref = f.family_ref
         AND fma.status = 'active'
        LEFT JOIN assistant_assignments aa
-         ON eb.audience = 'personal'
-        AND aa.person_ref = p.person_ref
-        AND aa.status = 'active'
+         ON aa.assignment_ref = (
+           SELECT candidate.assignment_ref
+           FROM assistant_assignments candidate
+           WHERE eb.audience = 'personal'
+             AND candidate.person_ref = p.person_ref
+           ORDER BY
+             CASE
+               WHEN candidate.status = 'active' AND candidate.is_default = 1 THEN 0
+               WHEN candidate.status = 'active' THEN 1
+               ELSE 2
+             END,
+             candidate.effective_from DESC,
+             candidate.assignment_ref DESC
+           LIMIT 1
+         )
        JOIN agents a ON a.agent_ref = COALESCE(fma.agent_ref, aa.agent_ref)
        WHERE es.entry_session_ref = ?
          AND es.status = 'active'

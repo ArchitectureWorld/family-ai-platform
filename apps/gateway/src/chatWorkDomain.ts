@@ -12,7 +12,10 @@ import type {
   WorkProgressSnapshot
 } from "@family-ai/contracts";
 import type { GatewayDatabase } from "./database.js";
+import { AgentManagementRepository } from "./agentManagement.js";
 import { GatewayDomainError } from "./service.js";
+
+const PERSONAL_AGENT_REF = "agent:personal-assistant";
 
 export interface HomeChatRecord {
   chat: HomeChatStream;
@@ -117,6 +120,7 @@ function mapHomeChatRecord(row: Record<string, unknown>): HomeChatRecord {
       threadRef: String(row.thread_ref),
       threadKind: "home_chat",
       personRef: String(row.person_ref),
+      agentRef: String(row.agent_ref),
       lastSequence: Number(row.thread_last_sequence),
       createdAt: String(row.thread_created_at),
       lastActiveAt: String(row.thread_last_active_at),
@@ -133,6 +137,7 @@ function mapWorkConversation(row: Record<string, unknown>): WorkConversation {
     threadRef: String(row.thread_ref),
     threadKind: "work",
     personRef: String(row.person_ref),
+    agentRef: String(row.agent_ref),
     lastSequence: Number(row.last_sequence),
     createdAt: String(row.created_at),
     lastActiveAt: String(row.last_active_at),
@@ -316,22 +321,35 @@ function actorColumns(actor: ThreadActor): {
 }
 
 export class ChatWorkDomainRepository {
+  private readonly agentManagement: AgentManagementRepository;
+
   constructor(
     private readonly db: GatewayDatabase,
-    private readonly now: () => Date = () => new Date()
-  ) {}
+    private readonly now: () => Date = () => new Date(),
+    agentManagement?: AgentManagementRepository
+  ) {
+    this.agentManagement = agentManagement ?? new AgentManagementRepository(db, now);
+  }
+
+  requireActiveAgent(personRef: string, agentRef: string): void {
+    this.agentManagement.requireActiveMount(personRef, agentRef);
+  }
 
   ensureHomeChat(input: {
     personRef: string;
+    agentRef?: string;
     timezone: string;
     localDate?: string;
   }): HomeChatRecord {
-    const existing = this.getHomeChat(input.personRef);
+    const agentRef = input.agentRef ?? PERSONAL_AGENT_REF;
+    this.agentManagement.requireActiveMount(input.personRef, agentRef);
+    const existing = this.getHomeChat(input.personRef, agentRef);
     if (existing) return existing;
 
     requirePerson(this.db, input.personRef);
     const create = this.db.transaction(() => {
-      const concurrentExisting = this.getHomeChat(input.personRef);
+      this.agentManagement.requireActiveMount(input.personRef, agentRef);
+      const concurrentExisting = this.getHomeChat(input.personRef, agentRef);
       if (concurrentExisting) return concurrentExisting;
 
       const now = this.now().toISOString();
@@ -342,14 +360,15 @@ export class ChatWorkDomainRepository {
 
       this.db.prepare(
         `INSERT INTO interaction_threads
-         (thread_ref, person_ref, thread_kind, last_sequence, created_at, last_active_at)
-         VALUES(?, ?, 'home_chat', 0, ?, ?)`
-      ).run(threadRef, input.personRef, now, now);
+         (thread_ref, person_ref, family_ref, agent_ref, entry_audience,
+          thread_kind, last_sequence, created_at, last_active_at)
+         VALUES(?, ?, NULL, ?, 'personal', 'home_chat', 0, ?, ?)`
+      ).run(threadRef, input.personRef, agentRef, now, now);
       this.db.prepare(
         `INSERT INTO home_chat_streams
-         (home_chat_stream_ref, thread_ref, person_ref, status)
-         VALUES(?, ?, ?, 'active')`
-      ).run(homeChatStreamRef, threadRef, input.personRef);
+         (home_chat_stream_ref, thread_ref, person_ref, agent_ref, entry_audience, status)
+         VALUES(?, ?, ?, ?, 'personal', 'active')`
+      ).run(homeChatStreamRef, threadRef, input.personRef, agentRef);
       this.db.prepare(
         `INSERT INTO daily_episodes
          (daily_episode_ref, home_chat_stream_ref, thread_ref, local_date, timezone,
@@ -365,7 +384,7 @@ export class ChatWorkDomainRepository {
         now
       );
 
-      const created = this.getHomeChat(input.personRef);
+      const created = this.getHomeChat(input.personRef, agentRef);
       if (!created) throw new Error("Home Chat was not readable after creation");
       return created;
     });
@@ -373,10 +392,22 @@ export class ChatWorkDomainRepository {
     return create();
   }
 
-  getHomeChat(personRef: string): HomeChatRecord | null {
+  getHomeChat(
+    personRef: string,
+    agentRef: string = PERSONAL_AGENT_REF
+  ): HomeChatRecord | null {
+    try {
+      this.agentManagement.requireActiveMount(personRef, agentRef);
+    } catch (error) {
+      if (error instanceof GatewayDomainError && error.code === "AGENT_NOT_MOUNTED") {
+        return null;
+      }
+      throw error;
+    }
     const row = this.db.prepare(
       `SELECT t.thread_ref,
               t.person_ref,
+              t.agent_ref,
               t.last_sequence AS thread_last_sequence,
               t.created_at AS thread_created_at,
               t.last_active_at AS thread_last_active_at,
@@ -400,21 +431,26 @@ export class ChatWorkDomainRepository {
          ON e.home_chat_stream_ref = h.home_chat_stream_ref
         AND e.thread_ref = h.thread_ref
         AND e.archive_status = 'open'
-       WHERE h.person_ref = ? AND h.status = 'active'`
-    ).get(personRef) as Record<string, unknown> | undefined;
+       WHERE h.person_ref = ? AND h.agent_ref = ?
+         AND h.entry_audience = 'personal' AND h.status = 'active'`
+    ).get(personRef, agentRef) as Record<string, unknown> | undefined;
     return row ? mapHomeChatRecord(row) : null;
   }
 
   createWorkConversation(input: {
     personRef: string;
+    agentRef?: string;
     title: string;
     goal: string;
   }): WorkConversation {
+    const agentRef = input.agentRef ?? PERSONAL_AGENT_REF;
     requirePerson(this.db, input.personRef);
+    this.agentManagement.requireActiveMount(input.personRef, agentRef);
     const title = normalizedRequired(input.title, "title");
     const goal = normalizedRequired(input.goal, "goal");
     const create = this.db.transaction(() => this.insertWorkConversation({
       personRef: input.personRef,
+      agentRef,
       title,
       goal,
       now: this.now().toISOString()
@@ -424,38 +460,60 @@ export class ChatWorkDomainRepository {
 
   getWorkConversation(
     personRef: string,
-    workConversationRef: string
+    agentRefOrWorkConversationRef: string,
+    maybeWorkConversationRef?: string
   ): WorkConversation | null {
+    const agentRef = maybeWorkConversationRef === undefined
+      ? PERSONAL_AGENT_REF
+      : agentRefOrWorkConversationRef;
+    const workConversationRef = maybeWorkConversationRef ?? agentRefOrWorkConversationRef;
+    try {
+      this.agentManagement.requireActiveMount(personRef, agentRef);
+    } catch (error) {
+      if (error instanceof GatewayDomainError && error.code === "AGENT_NOT_MOUNTED") {
+        return null;
+      }
+      throw error;
+    }
     const row = this.db.prepare(
-      `SELECT t.thread_ref, t.person_ref, t.last_sequence, t.created_at, t.last_active_at,
+      `SELECT t.thread_ref, t.person_ref, t.agent_ref, t.last_sequence,
+              t.created_at, t.last_active_at,
               w.work_conversation_ref, w.title, w.goal, w.summary, w.status, w.archived_at
        FROM work_conversations w
        JOIN interaction_threads t
          ON t.thread_ref = w.thread_ref
         AND t.person_ref = w.person_ref
         AND t.thread_kind = 'work'
-       WHERE w.work_conversation_ref = ? AND w.person_ref = ?`
-    ).get(workConversationRef, personRef) as Record<string, unknown> | undefined;
+       WHERE w.work_conversation_ref = ? AND w.person_ref = ?
+         AND w.agent_ref = ? AND w.entry_audience = 'personal'`
+    ).get(workConversationRef, personRef, agentRef) as Record<string, unknown> | undefined;
     return row ? mapWorkConversation(row) : null;
   }
 
-  listWorkConversations(personRef: string): WorkConversation[] {
+  listWorkConversations(
+    personRef: string,
+    agentRef: string = PERSONAL_AGENT_REF
+  ): WorkConversation[] {
+    this.agentManagement.requireActiveMount(personRef, agentRef);
     const rows = this.db.prepare(
-      `SELECT t.thread_ref, t.person_ref, t.last_sequence, t.created_at, t.last_active_at,
+      `SELECT t.thread_ref, t.person_ref, t.agent_ref, t.last_sequence,
+              t.created_at, t.last_active_at,
               w.work_conversation_ref, w.title, w.goal, w.summary, w.status, w.archived_at
        FROM work_conversations w
        JOIN interaction_threads t
          ON t.thread_ref = w.thread_ref
         AND t.person_ref = w.person_ref
         AND t.thread_kind = 'work'
-       WHERE w.person_ref = ?
+       WHERE w.person_ref = ? AND w.agent_ref = ? AND w.entry_audience = 'personal'
        ORDER BY t.last_active_at DESC, t.created_at DESC, w.work_conversation_ref`
-    ).all(personRef) as Array<Record<string, unknown>>;
+    ).all(personRef, agentRef) as Array<Record<string, unknown>>;
     return rows.map(mapWorkConversation);
   }
 
   appendThreadMessage(input: {
     personRef: string;
+    agentRef?: string;
+    entryAudience?: "personal";
     threadRef: string;
     clientMessageId: string;
     actor: ThreadActor;
@@ -463,8 +521,15 @@ export class ChatWorkDomainRepository {
     content: ThreadMessageContent;
     occurredAt: string;
   }): ThreadMessage {
+    const agentRef = input.agentRef ?? PERSONAL_AGENT_REF;
+    const entryAudience = input.entryAudience ?? "personal";
     const append = this.db.transaction(() => {
-      this.requireThread(input.personRef, input.threadRef);
+      this.requireThread({
+        personRef: input.personRef,
+        agentRef,
+        entryAudience,
+        threadRef: input.threadRef
+      });
       this.validateMessageProvenance(input.personRef, input.actor, input.origin);
       const existing = this.findMessageByClientId(input.threadRef, input.clientMessageId);
       if (existing) {
@@ -540,11 +605,18 @@ export class ChatWorkDomainRepository {
 
   listThreadMessages(input: {
     personRef: string;
+    agentRef?: string;
+    entryAudience?: "personal";
     threadRef: string;
     beforeSequence?: number;
     limit?: number;
   }): ThreadMessagePage {
-    this.requireThread(input.personRef, input.threadRef);
+    this.requireThread({
+      personRef: input.personRef,
+      agentRef: input.agentRef ?? PERSONAL_AGENT_REF,
+      entryAudience: input.entryAudience ?? "personal",
+      threadRef: input.threadRef
+    });
     const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
     const rows = input.beforeSequence === undefined
       ? this.db.prepare(
@@ -595,13 +667,14 @@ export class ChatWorkDomainRepository {
 
     const create = this.db.transaction(() => {
       const homeChat = this.db.prepare(
-        `SELECT thread_ref FROM home_chat_streams
+        `SELECT thread_ref, agent_ref FROM home_chat_streams
          WHERE home_chat_stream_ref = ? AND person_ref = ? AND status = 'active'`
       ).get(
         input.source.homeChatStreamRef,
         input.personRef
-      ) as { thread_ref: string } | undefined;
+      ) as { thread_ref: string; agent_ref: string } | undefined;
       if (!homeChat) throw chatSourceInvalid();
+      this.agentManagement.requireActiveMount(input.personRef, homeChat.agent_ref);
 
       if (input.source.dailyEpisodeRef) {
         const episode = this.db.prepare(
@@ -632,6 +705,7 @@ export class ChatWorkDomainRepository {
       const now = this.now().toISOString();
       const conversation = this.insertWorkConversation({
         personRef: input.personRef,
+        agentRef: homeChat.agent_ref,
         title,
         goal,
         now
@@ -711,7 +785,11 @@ export class ChatWorkDomainRepository {
     snapshot: WorkProgressSnapshot;
   }): WorkProgressSnapshot {
     const save = this.db.transaction(() => {
-      if (!this.getWorkConversation(input.personRef, input.snapshot.workConversationRef)) {
+      const agentRef = this.resolveWorkAgent(
+        input.personRef,
+        input.snapshot.workConversationRef
+      );
+      if (!agentRef) {
         throw workNotFound();
       }
       this.db.prepare(
@@ -752,7 +830,7 @@ export class ChatWorkDomainRepository {
     workConversationRef: string
   ): WorkProgressSnapshot | null {
     const row = this.db.prepare(
-      `SELECT p.work_conversation_ref, p.status, p.phase_summary,
+      `SELECT p.work_conversation_ref, p.status, p.phase_summary, w.agent_ref,
               p.incomplete_tasks_json, p.risks_json, p.pending_confirmations_json,
               p.deadlines_json, p.updated_at
        FROM work_progress_snapshots p
@@ -760,7 +838,46 @@ export class ChatWorkDomainRepository {
          ON w.work_conversation_ref = p.work_conversation_ref
        WHERE p.work_conversation_ref = ? AND w.person_ref = ?`
     ).get(workConversationRef, personRef) as Record<string, unknown> | undefined;
+    if (row) {
+      this.agentManagement.requireActiveMount(personRef, String(row.agent_ref));
+    }
     return row ? mapWorkProgressSnapshot(row) : null;
+  }
+
+  resolveThreadAgent(input: {
+    personRef: string;
+    entryAudience: "personal";
+    threadRef: string;
+  }): string {
+    const row = this.db.prepare(
+      `SELECT agent_ref FROM interaction_threads
+       WHERE thread_ref = ? AND person_ref = ? AND entry_audience = ?`
+    ).get(input.threadRef, input.personRef, input.entryAudience) as
+      | { agent_ref: string }
+      | undefined;
+    if (!row) throw threadNotFound();
+    const agentRef = String(row.agent_ref);
+    this.agentManagement.requireActiveMount(input.personRef, agentRef);
+    return agentRef;
+  }
+
+  requireThread(input: {
+    personRef: string;
+    agentRef: string;
+    entryAudience: "personal";
+    threadRef: string;
+  }): void {
+    this.agentManagement.requireActiveMount(input.personRef, input.agentRef);
+    const row = this.db.prepare(
+      `SELECT 1 FROM interaction_threads
+       WHERE thread_ref = ? AND person_ref = ? AND agent_ref = ? AND entry_audience = ?`
+    ).get(
+      input.threadRef,
+      input.personRef,
+      input.agentRef,
+      input.entryAudience
+    );
+    if (!row) throw threadNotFound();
   }
 
   private validateMessageProvenance(
@@ -825,14 +942,6 @@ export class ChatWorkDomainRepository {
     }
   }
 
-  private requireThread(personRef: string, threadRef: string): void {
-    const row = this.db.prepare(
-      `SELECT 1 FROM interaction_threads
-       WHERE thread_ref = ? AND person_ref = ?`
-    ).get(threadRef, personRef);
-    if (!row) throw threadNotFound();
-  }
-
   private findMessageByClientId(
     threadRef: string,
     clientMessageId: string
@@ -853,6 +962,7 @@ export class ChatWorkDomainRepository {
 
   private insertWorkConversation(input: {
     personRef: string;
+    agentRef: string;
     title: string;
     goal: string;
     now: string;
@@ -861,23 +971,45 @@ export class ChatWorkDomainRepository {
     const workConversationRef = `work:${randomUUID()}`;
     this.db.prepare(
       `INSERT INTO interaction_threads
-       (thread_ref, person_ref, thread_kind, last_sequence, created_at, last_active_at)
-       VALUES(?, ?, 'work', 0, ?, ?)`
-    ).run(threadRef, input.personRef, input.now, input.now);
+       (thread_ref, person_ref, family_ref, agent_ref, entry_audience,
+        thread_kind, last_sequence, created_at, last_active_at)
+       VALUES(?, ?, NULL, ?, 'personal', 'work', 0, ?, ?)`
+    ).run(threadRef, input.personRef, input.agentRef, input.now, input.now);
     this.db.prepare(
       `INSERT INTO work_conversations
-       (work_conversation_ref, thread_ref, person_ref, title, goal, summary, status, archived_at)
-       VALUES(?, ?, ?, ?, ?, '', 'active', NULL)`
+       (work_conversation_ref, thread_ref, person_ref, agent_ref, entry_audience,
+        title, goal, summary, status, archived_at)
+       VALUES(?, ?, ?, ?, 'personal', ?, ?, '', 'active', NULL)`
     ).run(
       workConversationRef,
       threadRef,
       input.personRef,
+      input.agentRef,
       input.title,
       input.goal
     );
 
-    const work = this.getWorkConversation(input.personRef, workConversationRef);
+    const work = this.getWorkConversation(
+      input.personRef,
+      input.agentRef,
+      workConversationRef
+    );
     if (!work) throw new Error("Work Conversation was not readable after creation");
     return work;
+  }
+
+  private resolveWorkAgent(
+    personRef: string,
+    workConversationRef: string
+  ): string | null {
+    const row = this.db.prepare(
+      `SELECT agent_ref FROM work_conversations
+       WHERE work_conversation_ref = ? AND person_ref = ?
+         AND entry_audience = 'personal'`
+    ).get(workConversationRef, personRef) as { agent_ref: string } | undefined;
+    if (!row) return null;
+    const agentRef = String(row.agent_ref);
+    this.agentManagement.requireActiveMount(personRef, agentRef);
+    return agentRef;
   }
 }

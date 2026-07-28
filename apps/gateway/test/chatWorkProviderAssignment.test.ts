@@ -95,7 +95,7 @@ describe("Chat Work Provider assignment transitions", () => {
     return replacementRef;
   }
 
-  it("replays an already successful Turn even when no active Assignment remains", () => {
+  it("replays a successful Turn after same-Agent remount without replacing Provider Session", () => {
     const { message } = createMessage("assignment-success-replay-0001");
     const turn = providerRepository.prepareTurn({ personRef, userMessage: message });
     const assistantMessageRef = providerRepository.commitTurnSucceeded({
@@ -107,11 +107,9 @@ describe("Chat Work Provider assignment transitions", () => {
       completedAt: "2026-07-23T19:00:01.000Z"
     });
 
-    db.prepare(
-      `UPDATE assistant_assignments
-       SET status = 'ended', effective_to = ?
-       WHERE person_ref = ? AND status = 'active'`
-    ).run("2026-07-23T19:01:00.000Z", personRef);
+    const before = providerRepository.resolveContext(personRef, message.threadRef);
+    currentNow = new Date("2026-07-23T19:01:00.000Z");
+    const replacementRef = replaceActiveAssignment();
 
     const replay = providerRepository.prepareTurn({ personRef, userMessage: message });
     expect(replay).toMatchObject({
@@ -120,9 +118,17 @@ describe("Chat Work Provider assignment transitions", () => {
       assistantMessageRef,
       attemptCount: 1
     });
+    expect(replay.idempotencyKey).toBe(turn.idempotencyKey);
+    expect(replay.providerConversationRef).toBe(before.providerConversationRef);
+    expect(replay.externalSessionRef).toBe("external-session:assignment-success-replay");
+    expect(providerRepository.resolveContext(personRef, message.threadRef)).toMatchObject({
+      assignmentRef: replacementRef,
+      providerConversationRef: before.providerConversationRef,
+      externalSessionRef: "external-session:assignment-success-replay"
+    });
   });
 
-  it("rebinds a failed Turn to the replacement Assignment and new Provider identity", () => {
+  it("rebinds a failed Turn without changing Agent-scoped Provider identity", () => {
     const { message } = createMessage("assignment-failed-rebind-0001");
     const first = providerRepository.prepareTurn({ personRef, userMessage: message });
     providerRepository.markTurnFailed({
@@ -152,6 +158,6 @@ describe("Chat Work Provider assignment transitions", () => {
     });
     expect(retry.invocationRef).not.toBe(first.invocationRef);
     expect(retry.correlationRef).not.toBe(first.correlationRef);
-    expect(retry.idempotencyKey).not.toBe(first.idempotencyKey);
+    expect(retry.idempotencyKey).toBe(first.idempotencyKey);
   });
 });

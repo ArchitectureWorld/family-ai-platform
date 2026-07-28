@@ -154,6 +154,7 @@ describe("Chat Work HTTP routes", () => {
       headers: entryHeaders(personal),
       payload: {
         protocolVersion: 1,
+        agentRef: personal.agentRef,
         title: "家庭 AI 平台",
         goal: "建立正式 Web 与多端共用的 Work"
       }

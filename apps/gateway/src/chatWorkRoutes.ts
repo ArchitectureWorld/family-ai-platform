@@ -25,7 +25,14 @@ import { GatewayDomainError } from "./service.js";
 
 const homeChatQuerySchema = z
   .object({
+    agentRef: z.string().regex(/^agent:[a-z0-9][a-z0-9._:-]{1,126}$/).optional(),
     timezone: z.string().trim().min(1).max(80).optional()
+  })
+  .strict();
+
+const workListQuerySchema = z
+  .object({
+    agentRef: z.string().regex(/^agent:[a-z0-9][a-z0-9._:-]{1,126}$/).optional()
   })
   .strict();
 
@@ -109,14 +116,17 @@ export function registerChatWorkRoutes(
       request.query,
       "Chat 查询参数不正确。"
     );
+    const agentRef = query.agentRef ?? context.agent.agentRef;
     const timeZone = query.timezone ? validatedTimeZone(query.timezone) : null;
-    let record = input.repository.getHomeChat(context.person.personRef);
+    input.repository.requireActiveAgent(context.person.personRef, agentRef);
+    let record = input.repository.getHomeChat(context.person.personRef, agentRef);
     if (!record) {
       if (!timeZone) {
         throw invalidRequest("首次打开 Chat 需要提供有效时区。");
       }
       record = input.repository.ensureHomeChat({
         personRef: context.person.personRef,
+        agentRef,
         timezone: timeZone,
         localDate: localDateForTimeZone(now(), timeZone)
       });
@@ -129,9 +139,18 @@ export function registerChatWorkRoutes(
 
   app.get("/api/v1/work-conversations", async (request) => {
     const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
+    const query = parseRequest(
+      workListQuerySchema,
+      request.query,
+      "Work 查询参数不正确。"
+    );
+    const agentRef = query.agentRef ?? context.agent.agentRef;
     return workConversationListResponseSchema.parse({
       protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
-      conversations: input.repository.listWorkConversations(context.person.personRef)
+      conversations: input.repository.listWorkConversations(
+        context.person.personRef,
+        agentRef
+      )
     });
   });
 
@@ -144,6 +163,7 @@ export function registerChatWorkRoutes(
     );
     const conversation = input.repository.createWorkConversation({
       personRef: context.person.personRef,
+      agentRef: command.agentRef,
       title: command.title,
       goal: command.goal
     });
@@ -167,6 +187,12 @@ export function registerChatWorkRoutes(
     );
     const page = input.repository.listThreadMessages({
       personRef: context.person.personRef,
+      agentRef: input.repository.resolveThreadAgent({
+        personRef: context.person.personRef,
+        entryAudience: "personal",
+        threadRef: params.threadRef
+      }),
+      entryAudience: "personal",
       threadRef: params.threadRef,
       ...(query.beforeSequence === undefined
         ? {}

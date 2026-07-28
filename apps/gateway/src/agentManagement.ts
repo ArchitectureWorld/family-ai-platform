@@ -10,6 +10,13 @@ export interface ConfiguredAgentRuntime {
   providerKind: "fake" | "hermes" | "codex";
 }
 
+export interface ActiveAgentMount {
+  assignmentRef: string;
+  agentRef: string;
+  displayName: string;
+  providerProfileRef: string;
+}
+
 type MemberMounts = {
   personRef: string;
   defaultAgentRef: string | null;
@@ -129,6 +136,34 @@ export class AgentManagementRepository {
       personRef,
       defaultAgentRef: defaults.length === 1 ? defaults[0]!.agentRef : null,
       mountedAgents
+    };
+  }
+
+  requireActiveMount(personRef: string, agentRef: string): ActiveAgentMount {
+    const row = this.db.prepare(
+      `SELECT aa.assignment_ref, aa.agent_ref, a.display_name, aa.provider_profile_ref
+       FROM assistant_assignments aa
+       JOIN agents a ON a.agent_ref = aa.agent_ref
+       JOIN agent_runtime_bindings rb
+         ON rb.agent_ref = aa.agent_ref
+        AND rb.provider_profile_ref = aa.provider_profile_ref
+        AND rb.status = ?
+       WHERE aa.person_ref = ? AND aa.agent_ref = ? AND aa.status = ?`
+    ).get(active, personRef, agentRef, active) as Record<string, unknown> | undefined;
+    if (!row) {
+      throw new GatewayDomainError(
+        "AGENT_NOT_MOUNTED",
+        403,
+        "permission",
+        false,
+        "该 Agent 尚未挂载。"
+      );
+    }
+    return {
+      assignmentRef: String(row.assignment_ref),
+      agentRef: String(row.agent_ref),
+      displayName: String(row.display_name),
+      providerProfileRef: String(row.provider_profile_ref)
     };
   }
 

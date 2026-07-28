@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AgentManagementRepository } from "../src/agentManagement.js";
 import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
 import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
 import { FamilyDomainRepository } from "../src/familyDomain.js";
@@ -16,6 +17,7 @@ describe("Chat Work domain foundation", () => {
   let currentNow: Date;
   let ownerPersonRef = "";
   let adultPersonRef = "";
+  let familyRef = "";
   let ownerDeviceRef = "";
 
   beforeEach(() => {
@@ -30,6 +32,7 @@ describe("Chat Work domain foundation", () => {
       deviceCredential: "test-device-credential-with-enough-length"
     });
     ownerPersonRef = onboarding.owner.personRef;
+    familyRef = onboarding.family.familyRef;
     ownerDeviceRef = onboarding.device.deviceRef;
     adultPersonRef = familyRepository.createMember({
       familyRef: onboarding.family.familyRef,
@@ -91,6 +94,69 @@ describe("Chat Work domain foundation", () => {
       "SELECT COUNT(*) AS count FROM home_chat_streams WHERE person_ref = ? AND status = 'active'"
     ).get(ownerPersonRef);
     expect(activeCount).toEqual({ count: 1 });
+  });
+
+  it("isolates Home Chat and Thread history by Person and Agent", () => {
+    const agents = new AgentManagementRepository(db, () => currentNow);
+    agents.reconcileRuntimeCatalog([
+      {
+        agentRef: "agent:second",
+        displayName: "第二助理",
+        providerProfileRef: "provider-profile:second",
+        providerKind: "fake"
+      }
+    ]);
+    agents.mountMemberAgent({
+      familyRef,
+      personRef: ownerPersonRef,
+      agentRef: "agent:second"
+    });
+
+    const first = repository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      agentRef: "agent:personal-assistant",
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const second = repository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      agentRef: "agent:second",
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+
+    expect(first.chat.agentRef).toBe("agent:personal-assistant");
+    expect(second.chat.agentRef).toBe("agent:second");
+    expect(second.chat.threadRef).not.toBe(first.chat.threadRef);
+    expect(repository.getHomeChat(ownerPersonRef, "agent:second")).toEqual(second);
+    expect(() => repository.listThreadMessages({
+      personRef: ownerPersonRef,
+      agentRef: "agent:second",
+      threadRef: first.chat.threadRef
+    })).toThrowError(expect.objectContaining({ code: "THREAD_NOT_FOUND" }));
+
+    agents.unmountMemberAgent({
+      familyRef,
+      personRef: ownerPersonRef,
+      agentRef: "agent:second"
+    });
+    expect(repository.getHomeChat(ownerPersonRef, "agent:second")).toBeNull();
+    const remounted = agents.mountMemberAgent({
+      familyRef,
+      personRef: ownerPersonRef,
+      agentRef: "agent:second"
+    });
+    const ended = db.prepare(
+      `SELECT assignment_ref FROM assistant_assignments
+       WHERE person_ref = ? AND agent_ref = ? AND status = 'ended'`
+    ).get(ownerPersonRef, "agent:second") as { assignment_ref: string };
+    expect(remounted.assignmentRef).not.toBe(ended.assignment_ref);
+    expect(repository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      agentRef: "agent:second",
+      timezone: "UTC",
+      localDate: "2026-07-24"
+    })).toEqual(second);
   });
 
   it("keeps Home Chat and Work ownership isolated by Person", () => {

@@ -139,11 +139,13 @@ describe("Chat Work durable events", () => {
     expect(events.map((event) => event.eventSequence)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(events[0]).toMatchObject({
       aggregateRef: chat.chat.homeChatStreamRef,
-      threadRef: chat.chat.threadRef
+      threadRef: chat.chat.threadRef,
+      payload: { agentRef: "agent:personal-assistant" }
     });
     expect(events[1]).toMatchObject({
       aggregateRef: work.workConversationRef,
-      threadRef: work.threadRef
+      threadRef: work.threadRef,
+      payload: { agentRef: "agent:personal-assistant" }
     });
     expect(events[2]?.payload).toMatchObject({
       messageRef: message.messageRef,
@@ -205,6 +207,7 @@ describe("Chat Work durable events", () => {
     expect(afterFirst[3]?.payload).toMatchObject({
       userMessageRef: first.message.messageRef,
       assistantMessageRef: first.assistantMessageRef,
+      agentRef: "agent:personal-assistant",
       attemptCount: 1
     });
     expect(JSON.stringify(afterFirst)).not.toContain("请回复，但不要把正文写入事件");
@@ -253,6 +256,7 @@ describe("Chat Work durable events", () => {
       "thread.provider_turn.failed"
     ]);
     expect(failedEvents[2]?.payload).toMatchObject({
+      agentRef: "agent:personal-assistant",
       attemptCount: 1,
       error: {
         code: "PROVIDER_UNAVAILABLE",

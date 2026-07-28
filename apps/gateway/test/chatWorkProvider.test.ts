@@ -11,6 +11,7 @@ import {
   type ProviderAdapter
 } from "@family-ai/provider-adapter-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { AgentManagementRepository } from "../src/agentManagement.js";
 import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
 import { ChatWorkMessageService } from "../src/chatWorkMessageService.js";
 import { ChatWorkProviderRepository } from "../src/chatWorkProvider.js";
@@ -104,6 +105,63 @@ describe("Chat Work Provider repository", () => {
     });
     expect(first.providerConversationRef).toMatch(/^conversation:/);
     expect(repeated).toEqual(first);
+  });
+
+  it("keeps Provider conversation and external Session independent per member and Agent Thread", () => {
+    const familyRef = String(
+      (db.prepare("SELECT family_ref FROM families LIMIT 1").get() as {
+        family_ref: string;
+      }).family_ref
+    );
+    const secondPerson = new FamilyDomainRepository(db).createMember({
+      familyRef,
+      displayName: "第二成员",
+      familyRole: "adult"
+    });
+    new AgentManagementRepository(db, () => currentNow).mountMemberAgent({
+      familyRef,
+      personRef: secondPerson.personRef,
+      agentRef: "agent:personal-assistant"
+    });
+    const firstChat = domainRepository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      agentRef: "agent:personal-assistant",
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const secondChat = domainRepository.ensureHomeChat({
+      personRef: secondPerson.personRef,
+      agentRef: "agent:personal-assistant",
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const firstContext = providerRepository.resolveContext(
+      ownerPersonRef,
+      firstChat.chat.threadRef
+    );
+    const secondContext = providerRepository.resolveContext(
+      secondPerson.personRef,
+      secondChat.chat.threadRef
+    );
+    db.prepare(
+      "UPDATE thread_provider_contexts SET external_session_ref = ? WHERE thread_ref = ?"
+    ).run("external-session:first-member", firstChat.chat.threadRef);
+    db.prepare(
+      "UPDATE thread_provider_contexts SET external_session_ref = ? WHERE thread_ref = ?"
+    ).run("external-session:second-member", secondChat.chat.threadRef);
+
+    expect(secondChat.chat.threadRef).not.toBe(firstChat.chat.threadRef);
+    expect(secondContext.providerConversationRef).not.toBe(
+      firstContext.providerConversationRef
+    );
+    expect(providerRepository.resolveContext(
+      ownerPersonRef,
+      firstChat.chat.threadRef
+    ).externalSessionRef).toBe("external-session:first-member");
+    expect(providerRepository.resolveContext(
+      secondPerson.personRef,
+      secondChat.chat.threadRef
+    ).externalSessionRef).toBe("external-session:second-member");
   });
 
   it("prepares a recoverable Provider Turn and increments attempts after failure", () => {

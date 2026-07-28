@@ -8,6 +8,7 @@ import {
 } from "@family-ai/contracts";
 import type { ProviderAdapter } from "@family-ai/provider-adapter-sdk";
 import type { ChatWorkDomainRepository } from "./chatWorkDomain.js";
+import { buildProviderContext } from "./chatWorkContext.js";
 import type { ChatWorkProviderRepository } from "./chatWorkProvider.js";
 import { GatewayDomainError } from "./service.js";
 
@@ -90,8 +91,15 @@ export class ChatWorkMessageService {
   async sendPersonMessage(
     input: SendChatWorkMessageInput
   ): Promise<SendChatWorkMessageResult> {
+    const agentRef = this.domainRepository.resolveThreadAgent({
+      personRef: input.personRef,
+      entryAudience: "personal",
+      threadRef: input.threadRef
+    });
     const message = this.domainRepository.appendThreadMessage({
       personRef: input.personRef,
+      agentRef,
+      entryAudience: "personal",
       threadRef: input.threadRef,
       clientMessageId: input.clientMessageId,
       actor: { type: "person", personRef: input.personRef },
@@ -120,6 +128,15 @@ export class ChatWorkMessageService {
         };
       }
 
+      const contextMessages = turn.rebuildProviderContext
+        ? this.domainRepository.listThreadMessages({
+            personRef: input.personRef,
+            agentRef: turn.agentRef,
+            entryAudience: "personal",
+            threadRef: input.threadRef,
+            limit: 200
+          }).messages
+        : [message];
       const request = providerInvocationRequestSchema.parse({
         protocolVersion: PROTOCOL_VERSION,
         invocationRef: turn.invocationRef,
@@ -132,7 +149,11 @@ export class ChatWorkMessageService {
         ...(turn.externalSessionRef
           ? { externalSessionRef: turn.externalSessionRef }
           : {}),
-        content: [message.content],
+        content: buildProviderContext({
+          messages: contextMessages,
+          currentMessageRef: message.messageRef,
+          externalSessionRef: turn.externalSessionRef
+        }),
         timeoutMs: 30000
       });
 
@@ -176,6 +197,12 @@ export class ChatWorkMessageService {
 
       if (result.status !== "succeeded") {
         const error = result.error ?? unavailableProvider();
+        if (error.code === "PROVIDER_SESSION_NOT_FOUND") {
+          this.providerRepository.clearMissingExternalSession({
+            turn,
+            completedAt: result.completedAt
+          });
+        }
         this.providerRepository.markTurnFailed({
           userMessageRef: message.messageRef,
           error,

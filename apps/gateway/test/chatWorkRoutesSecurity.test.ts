@@ -170,18 +170,14 @@ describe("Chat Work HTTP route security", () => {
     for (const payload of [
       {
         protocolVersion: 1,
+        agentRef: "agent:personal-assistant",
         title: "伪造 Work",
         goal: "不允许客户端指定 Person",
         personRef: "person:forged"
       },
       {
-        protocolVersion: 1,
-        title: "伪造 Work",
-        goal: "不允许客户端指定 Agent",
-        agentRef: "agent:forged"
-      },
-      {
         protocolVersion: 2,
+        agentRef: "agent:personal-assistant",
         title: "错误版本",
         goal: "必须拒绝"
       }
@@ -199,6 +195,36 @@ describe("Chat Work HTTP route security", () => {
         retryable: false
       });
     }
+
+    const unmounted = await app.inject({
+      method: "POST",
+      url: "/api/v1/work-conversations",
+      headers: entryHeaders(personal),
+      payload: {
+        protocolVersion: 1,
+        agentRef: "agent:forged",
+        title: "未挂载 Work",
+        goal: "合法 Agent selector 必须经过 mount 鉴权"
+      }
+    });
+    expect(unmounted.statusCode).toBe(403);
+    expectPublicError(unmounted, {
+      code: "AGENT_NOT_MOUNTED",
+      category: "permission",
+      retryable: false
+    });
+
+    const unmountedChat = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat?agentRef=agent%3Aforged",
+      headers: entryHeaders(personal)
+    });
+    expect(unmountedChat.statusCode).toBe(403);
+    expectPublicError(unmountedChat, {
+      code: "AGENT_NOT_MOUNTED",
+      category: "permission",
+      retryable: false
+    });
   });
 
   it("rejects client-selected actor, origin, connection and malformed message queries", async () => {
@@ -328,6 +354,7 @@ describe("Chat Work HTTP route security", () => {
       headers: entryHeaders(personal),
       payload: {
         protocolVersion: 1,
+        agentRef: "agent:personal-assistant",
         title: "Owner Work",
         goal: "验证跨 Person 隔离"
       }

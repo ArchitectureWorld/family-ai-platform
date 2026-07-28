@@ -13,6 +13,7 @@ import {
 } from "@family-ai/provider-adapter-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
+import { openGatewayDatabase } from "../src/database.js";
 
 const deviceToken = "provider-routes-bootstrap-device-token";
 const bootstrapHeaders = {
@@ -51,6 +52,96 @@ class MissingSessionProviderAdapter implements ProviderAdapter {
       status: "succeeded",
       completedAt: "2026-07-23T17:00:01.000Z",
       output: [{ type: "text", text: "缺少 External Session 的回复。" }]
+    };
+  }
+}
+
+class RecoveringSessionProviderAdapter implements ProviderAdapter {
+  readonly calls: ProviderInvocationRequest[] = [];
+  private failedMissingSession = false;
+  private nextSession = 1;
+
+  async health(): Promise<AdapterHealth> {
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      adapterRef: "adapter:recovering-session-test",
+      status: "online",
+      providerProfiles: ["provider-profile:fake-local"],
+      checkedAt: "2026-07-23T17:00:00.000Z"
+    };
+  }
+
+  async invoke(request: ProviderInvocationRequest): Promise<ProviderInvocationResult> {
+    this.calls.push(request);
+    if (
+      request.externalSessionRef &&
+      request.content[0]?.text === "触发 Provider Session 丢失。" &&
+      !this.failedMissingSession
+    ) {
+      this.failedMissingSession = true;
+      return {
+        protocolVersion: PROTOCOL_VERSION,
+        invocationRef: request.invocationRef,
+        correlationRef: request.correlationRef,
+        status: "failed",
+        completedAt: "2026-07-23T17:05:00.000Z",
+        error: {
+          code: "PROVIDER_SESSION_NOT_FOUND",
+          category: "conflict",
+          message: "Provider Session 已不存在。",
+          retryable: true
+        }
+      };
+    }
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      invocationRef: request.invocationRef,
+      correlationRef: request.correlationRef,
+      status: "succeeded",
+      completedAt: "2026-07-23T17:05:01.000Z",
+      output: [{ type: "text", text: `恢复回复 ${this.calls.length}` }],
+      externalSessionRef: `external-session:recovering-${this.nextSession++}`
+    };
+  }
+}
+
+class HoldingProviderAdapter implements ProviderAdapter {
+  readonly calls: ProviderInvocationRequest[] = [];
+  private releaseInvocation!: () => void;
+  readonly invoked = new Promise<void>((resolve) => {
+    this.releaseInvocation = resolve;
+  });
+  private continueInvocation!: () => void;
+  private readonly continued = new Promise<void>((resolve) => {
+    this.continueInvocation = resolve;
+  });
+
+  release(): void {
+    this.continueInvocation();
+  }
+
+  async health(): Promise<AdapterHealth> {
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      adapterRef: "adapter:holding-provider-test",
+      status: "online",
+      providerProfiles: ["provider-profile:fake-local"],
+      checkedAt: "2026-07-23T17:00:00.000Z"
+    };
+  }
+
+  async invoke(request: ProviderInvocationRequest): Promise<ProviderInvocationResult> {
+    this.calls.push(request);
+    this.releaseInvocation();
+    await this.continued;
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      invocationRef: request.invocationRef,
+      correlationRef: request.correlationRef,
+      status: "succeeded",
+      completedAt: "2026-07-23T17:10:00.000Z",
+      output: [{ type: "text", text: "已授权 Turn 完成。" }],
+      externalSessionRef: "external-session:holding-provider"
     };
   }
 }
@@ -215,6 +306,7 @@ describe("Chat Work Provider HTTP flow", () => {
       headers: entryHeaders(personal),
       payload: {
         protocolVersion: 1,
+        agentRef: "agent:personal-assistant",
         title: "独立 Provider Work",
         goal: "验证 Work 使用自己的 Context Session"
       }
@@ -272,5 +364,108 @@ describe("Chat Work Provider HTTP flow", () => {
       actor: { type: "person", personRef: ownerPersonRef },
       content: { type: "text", text: "请保留这条输入。" }
     });
+  });
+
+  it("clears only a missing external Session and rebuilds it from persisted Thread history", async () => {
+    await app.close();
+    const recovering = new RecoveringSessionProviderAdapter();
+    await openApp(recovering);
+    const chat = await openChat();
+
+    expect((await sendMessage(chat.threadRef, "recover-first", "第一轮历史。")).statusCode)
+      .toBe(201);
+    const firstChatSession = recovering.calls[0]?.externalSessionRef;
+    expect(firstChatSession).toBeUndefined();
+
+    const workResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/work-conversations",
+      headers: entryHeaders(personal),
+      payload: {
+        protocolVersion: 1,
+        agentRef: "agent:personal-assistant",
+        title: "不受影响的 Work",
+        goal: "验证另一个 Thread 的 Session 不被清除"
+      }
+    });
+    expect(workResponse.statusCode).toBe(201);
+    const workThreadRef = workResponse.json().conversation.threadRef as string;
+    expect((await sendMessage(workThreadRef, "recover-work-first", "Work 第一轮。")).statusCode)
+      .toBe(201);
+    const workSession = recovering.calls[1]?.externalSessionRef;
+    expect(workSession).toBeUndefined();
+
+    const failed = await sendMessage(
+      chat.threadRef,
+      "recover-missing",
+      "触发 Provider Session 丢失。"
+    );
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json()).toMatchObject({ code: "PROVIDER_SESSION_NOT_FOUND" });
+    expect(await listMessages(chat.threadRef)).toHaveLength(3);
+
+    const retried = await sendMessage(
+      chat.threadRef,
+      "recover-missing",
+      "触发 Provider Session 丢失。"
+    );
+    expect(retried.statusCode).toBe(201);
+    expect(recovering.calls[3]?.externalSessionRef).toBeUndefined();
+    expect(recovering.calls[3]?.content).toHaveLength(1);
+    expect(recovering.calls[3]?.content[0]?.text).toContain("成员:第一轮历史。");
+    expect(recovering.calls[3]?.content[0]?.text).toContain("助理:恢复回复 1");
+    expect(recovering.calls[3]?.content[0]?.text).toContain(
+      "成员:触发 Provider Session 丢失。"
+    );
+    expect(await listMessages(chat.threadRef)).toHaveLength(4);
+
+    expect((await sendMessage(workThreadRef, "recover-work-second", "Work 第二轮。")).statusCode)
+      .toBe(201);
+    expect(recovering.calls[4]?.externalSessionRef).toBe(
+      "external-session:recovering-2"
+    );
+  });
+
+  it("lets an authorized in-flight Turn commit after unmount and blocks the next send", async () => {
+    await app.close();
+    const holding = new HoldingProviderAdapter();
+    await openApp(holding);
+    const chat = await openChat();
+
+    const inFlight = sendMessage(chat.threadRef, "unmount-in-flight", "等待 Provider。");
+    await holding.invoked;
+    const db = openGatewayDatabase(databasePath);
+    db.prepare(
+      `UPDATE assistant_assignments
+       SET status = 'ended', effective_to = ?
+       WHERE person_ref = ? AND agent_ref = ? AND status = 'active'`
+    ).run(
+      "2026-07-23T17:09:00.000Z",
+      ownerPersonRef,
+      "agent:personal-assistant"
+    );
+    db.close();
+
+    holding.release();
+    expect((await inFlight).statusCode).toBe(201);
+    const blocked = await sendMessage(
+      chat.threadRef,
+      "unmount-blocked",
+      "不应调用 Provider。"
+    );
+    expect(blocked.statusCode).toBe(403);
+    expect(blocked.json()).toMatchObject({
+      code: "AGENT_NOT_MOUNTED",
+      category: "permission",
+      retryable: false
+    });
+    expect(holding.calls).toHaveLength(1);
+
+    const verification = openGatewayDatabase(databasePath);
+    expect(verification.prepare(
+      `SELECT COUNT(*) AS count FROM thread_messages
+       WHERE thread_ref = ? AND actor_type = 'assistant'`
+    ).get(chat.threadRef)).toEqual({ count: 1 });
+    verification.close();
   });
 });
