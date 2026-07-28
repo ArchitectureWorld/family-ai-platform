@@ -264,6 +264,37 @@ describe("Family onboarding and dual-entry sessions", () => {
     expect(adminContext.body).not.toContain("provider-profile:fake-local");
     expect(personalContext.body).not.toContain("provider-profile:fake-local");
 
+    for (const agentRef of ["agent:hermes-jarvis", "agent:codex-cli"]) {
+      const mounted = await app.inject({
+        method: "POST",
+        url: `/api/v1/admin/members/${result.owner.personRef}/agent-mounts`,
+        headers: entryHeaders(result.entries.admin),
+        payload: { agentRef }
+      });
+      expect(mounted.statusCode).toBe(201);
+    }
+    const selectedDefault = await app.inject({
+      method: "PUT",
+      url: `/api/v1/admin/members/${result.owner.personRef}/default-agent`,
+      headers: entryHeaders(result.entries.admin),
+      payload: { agentRef: "agent:codex-cli" }
+    });
+    expect(selectedDefault.statusCode).toBe(200);
+    const projectedMembers = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/members",
+      headers: entryHeaders(result.entries.admin)
+    });
+    expect(projectedMembers.statusCode).toBe(200);
+    expect(projectedMembers.json().members).toHaveLength(1);
+    expect(projectedMembers.json().members[0]).toMatchObject({
+      personRef: result.owner.personRef,
+      personalAssistant: {
+        agentRef: "agent:codex-cli",
+        providerProfileRef: "provider-profile:codex-cli"
+      }
+    });
+
     const createdMember = await app.inject({
       method: "POST",
       url: "/api/v1/admin/members",

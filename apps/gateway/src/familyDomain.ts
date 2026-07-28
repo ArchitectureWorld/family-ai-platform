@@ -433,7 +433,16 @@ export class FamilyDomainRepository {
        FROM family_memberships fm
        JOIN persons p ON p.person_ref = fm.person_ref AND p.status = 'active'
        LEFT JOIN assistant_assignments aa
-         ON aa.person_ref = p.person_ref AND aa.status = 'active'
+         ON aa.assignment_ref = (
+           SELECT candidate.assignment_ref
+           FROM assistant_assignments candidate
+           WHERE candidate.person_ref = p.person_ref
+             AND candidate.status = 'active'
+           ORDER BY candidate.is_default DESC,
+                    candidate.effective_from,
+                    candidate.assignment_ref
+           LIMIT 1
+         )
        LEFT JOIN agents a ON a.agent_ref = aa.agent_ref
        WHERE fm.family_ref = ? AND fm.status = 'active'
        ORDER BY CASE fm.family_role WHEN 'owner' THEN 0 ELSE 1 END,
