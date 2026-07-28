@@ -22,6 +22,8 @@ import {
   type ProviderAdapter
 } from "@family-ai/provider-adapter-sdk";
 import { AgentStatusService } from "./agentStatus.js";
+import { AdminWorkspaceRepository } from "./adminWorkspace.js";
+import { registerAdminWorkspaceRoutes } from "./adminWorkspaceRoutes.js";
 import { ChatWorkDomainRepository } from "./chatWorkDomain.js";
 import { ChatWorkMessageService } from "./chatWorkMessageService.js";
 import { ChatWorkProviderRepository } from "./chatWorkProvider.js";
@@ -282,6 +284,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     providerRouter,
     now
   );
+  const adminWorkspaceRepository = new AdminWorkspaceRepository(db);
 
   app.addHook("onClose", async () => {
     await eventStreamHub.close();
@@ -356,6 +359,12 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     messageService: chatWorkMessageService,
     entryAuthenticator,
     now
+  });
+  registerAdminWorkspaceRoutes(app, {
+    workspace: adminWorkspaceRepository,
+    repository: chatWorkRepository,
+    messageService: chatWorkMessageService,
+    entryAuthenticator
   });
   registerEventStreamRoutes(app, {
     hub: eventStreamHub,

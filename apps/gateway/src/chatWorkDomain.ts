@@ -13,6 +13,7 @@ import type {
 } from "@family-ai/contracts";
 import type { GatewayDatabase } from "./database.js";
 import { AgentManagementRepository } from "./agentManagement.js";
+import { requireAdminAgentAssignment } from "./adminWorkspace.js";
 import { GatewayDomainError } from "./service.js";
 
 const PERSONAL_AGENT_REF = "agent:personal-assistant";
@@ -20,6 +21,13 @@ const PERSONAL_AGENT_REF = "agent:personal-assistant";
 export interface HomeChatRecord {
   chat: HomeChatStream;
   currentEpisode: DailyEpisode | null;
+}
+
+export interface ThreadAccessContext {
+  personRef: string;
+  familyRef: string | null;
+  entryAudience: "personal" | "family_admin";
+  agentRef: string;
 }
 
 export interface ThreadMessagePage {
@@ -437,6 +445,71 @@ export class ChatWorkDomainRepository {
     return row ? mapHomeChatRecord(row) : null;
   }
 
+  ensureAdminHomeChat(context: ThreadAccessContext): HomeChatRecord {
+    this.requireAdminContext(context);
+    const existing = this.getAdminHomeChat(context);
+    if (existing) return existing;
+    const create = this.db.transaction(() => {
+      this.requireAdminContext(context);
+      const concurrent = this.getAdminHomeChat(context);
+      if (concurrent) return concurrent;
+      const now = this.now().toISOString();
+      const threadRef = `thread:${randomUUID()}`;
+      const homeChatStreamRef = `home-chat:${randomUUID()}`;
+      this.db.prepare(
+        `INSERT INTO interaction_threads
+         (thread_ref, person_ref, family_ref, agent_ref, entry_audience,
+          thread_kind, last_sequence, created_at, last_active_at)
+         VALUES(?, ?, ?, ?, 'family_admin', 'home_chat', 0, ?, ?)`
+      ).run(
+        threadRef,
+        context.personRef,
+        context.familyRef,
+        context.agentRef,
+        now,
+        now
+      );
+      this.db.prepare(
+        `INSERT INTO home_chat_streams
+         (home_chat_stream_ref, thread_ref, person_ref, agent_ref, entry_audience, status)
+         VALUES(?, ?, ?, ?, 'family_admin', 'active')`
+      ).run(homeChatStreamRef, threadRef, context.personRef, context.agentRef);
+      const created = this.getAdminHomeChat(context);
+      if (!created) throw new Error("Admin Home Chat was not readable after creation");
+      return created;
+    });
+    return create();
+  }
+
+  getAdminHomeChat(context: ThreadAccessContext): HomeChatRecord | null {
+    this.requireAdminContext(context);
+    const row = this.db.prepare(
+      `SELECT t.thread_ref, t.person_ref, t.agent_ref,
+              t.last_sequence AS thread_last_sequence,
+              t.created_at AS thread_created_at,
+              t.last_active_at AS thread_last_active_at,
+              h.home_chat_stream_ref, h.status AS home_chat_status,
+              NULL AS daily_episode_ref, NULL AS local_date, NULL AS timezone,
+              NULL AS started_at, NULL AS ended_at, NULL AS boundary_reason,
+              NULL AS archive_status, NULL AS archive_version,
+              NULL AS last_message_sequence
+       FROM home_chat_streams h
+       JOIN interaction_threads t
+         ON t.thread_ref = h.thread_ref
+        AND t.person_ref = h.person_ref
+        AND t.agent_ref = h.agent_ref
+        AND t.entry_audience = h.entry_audience
+        AND t.thread_kind = 'home_chat'
+       WHERE t.family_ref = ? AND h.person_ref = ? AND h.agent_ref = ?
+         AND h.entry_audience = 'family_admin' AND h.status = 'active'`
+    ).get(
+      context.familyRef,
+      context.personRef,
+      context.agentRef
+    ) as Record<string, unknown> | undefined;
+    return row ? mapHomeChatRecord(row) : null;
+  }
+
   createWorkConversation(input: {
     personRef: string;
     agentRef?: string;
@@ -510,10 +583,81 @@ export class ChatWorkDomainRepository {
     return rows.map(mapWorkConversation);
   }
 
+  createAdminWorkConversation(input: {
+    context: ThreadAccessContext;
+    title: string;
+    goal: string;
+  }): WorkConversation {
+    this.requireAdminContext(input.context);
+    const title = normalizedRequired(input.title, "title");
+    const goal = normalizedRequired(input.goal, "goal");
+    const create = this.db.transaction(() => {
+      this.requireAdminContext(input.context);
+      const now = this.now().toISOString();
+      const threadRef = `thread:${randomUUID()}`;
+      const workConversationRef = `work:${randomUUID()}`;
+      this.db.prepare(
+        `INSERT INTO interaction_threads
+         (thread_ref, person_ref, family_ref, agent_ref, entry_audience,
+          thread_kind, last_sequence, created_at, last_active_at)
+         VALUES(?, ?, ?, ?, 'family_admin', 'work', 0, ?, ?)`
+      ).run(
+        threadRef,
+        input.context.personRef,
+        input.context.familyRef,
+        input.context.agentRef,
+        now,
+        now
+      );
+      this.db.prepare(
+        `INSERT INTO work_conversations
+         (work_conversation_ref, thread_ref, person_ref, agent_ref, entry_audience,
+          title, goal, summary, status, archived_at)
+         VALUES(?, ?, ?, ?, 'family_admin', ?, ?, '', 'active', NULL)`
+      ).run(
+        workConversationRef,
+        threadRef,
+        input.context.personRef,
+        input.context.agentRef,
+        title,
+        goal
+      );
+      const row = this.adminWorkRow(input.context, workConversationRef);
+      if (!row) throw new Error("Admin Work Conversation was not readable after creation");
+      return mapWorkConversation(row);
+    });
+    return create();
+  }
+
+  listAdminWorkConversations(context: ThreadAccessContext): WorkConversation[] {
+    this.requireAdminContext(context);
+    const rows = this.db.prepare(
+      `SELECT t.thread_ref, t.person_ref, t.agent_ref, t.last_sequence,
+              t.created_at, t.last_active_at,
+              w.work_conversation_ref, w.title, w.goal, w.summary, w.status, w.archived_at
+       FROM work_conversations w
+       JOIN interaction_threads t
+         ON t.thread_ref = w.thread_ref
+        AND t.person_ref = w.person_ref
+        AND t.agent_ref = w.agent_ref
+        AND t.entry_audience = w.entry_audience
+        AND t.thread_kind = 'work'
+       WHERE t.family_ref = ? AND w.person_ref = ? AND w.agent_ref = ?
+         AND w.entry_audience = 'family_admin'
+       ORDER BY t.last_active_at DESC, t.created_at DESC, w.work_conversation_ref`
+    ).all(
+      context.familyRef,
+      context.personRef,
+      context.agentRef
+    ) as Array<Record<string, unknown>>;
+    return rows.map(mapWorkConversation);
+  }
+
   appendThreadMessage(input: {
     personRef: string;
+    familyRef?: string | null;
     agentRef?: string;
-    entryAudience?: "personal";
+    entryAudience?: "personal" | "family_admin";
     threadRef: string;
     clientMessageId: string;
     actor: ThreadActor;
@@ -526,6 +670,7 @@ export class ChatWorkDomainRepository {
     const append = this.db.transaction(() => {
       this.requireThread({
         personRef: input.personRef,
+        familyRef: input.familyRef ?? null,
         agentRef,
         entryAudience,
         threadRef: input.threadRef
@@ -605,14 +750,16 @@ export class ChatWorkDomainRepository {
 
   listThreadMessages(input: {
     personRef: string;
+    familyRef?: string | null;
     agentRef?: string;
-    entryAudience?: "personal";
+    entryAudience?: "personal" | "family_admin";
     threadRef: string;
     beforeSequence?: number;
     limit?: number;
   }): ThreadMessagePage {
     this.requireThread({
       personRef: input.personRef,
+      familyRef: input.familyRef ?? null,
       agentRef: input.agentRef ?? PERSONAL_AGENT_REF,
       entryAudience: input.entryAudience ?? "personal",
       threadRef: input.threadRef
@@ -893,40 +1040,161 @@ export class ChatWorkDomainRepository {
     return read();
   }
 
+  getAdminWorkProgressSnapshot(input: {
+    context: ThreadAccessContext;
+    workConversationRef: string;
+  }): WorkProgressSnapshot | null {
+    this.requireAdminContext(input.context);
+    const row = this.db.prepare(
+      `SELECT p.work_conversation_ref, p.status, p.phase_summary,
+              p.incomplete_tasks_json, p.risks_json, p.pending_confirmations_json,
+              p.deadlines_json, p.updated_at
+       FROM work_progress_snapshots p
+       JOIN work_conversations w
+         ON w.work_conversation_ref = p.work_conversation_ref
+        AND w.entry_audience = 'family_admin'
+       JOIN interaction_threads t
+         ON t.thread_ref = w.thread_ref
+        AND t.person_ref = w.person_ref
+        AND t.agent_ref = w.agent_ref
+        AND t.entry_audience = w.entry_audience
+        AND t.thread_kind = 'work'
+       WHERE p.work_conversation_ref = ? AND t.family_ref = ?
+         AND w.person_ref = ? AND w.agent_ref = ?`
+    ).get(
+      input.workConversationRef,
+      input.context.familyRef,
+      input.context.personRef,
+      input.context.agentRef
+    ) as Record<string, unknown> | undefined;
+    return row ? mapWorkProgressSnapshot(row) : null;
+  }
+
+  resolveAdminWorkAgent(input: {
+    familyRef: string;
+    personRef: string;
+    workConversationRef: string;
+  }): string {
+    const row = this.db.prepare(
+      `SELECT w.agent_ref
+       FROM work_conversations w
+       JOIN interaction_threads t
+         ON t.thread_ref = w.thread_ref
+        AND t.person_ref = w.person_ref
+        AND t.agent_ref = w.agent_ref
+        AND t.entry_audience = w.entry_audience
+        AND t.thread_kind = 'work'
+       WHERE w.work_conversation_ref = ? AND t.family_ref = ?
+         AND w.person_ref = ? AND w.entry_audience = 'family_admin'`
+    ).get(
+      input.workConversationRef,
+      input.familyRef,
+      input.personRef
+    ) as { agent_ref: string } | undefined;
+    if (!row) throw workNotFound();
+    const agentRef = String(row.agent_ref);
+    requireAdminAgentAssignment(this.db, {
+      familyRef: input.familyRef,
+      personRef: input.personRef,
+      agentRef
+    });
+    return agentRef;
+  }
+
   resolveThreadAgent(input: {
     personRef: string;
-    entryAudience: "personal";
+    familyRef?: string | null;
+    entryAudience: "personal" | "family_admin";
     threadRef: string;
   }): string {
     const row = this.db.prepare(
-      `SELECT agent_ref FROM interaction_threads
+      `SELECT family_ref, agent_ref FROM interaction_threads
        WHERE thread_ref = ? AND person_ref = ? AND entry_audience = ?`
     ).get(input.threadRef, input.personRef, input.entryAudience) as
-      | { agent_ref: string }
+      | { family_ref: string | null; agent_ref: string }
       | undefined;
     if (!row) throw threadNotFound();
     const agentRef = String(row.agent_ref);
-    this.agentManagement.requireActiveMount(input.personRef, agentRef);
+    if (input.entryAudience === "personal") {
+      this.agentManagement.requireActiveMount(input.personRef, agentRef);
+    } else {
+      if (!input.familyRef || row.family_ref !== input.familyRef) throw threadNotFound();
+      requireAdminAgentAssignment(this.db, {
+        familyRef: input.familyRef,
+        personRef: input.personRef,
+        agentRef
+      });
+    }
     return agentRef;
   }
 
   requireThread(input: {
     personRef: string;
+    familyRef?: string | null;
     agentRef: string;
-    entryAudience: "personal";
+    entryAudience: "personal" | "family_admin";
     threadRef: string;
   }): void {
-    this.agentManagement.requireActiveMount(input.personRef, input.agentRef);
+    if (input.entryAudience === "personal") {
+      this.agentManagement.requireActiveMount(input.personRef, input.agentRef);
+    } else {
+      if (!input.familyRef) throw threadNotFound();
+      requireAdminAgentAssignment(this.db, {
+        familyRef: input.familyRef,
+        personRef: input.personRef,
+        agentRef: input.agentRef
+      });
+    }
     const row = this.db.prepare(
       `SELECT 1 FROM interaction_threads
-       WHERE thread_ref = ? AND person_ref = ? AND agent_ref = ? AND entry_audience = ?`
+       WHERE thread_ref = ? AND person_ref = ? AND agent_ref = ? AND entry_audience = ?
+         AND family_ref IS ?`
     ).get(
       input.threadRef,
       input.personRef,
       input.agentRef,
-      input.entryAudience
+      input.entryAudience,
+      input.entryAudience === "personal" ? null : input.familyRef
     );
     if (!row) throw threadNotFound();
+  }
+
+  private requireAdminContext(context: ThreadAccessContext): void {
+    if (context.entryAudience !== "family_admin" || !context.familyRef) {
+      throw threadNotFound();
+    }
+    requireAdminAgentAssignment(this.db, {
+      familyRef: context.familyRef,
+      personRef: context.personRef,
+      agentRef: context.agentRef
+    });
+  }
+
+  private adminWorkRow(
+    context: ThreadAccessContext,
+    workConversationRef: string
+  ): Record<string, unknown> | null {
+    const row = this.db.prepare(
+      `SELECT t.thread_ref, t.person_ref, t.agent_ref, t.last_sequence,
+              t.created_at, t.last_active_at,
+              w.work_conversation_ref, w.title, w.goal, w.summary, w.status, w.archived_at
+       FROM work_conversations w
+       JOIN interaction_threads t
+         ON t.thread_ref = w.thread_ref
+        AND t.person_ref = w.person_ref
+        AND t.agent_ref = w.agent_ref
+        AND t.entry_audience = w.entry_audience
+        AND t.thread_kind = 'work'
+       WHERE w.work_conversation_ref = ? AND t.family_ref = ?
+         AND w.person_ref = ? AND w.agent_ref = ?
+         AND w.entry_audience = 'family_admin'`
+    ).get(
+      workConversationRef,
+      context.familyRef,
+      context.personRef,
+      context.agentRef
+    ) as Record<string, unknown> | undefined;
+    return row ?? null;
   }
 
   private validateMessageProvenance(

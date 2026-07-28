@@ -5,6 +5,8 @@ import type {
   ThreadMessage
 } from "@family-ai/contracts";
 import { AgentManagementRepository } from "./agentManagement.js";
+import { requireAdminAgentAssignment } from "./adminWorkspace.js";
+import type { ThreadAccessContext } from "./chatWorkDomain.js";
 import { sha256, type GatewayDatabase } from "./database.js";
 import { GatewayDomainError } from "./service.js";
 
@@ -12,9 +14,10 @@ export interface ThreadProviderContext {
   threadRef: string;
   personRef: string;
   providerConversationRef: string;
-  assignmentRef: string;
+  assignmentRef: string | null;
   agentRef: string;
   providerProfileRef: string;
+  entryAudience: "personal" | "family_admin";
   externalSessionRef: string | null;
 }
 
@@ -24,9 +27,10 @@ export interface PreparedProviderTurn {
   invocationRef: string;
   correlationRef: string;
   idempotencyKey: string;
-  assignmentRef: string;
+  assignmentRef: string | null;
   agentRef: string;
   providerProfileRef: string;
+  entryAudience: "personal" | "family_admin";
   providerConversationRef: string;
   externalSessionRef: string | null;
   requestedAt: string;
@@ -44,7 +48,7 @@ export interface AgentProviderTurnFacts {
 }
 
 interface ActiveAssignment {
-  assignmentRef: string;
+  assignmentRef: string | null;
   agentRef: string;
   providerProfileRef: string;
 }
@@ -55,9 +59,10 @@ interface StoredTurnRow extends Record<string, unknown> {
   invocation_ref: string;
   correlation_ref: string;
   idempotency_key: string;
-  assignment_ref: string;
+  assignment_ref: string | null;
   agent_ref: string;
   provider_profile_ref: string;
+  entry_audience: "personal" | "family_admin";
   status: "pending" | "succeeded" | "failed";
   attempt_count: number;
   assistant_message_ref: string | null;
@@ -94,9 +99,10 @@ function mapContext(row: Record<string, unknown>): ThreadProviderContext {
     threadRef: String(row.thread_ref),
     personRef: String(row.person_ref),
     providerConversationRef: String(row.provider_conversation_ref),
-    assignmentRef: String(row.assignment_ref),
+    assignmentRef: nullableString(row.assignment_ref),
     agentRef: String(row.agent_ref),
     providerProfileRef: String(row.provider_profile_ref),
+    entryAudience: row.entry_audience as "personal" | "family_admin",
     externalSessionRef: nullableString(row.external_session_ref)
   };
 }
@@ -115,9 +121,10 @@ function mapPreparedTurn(
     invocationRef: String(row.invocation_ref),
     correlationRef: String(row.correlation_ref),
     idempotencyKey: String(row.idempotency_key),
-    assignmentRef: String(row.assignment_ref),
+    assignmentRef: nullableString(row.assignment_ref),
     agentRef: String(row.agent_ref),
     providerProfileRef: String(row.provider_profile_ref),
+    entryAudience: row.entry_audience,
     providerConversationRef: context.providerConversationRef,
     externalSessionRef: context.externalSessionRef,
     requestedAt: String(row.requested_at),
@@ -155,24 +162,62 @@ export class ChatWorkProviderRepository {
     this.agentManagement = agentManagement ?? new AgentManagementRepository(db, now);
   }
 
-  resolveContext(personRef: string, threadRef: string): ThreadProviderContext {
+  resolveContext(
+    personRefOrContext: string | ThreadAccessContext,
+    threadRef: string
+  ): ThreadProviderContext {
     const resolve = this.db.transaction(() => {
+      const personRef = typeof personRefOrContext === "string"
+        ? personRefOrContext
+        : personRefOrContext.personRef;
       const thread = this.db.prepare(
-        `SELECT person_ref, agent_ref, entry_audience FROM interaction_threads
-         WHERE thread_ref = ? AND person_ref = ? AND entry_audience = 'personal'`
+        `SELECT person_ref, family_ref, agent_ref, entry_audience FROM interaction_threads
+         WHERE thread_ref = ? AND person_ref = ?`
       ).get(threadRef, personRef) as
-        | { person_ref: string; agent_ref: string; entry_audience: "personal" }
+        | {
+            person_ref: string;
+            family_ref: string | null;
+            agent_ref: string;
+            entry_audience: "personal" | "family_admin";
+          }
         | undefined;
       if (!thread) throw threadNotFound();
-      const assignmentRow = this.agentManagement.requireActiveMount(
-        personRef,
-        String(thread.agent_ref)
-      );
-      const assignment: ActiveAssignment = {
-        assignmentRef: assignmentRow.assignmentRef,
-        agentRef: assignmentRow.agentRef,
-        providerProfileRef: assignmentRow.providerProfileRef
-      };
+      if (typeof personRefOrContext !== "string") {
+        if (
+          thread.family_ref !== personRefOrContext.familyRef ||
+          thread.entry_audience !== personRefOrContext.entryAudience ||
+          thread.agent_ref !== personRefOrContext.agentRef
+        ) {
+          throw threadNotFound();
+        }
+      } else if (thread.entry_audience !== "personal") {
+        throw threadNotFound();
+      }
+      const assignment: ActiveAssignment = thread.entry_audience === "personal"
+        ? (() => {
+            const row = this.agentManagement.requireActiveMount(
+              personRef,
+              String(thread.agent_ref)
+            );
+            return {
+              assignmentRef: row.assignmentRef,
+              agentRef: row.agentRef,
+              providerProfileRef: row.providerProfileRef
+            };
+          })()
+        : (() => {
+            if (!thread.family_ref) throw threadNotFound();
+            const row = requireAdminAgentAssignment(this.db, {
+              familyRef: thread.family_ref,
+              personRef,
+              agentRef: String(thread.agent_ref)
+            });
+            return {
+              assignmentRef: null,
+              agentRef: row.agentRef,
+              providerProfileRef: row.providerProfileRef
+            };
+          })();
 
       const existingRow = this.readContext(personRef, threadRef);
       const timestamp = this.now().toISOString();
@@ -181,8 +226,9 @@ export class ChatWorkProviderRepository {
         this.db.prepare(
           `INSERT INTO thread_provider_contexts
            (thread_ref, person_ref, provider_conversation_ref, assignment_ref,
-            agent_ref, provider_profile_ref, external_session_ref, created_at, updated_at)
-           VALUES(?, ?, ?, ?, ?, ?, NULL, ?, ?)`
+            agent_ref, provider_profile_ref, entry_audience,
+            external_session_ref, created_at, updated_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`
         ).run(
           threadRef,
           personRef,
@@ -190,6 +236,7 @@ export class ChatWorkProviderRepository {
           assignment.assignmentRef,
           assignment.agentRef,
           assignment.providerProfileRef,
+          thread.entry_audience,
           timestamp,
           timestamp
         );
@@ -201,12 +248,13 @@ export class ChatWorkProviderRepository {
         this.db.prepare(
           `UPDATE thread_provider_contexts
            SET assignment_ref = ?, updated_at = ?
-           WHERE thread_ref = ? AND person_ref = ?`
+           WHERE thread_ref = ? AND person_ref = ? AND entry_audience = ?`
         ).run(
           assignment.assignmentRef,
           timestamp,
           threadRef,
-          personRef
+          personRef,
+          thread.entry_audience
         );
       } else if (
         existingRow.agentRef !== assignment.agentRef ||
@@ -215,15 +263,18 @@ export class ChatWorkProviderRepository {
         this.db.prepare(
           `UPDATE thread_provider_contexts
            SET assignment_ref = ?, agent_ref = ?, provider_profile_ref = ?,
+               entry_audience = ?,
                external_session_ref = NULL, updated_at = ?
-           WHERE thread_ref = ? AND person_ref = ?`
+           WHERE thread_ref = ? AND person_ref = ? AND entry_audience = ?`
         ).run(
           assignment.assignmentRef,
           assignment.agentRef,
           assignment.providerProfileRef,
+          thread.entry_audience,
           timestamp,
           threadRef,
-          personRef
+          personRef,
+          thread.entry_audience
         );
       }
 
@@ -260,13 +311,15 @@ export class ChatWorkProviderRepository {
 
   prepareTurn(input: {
     personRef: string;
+    accessContext?: ThreadAccessContext;
     userMessage: ThreadMessage;
   }): PreparedProviderTurn {
+    const access = input.accessContext ?? input.personRef;
     this.requirePersonMessage(input.personRef, input.userMessage);
 
     const immediate = this.readTurn(input.userMessage.messageRef);
     if (immediate?.status === "succeeded") {
-      this.resolveContext(input.personRef, input.userMessage.threadRef);
+      this.resolveContext(access, input.userMessage.threadRef);
       const storedContext = this.readContext(input.personRef, input.userMessage.threadRef);
       if (!storedContext) {
         throw new Error("Successful Provider Turn has no stored Thread Context");
@@ -274,10 +327,20 @@ export class ChatWorkProviderRepository {
       return mapPreparedTurn(immediate, storedContext);
     }
 
-    const context = this.resolveContext(input.personRef, input.userMessage.threadRef);
+    const context = this.resolveContext(access, input.userMessage.threadRef);
     const prepare = this.db.transaction(() => {
       this.requirePersonMessage(input.personRef, input.userMessage);
-      this.agentManagement.requireActiveMount(input.personRef, context.agentRef);
+      if (context.entryAudience === "personal") {
+        this.agentManagement.requireActiveMount(input.personRef, context.agentRef);
+      } else if (!input.accessContext?.familyRef) {
+        throw threadNotFound();
+      } else {
+        requireAdminAgentAssignment(this.db, {
+          familyRef: input.accessContext.familyRef,
+          personRef: input.personRef,
+          agentRef: context.agentRef
+        });
+      }
       const existing = this.readTurn(input.userMessage.messageRef);
 
       if (existing?.status === "succeeded") {
@@ -290,7 +353,7 @@ export class ChatWorkProviderRepository {
 
       if (existing) {
         const contextChanged =
-          String(existing.assignment_ref) !== context.assignmentRef ||
+          nullableString(existing.assignment_ref) !== context.assignmentRef ||
           String(existing.agent_ref) !== context.agentRef ||
           String(existing.provider_profile_ref) !== context.providerProfileRef;
 
@@ -304,6 +367,7 @@ export class ChatWorkProviderRepository {
             `UPDATE thread_provider_turns
              SET invocation_ref = ?, correlation_ref = ?, idempotency_key = ?,
                  assignment_ref = ?, agent_ref = ?, provider_profile_ref = ?,
+                 entry_audience = ?,
                  status = 'pending', attempt_count = attempt_count + 1,
                  assistant_message_ref = NULL, error_json = NULL,
                  requested_at = ?, completed_at = NULL
@@ -315,6 +379,7 @@ export class ChatWorkProviderRepository {
             context.assignmentRef,
             context.agentRef,
             context.providerProfileRef,
+            context.entryAudience,
             identity.requestedAt,
             input.userMessage.messageRef
           );
@@ -336,8 +401,8 @@ export class ChatWorkProviderRepository {
           `INSERT INTO thread_provider_turns
            (user_message_ref, thread_ref, invocation_ref, correlation_ref, idempotency_key,
             assignment_ref, agent_ref, provider_profile_ref, status, attempt_count,
-            assistant_message_ref, error_json, requested_at, completed_at)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, NULL, NULL, ?, NULL)`
+            entry_audience, assistant_message_ref, error_json, requested_at, completed_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, NULL, NULL, ?, NULL)`
         ).run(
           input.userMessage.messageRef,
           input.userMessage.threadRef,
@@ -347,6 +412,7 @@ export class ChatWorkProviderRepository {
           context.assignmentRef,
           context.agentRef,
           context.providerProfileRef,
+          context.entryAudience,
           identity.requestedAt
         );
       }
@@ -428,7 +494,7 @@ export class ChatWorkProviderRepository {
       if (
         storedTurn.invocation_ref !== input.turn.invocationRef ||
         storedTurn.correlation_ref !== input.turn.correlationRef ||
-        storedTurn.assignment_ref !== input.turn.assignmentRef ||
+        nullableString(storedTurn.assignment_ref) !== input.turn.assignmentRef ||
         storedTurn.agent_ref !== input.turn.agentRef ||
         storedTurn.provider_profile_ref !== input.turn.providerProfileRef
       ) {
@@ -449,28 +515,52 @@ export class ChatWorkProviderRepository {
 
       const assistantMessageRef = `message:${randomUUID()}`;
       const createdAt = this.now().toISOString();
-      this.db.prepare(
-        `INSERT INTO thread_messages
+      if (input.turn.entryAudience === "personal") {
+        this.db.prepare(
+          `INSERT INTO thread_messages
          (message_ref, thread_ref, thread_sequence, client_message_id,
           actor_type, actor_person_ref, actor_assignment_ref, actor_agent_ref,
           actor_provider_profile_ref, actor_system_ref,
           origin_device_ref, origin_connection_ref, entry_audience,
           content_type, content_text, content_language, occurred_at, created_at)
-         VALUES(?, ?, ?, ?, 'assistant', NULL, ?, ?, ?, NULL,
+           VALUES(?, ?, ?, ?, 'assistant', NULL, ?, ?, ?, NULL,
                 NULL, NULL, 'personal', 'text', ?, ?, ?, ?)`
-      ).run(
-        assistantMessageRef,
-        input.userMessage.threadRef,
-        sequence.last_sequence,
-        `assistant:${input.userMessage.messageRef}`,
-        storedTurn.assignment_ref,
-        storedTurn.agent_ref,
-        storedTurn.provider_profile_ref,
-        input.output.text,
-        input.output.language ?? null,
-        input.completedAt,
-        createdAt
-      );
+        ).run(
+          assistantMessageRef,
+          input.userMessage.threadRef,
+          sequence.last_sequence,
+          `assistant:${input.userMessage.messageRef}`,
+          storedTurn.assignment_ref,
+          storedTurn.agent_ref,
+          storedTurn.provider_profile_ref,
+          input.output.text,
+          input.output.language ?? null,
+          input.completedAt,
+          createdAt
+        );
+      } else {
+        this.db.prepare(
+          `INSERT INTO thread_messages
+           (message_ref, thread_ref, thread_sequence, client_message_id,
+            actor_type, actor_person_ref, actor_assignment_ref, actor_agent_ref,
+            actor_provider_profile_ref, actor_system_ref,
+            origin_device_ref, origin_connection_ref, entry_audience,
+            content_type, content_text, content_language, occurred_at, created_at)
+           VALUES(?, ?, ?, ?, 'agent', NULL, NULL, ?, ?, NULL,
+                  NULL, NULL, 'family_admin', 'text', ?, ?, ?, ?)`
+        ).run(
+          assistantMessageRef,
+          input.userMessage.threadRef,
+          sequence.last_sequence,
+          `agent:${input.userMessage.messageRef}`,
+          storedTurn.agent_ref,
+          storedTurn.provider_profile_ref,
+          input.output.text,
+          input.output.language ?? null,
+          input.completedAt,
+          createdAt
+        );
+      }
 
       this.db.prepare(
         `UPDATE daily_episodes
@@ -482,7 +572,8 @@ export class ChatWorkProviderRepository {
         `UPDATE thread_provider_contexts
          SET external_session_ref = ?, updated_at = ?
          WHERE thread_ref = ? AND person_ref = ?
-           AND assignment_ref = ? AND agent_ref = ? AND provider_profile_ref = ?`
+           AND assignment_ref IS ? AND agent_ref = ? AND provider_profile_ref = ?
+           AND entry_audience = ?`
       ).run(
         input.externalSessionRef,
         input.completedAt,
@@ -490,7 +581,8 @@ export class ChatWorkProviderRepository {
         input.personRef,
         storedTurn.assignment_ref,
         storedTurn.agent_ref,
-        storedTurn.provider_profile_ref
+        storedTurn.provider_profile_ref,
+        input.turn.entryAudience
       );
       if (contextUpdated.changes !== 1) {
         throw new Error("Thread Provider Context changed before success commit");
@@ -538,10 +630,10 @@ export class ChatWorkProviderRepository {
   private readContext(personRef: string, threadRef: string): ThreadProviderContext | null {
     const row = this.db.prepare(
       `SELECT thread_ref, person_ref, provider_conversation_ref,
-              assignment_ref, agent_ref, provider_profile_ref,
+              assignment_ref, agent_ref, provider_profile_ref, entry_audience,
               external_session_ref
        FROM thread_provider_contexts
-       WHERE thread_ref = ? AND person_ref = ?`
+      WHERE thread_ref = ? AND person_ref = ?`
     ).get(threadRef, personRef) as Record<string, unknown> | undefined;
     return row ? mapContext(row) : null;
   }
@@ -550,6 +642,7 @@ export class ChatWorkProviderRepository {
     const row = this.db.prepare(
       `SELECT user_message_ref, thread_ref, invocation_ref, correlation_ref,
               idempotency_key, assignment_ref, agent_ref, provider_profile_ref,
+              entry_audience,
               status, attempt_count, assistant_message_ref, error_json, requested_at
        FROM thread_provider_turns
        WHERE user_message_ref = ?`

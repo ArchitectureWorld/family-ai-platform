@@ -10,7 +10,10 @@ import type {
   ProviderAdapter,
   ProviderAdapterResolver
 } from "@family-ai/provider-adapter-sdk";
-import type { ChatWorkDomainRepository } from "./chatWorkDomain.js";
+import type {
+  ChatWorkDomainRepository,
+  ThreadAccessContext
+} from "./chatWorkDomain.js";
 import { buildProviderContext } from "./chatWorkContext.js";
 import type { ChatWorkProviderRepository } from "./chatWorkProvider.js";
 import { GatewayDomainError } from "./service.js";
@@ -22,6 +25,11 @@ export interface SendChatWorkMessageInput {
   clientMessageId: string;
   content: ThreadMessageContent;
   occurredAt: string;
+}
+
+export interface SendAdminChatWorkMessageInput extends SendChatWorkMessageInput {
+  familyRef: string;
+  agentRef: string;
 }
 
 export interface SendChatWorkMessageResult {
@@ -113,17 +121,46 @@ export class ChatWorkMessageService {
       entryAudience: "personal",
       threadRef: input.threadRef
     });
+    return this.sendForContext(input, {
+      personRef: input.personRef,
+      familyRef: null,
+      entryAudience: "personal",
+      agentRef
+    });
+  }
+
+  async sendAdminMessage(
+    input: SendAdminChatWorkMessageInput
+  ): Promise<SendChatWorkMessageResult> {
+    const accessContext: ThreadAccessContext = {
+      personRef: input.personRef,
+      familyRef: input.familyRef,
+      entryAudience: "family_admin",
+      agentRef: input.agentRef
+    };
+    this.domainRepository.requireThread({
+      ...accessContext,
+      threadRef: input.threadRef
+    });
+    return this.sendForContext(input, accessContext);
+  }
+
+  private async sendForContext(
+    input: SendChatWorkMessageInput,
+    accessContext: ThreadAccessContext
+  ): Promise<SendChatWorkMessageResult> {
     const message = this.domainRepository.appendThreadMessage({
       personRef: input.personRef,
-      agentRef,
-      entryAudience: "personal",
+      familyRef: accessContext.familyRef,
+      agentRef: accessContext.agentRef,
+      entryAudience: accessContext.entryAudience,
       threadRef: input.threadRef,
       clientMessageId: input.clientMessageId,
       actor: { type: "person", personRef: input.personRef },
       origin: {
         deviceRef: input.deviceRef,
         connectionRef: null,
-        entryAudience: "personal"
+        entryAudience: accessContext.entryAudience
       },
       content: input.content,
       occurredAt: input.occurredAt
@@ -132,6 +169,7 @@ export class ChatWorkMessageService {
     return this.lanes.run(input.threadRef, async () => {
       const turn = this.providerRepository.prepareTurn({
         personRef: input.personRef,
+        accessContext,
         userMessage: message
       });
       if (turn.status === "succeeded") {
@@ -148,8 +186,9 @@ export class ChatWorkMessageService {
       const contextMessages = turn.rebuildProviderContext
         ? this.domainRepository.listThreadMessages({
             personRef: input.personRef,
+            familyRef: accessContext.familyRef,
             agentRef: turn.agentRef,
-            entryAudience: "personal",
+            entryAudience: accessContext.entryAudience,
             threadRef: input.threadRef,
             limit: 200
           }).messages
