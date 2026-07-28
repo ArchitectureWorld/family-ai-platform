@@ -5,12 +5,15 @@ import {
   webPairingClaimRequestSchema
 } from "@family-ai/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { AgentStatusLookup } from "./agentRoutes.js";
+import type { AgentManagementRepository } from "./agentManagement.js";
 import {
   EntrySessionAuthenticator,
   requireEntryRequest,
   requireEntryRequestWithSession
 } from "./entrySessionAuth.js";
 import { GatewayDomainError } from "./service.js";
+import type { EntryContext } from "./familyDomain.js";
 import {
   WebEntryRepository,
   type WebEntrySessionMaterial
@@ -66,6 +69,38 @@ function setCookies(reply: FastifyReply, values: string[]): void {
   reply.header("Set-Cookie", values);
 }
 
+async function webContextResponse(
+  input: {
+    agentRepository: AgentManagementRepository;
+    agentStatus: AgentStatusLookup;
+  },
+  context: EntryContext
+) {
+  const mounts = input.agentRepository.listMemberMounts(
+    context.family.familyRef,
+    context.person.personRef
+  );
+  const { agent: _legacyAgent, ...personalContext } = context;
+  return webEntryContextResponseSchema.parse({
+    protocolVersion: WEB_ENTRY_PROTOCOL_VERSION,
+    context: {
+      protocolVersion: 1,
+      ...personalContext,
+      mountedAgents: await Promise.all(
+        mounts.mountedAgents.map(async (mount) => {
+          const status = await input.agentStatus.snapshot(mount.agentRef);
+          return {
+            ...mount,
+            status: status.status,
+            statusLabel: status.statusLabel
+          };
+        })
+      ),
+      defaultAgentRef: mounts.defaultAgentRef
+    }
+  });
+}
+
 export function registerWebEntryCookieBridge(app: FastifyInstance): void {
   app.addHook("onRequest", async (request) => {
     applyWebEntryCookieHeaders(request);
@@ -77,6 +112,8 @@ export function registerWebEntryRoutes(
   input: {
     repository: WebEntryRepository;
     entryAuthenticator: EntrySessionAuthenticator;
+    agentRepository: AgentManagementRepository;
+    agentStatus: AgentStatusLookup;
     mode: WebCookieMode;
   }
 ): void {
@@ -115,13 +152,7 @@ export function registerWebEntryRoutes(
 
   app.get("/api/v1/web-entry/context", async (request) => {
     const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
-    return webEntryContextResponseSchema.parse({
-      protocolVersion: WEB_ENTRY_PROTOCOL_VERSION,
-      context: {
-        protocolVersion: 1,
-        ...context
-      }
-    });
+    return webContextResponse(input, context);
   });
 
   app.post("/api/v1/web-entry/session/renew", async (request, reply) => {
@@ -134,13 +165,7 @@ export function registerWebEntryRoutes(
     );
     const session = input.repository.renewSession(device);
     const context = authenticatedContext(input.entryAuthenticator, session);
-    const response = webEntryContextResponseSchema.parse({
-      protocolVersion: WEB_ENTRY_PROTOCOL_VERSION,
-      context: {
-        protocolVersion: 1,
-        ...context
-      }
-    });
+    const response = await webContextResponse(input, context);
     setCookies(reply, setWebEntryCookieHeaders({
       deviceRef: device.deviceRef,
       deviceCredential: cookies.deviceCredential,

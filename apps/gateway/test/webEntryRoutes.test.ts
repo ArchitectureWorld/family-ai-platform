@@ -285,9 +285,16 @@ describe("Web Entry HTTP routes", () => {
       protocolVersion: 2,
       context: {
         protocolVersion: 1,
-        person: { personRef }
+        person: { personRef },
+        mountedAgents: [{
+          agentRef: "agent:personal-assistant",
+          providerProfileRef: "provider-profile:fake-local",
+          isDefault: true
+        }],
+        defaultAgentRef: "agent:personal-assistant"
       }
     });
+    expect(context.json().context).not.toHaveProperty("agent");
 
     const logout = await app.inject({
       method: "POST",
@@ -320,9 +327,16 @@ describe("Web Entry HTTP routes", () => {
       protocolVersion: 2,
       context: {
         protocolVersion: 1,
-        person: { personRef }
+        person: { personRef },
+        mountedAgents: [{
+          agentRef: "agent:personal-assistant",
+          providerProfileRef: "provider-profile:fake-local",
+          isDefault: true
+        }],
+        defaultAgentRef: "agent:personal-assistant"
       }
     });
+    expect(renew.json().context).not.toHaveProperty("agent");
 
     const revoke = await app.inject({
       method: "DELETE",
@@ -347,6 +361,35 @@ describe("Web Entry HTTP routes", () => {
       error: { code: "DEVICE_REVOKED" }
     });
     expectExpiredCookies(rejected.headers["set-cookie"], allWebCookieNames);
+  });
+
+  it("returns a strict empty Web context when the authenticated member has no mount", async () => {
+    const claimed = await claim();
+    expect(claimed.statusCode).toBe(204);
+    const unmounted = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/${encodeURIComponent("agent:personal-assistant")}`,
+      headers: entryHeaders(admin)
+    });
+    expect(unmounted.statusCode).toBe(200);
+
+    const context = await app.inject({
+      method: "GET",
+      url: "/api/v1/web-entry/context",
+      headers: { cookie: cookieHeader(claimed.headers["set-cookie"]) }
+    });
+    expect(context.statusCode).toBe(200);
+    expect(context.json()).toMatchObject({
+      protocolVersion: 2,
+      context: {
+        protocolVersion: 1,
+        person: { personRef },
+        mountedAgents: [],
+        defaultAgentRef: null
+      }
+    });
+    expect(context.json().context).not.toHaveProperty("agent");
+    expect(() => webEntryContextResponseSchema.parse(context.json())).not.toThrow();
   });
 
   it("expires only Session cookies for invalid and expired Entry Cookie authentication", async () => {

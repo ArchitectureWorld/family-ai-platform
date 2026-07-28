@@ -122,6 +122,12 @@ describe("Chat Work SSE HTTP route", () => {
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "test",
+      configuredAgentRuntimes: [{
+        agentRef: "agent:personal-assistant",
+        displayName: "个人助理",
+        providerProfileRef: "provider-profile:fake-local",
+        providerKind: "fake"
+      }],
       now: () => new Date("2026-07-24T12:00:00.000Z")
     });
     const onboarding = await app.inject({
@@ -301,6 +307,7 @@ describe("Chat Work SSE HTTP route", () => {
       headers: entryHeaders(personal),
       payload: {
         protocolVersion: 1,
+        agentRef: "agent:personal-assistant",
         title: "SSE Work",
         goal: "验证 Last-Event-ID 恢复"
       }

@@ -382,6 +382,8 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   registerWebEntryRoutes(app, {
     repository: webEntryRepository,
     entryAuthenticator,
+    agentRepository: agentManagementRepository,
+    agentStatus,
     mode: options.mode
   });
   registerChatWorkRoutes(app, {

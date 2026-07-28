@@ -44,6 +44,12 @@ describe("Web Entry Cookie bridge", () => {
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "test",
+      configuredAgentRuntimes: [{
+        agentRef: "agent:personal-assistant",
+        displayName: "个人助理",
+        providerProfileRef: "provider-profile:fake-local",
+        providerKind: "fake"
+      }],
       now: () => new Date("2026-07-25T10:00:00.000Z")
     });
     const onboarding = await app.inject({
@@ -121,6 +127,7 @@ describe("Web Entry Cookie bridge", () => {
       },
       payload: {
         protocolVersion: 1,
+        agentRef: "agent:personal-assistant",
         title: "真实产品 Work",
         goal: "验证浏览器 Cookie 进入正常工作状态"
       }
@@ -183,6 +190,21 @@ describe("Web Entry Cookie bridge", () => {
       url: "/api/v1/web-entry/context",
       headers: { cookie }
     });
+    expect(context.statusCode).toBe(200);
+    expect(context.json()).toMatchObject({
+      protocolVersion: 2,
+      context: {
+        mountedAgents: [{
+          agentRef: "agent:personal-assistant",
+          providerProfileRef: "provider-profile:fake-local",
+          isDefault: true,
+          status: "idle",
+          statusLabel: "空闲"
+        }],
+        defaultAgentRef: "agent:personal-assistant"
+      }
+    });
+    expect(context.json().context).not.toHaveProperty("agent");
     const entrySessionRef = (context.json() as { context: { entrySessionRef: string } })
       .context.entrySessionRef;
 
