@@ -181,6 +181,16 @@ export class FamilyDomainRepository {
       ).run(PERSONAL_ASSISTANT_AGENT_REF, "个人助理", now);
 
       this.db.prepare(
+        `INSERT OR IGNORE INTO agent_runtime_bindings
+         (agent_ref, provider_profile_ref, status, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?)`
+      ).run(FAMILY_MANAGER_AGENT_REF, DEVELOPMENT_PROVIDER_PROFILE_REF, "active", now, now);
+      this.db.prepare(
+        `INSERT OR IGNORE INTO agent_runtime_bindings
+         (agent_ref, provider_profile_ref, status, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?)`
+      ).run(PERSONAL_ASSISTANT_AGENT_REF, DEVELOPMENT_PROVIDER_PROFILE_REF, "active", now, now);
+      this.db.prepare(
         `INSERT INTO families(family_ref, display_name, status, created_at, updated_at)
          VALUES(?, ?, 'active', ?, ?)`
       ).run(familyRef, input.familyName, now, now);
@@ -230,6 +240,8 @@ export class FamilyDomainRepository {
         now
       );
 
+      this.db.prepare("UPDATE assistant_assignments SET is_default = 1 WHERE assignment_ref = ?")
+        .run(personalAssistantAssignmentRef);
       const insertBinding = this.db.prepare(
         `INSERT INTO entry_bindings
          (entry_binding_ref, device_ref, family_ref, person_ref, audience, status,
@@ -416,6 +428,8 @@ export class FamilyDomainRepository {
         DEVELOPMENT_PROVIDER_PROFILE_REF,
         now
       );
+      this.db.prepare("UPDATE assistant_assignments SET is_default = 1 WHERE assignment_ref = ?")
+        .run(assignmentRef);
     })();
 
     const member = this.listMembers(input.familyRef).find((item) => item.personRef === personRef);

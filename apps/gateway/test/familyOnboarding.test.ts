@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
+import { openGatewayDatabase } from "../src/database.js";
 
 const deviceToken = "family-onboarding-test-device-token-long-enough";
 const bootstrapHeaders = {
@@ -177,6 +178,22 @@ describe("Family onboarding and dual-entry sessions", () => {
 
     expect(adminContext.json().person.personRef).toBe(personalContext.json().person.personRef);
     expect(adminContext.json().device.deviceRef).toBe(personalContext.json().device.deviceRef);
+  });
+
+  it("creates one active default Personal assignment during onboarding", async () => {
+    const result = await initialize();
+    await app.close();
+    const db = openGatewayDatabase(databasePath);
+    try {
+      expect(db.prepare(
+        `SELECT COUNT(*) AS count
+         FROM assistant_assignments
+         WHERE person_ref = ? AND status = ? AND is_default = 1`
+      ).get(result.owner.personRef, "active")).toEqual({ count: 1 });
+    } finally {
+      db.close();
+    }
+    await openApp();
   });
 
   it("allows setup only once and rejects client-selected identity fields", async () => {
