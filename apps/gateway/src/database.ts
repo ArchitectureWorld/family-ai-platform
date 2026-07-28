@@ -679,7 +679,7 @@ function latestMigrationVersion(db: GatewayDatabase): number {
   return row?.version ?? 0;
 }
 
-function applyMigrations(db: GatewayDatabase): void {
+function applyMigrations(db: GatewayDatabase, migrationLimit: 6 | 7): void {
   const ledgerExists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
     .get();
@@ -693,7 +693,7 @@ function applyMigrations(db: GatewayDatabase): void {
   }
 
   let latest = latestMigrationVersion(db);
-  if (latest > 7 || latest < 1) {
+  if (latest > migrationLimit || latest < 1) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
   if (latest === 1) {
@@ -741,22 +741,29 @@ function applyMigrations(db: GatewayDatabase): void {
     })();
     latest = 6;
   }
-  if (latest === 6) {
+  if (latest === 6 && migrationLimit === 7) {
     applyMigrationV7(db);
     latest = 7;
   }
-  if (latest !== 7) {
+  if (latest !== migrationLimit) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
 
-export function openGatewayDatabase(databasePath: string): GatewayDatabase {
+export interface GatewayDatabaseOpenOptions {
+  migrationLimit?: 6 | 7;
+}
+
+export function openGatewayDatabase(
+  databasePath: string,
+  options: GatewayDatabaseOpenOptions = {}
+): GatewayDatabase {
   mkdirSync(dirname(databasePath), { recursive: true });
   const db = new Database(databasePath);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
-  applyMigrations(db);
+  applyMigrations(db, options.migrationLimit ?? 7);
   return db;
 }
 
