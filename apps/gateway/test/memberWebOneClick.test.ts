@@ -416,6 +416,13 @@ setInterval(() => {}, 1000);
       }
     ],
     [
+      "an Admin Web handoff read written through console info",
+      {
+        "scripts/leak.mjs":
+          'import { readFileSync } from "node:fs";\nconsole.info(readFileSync(".runtime-preview/config/admin-web-url-9443", "utf8"));\n'
+      }
+    ],
+    [
       "a callback handoff read written through console info",
       {
         "scripts/leak.mjs":

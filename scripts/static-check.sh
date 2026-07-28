@@ -43,7 +43,8 @@ const scriptFiles = walk(
   path => /\.(?:sh|mjs|cjs|js)$/.test(path) && basename(path) !== "static-check.sh"
 );
 const describe = path => relative(scanRoot, path);
-const handoffMarker = /(?:\bMEMBER_WEB_URL(?:_FILE)?\b|member-web-url)/;
+const handoffMarker =
+  /(?:\b(?:MEMBER|ADMIN)_WEB_URL(?:_FILE)?\b|(?:member|admin)-web-url)/;
 
 for (const path of scriptFiles) {
   const source = read(path);
@@ -63,14 +64,14 @@ for (const path of scriptFiles) {
     fail(`Executable scripts must not contain legacy Token handoffs: ${describe(path)}`);
   }
   if (
-    /\b(?:xdg-open|gio\s+open|open)\b[^\n]{0,400}(?:#token=|pairingRef=|\bMEMBER_WEB_URL(?:_FILE)?\b|member-web-url)/.test(
+    /\b(?:xdg-open|gio\s+open|open)\b[^\n]{0,400}(?:#token=|pairingRef=|\b(?:MEMBER|ADMIN)_WEB_URL(?:_FILE)?\b|(?:member|admin)-web-url)/.test(
       logicalSource
     )
   ) {
       fail(`Executable scripts must not open secret-bearing handoffs: ${describe(path)}`);
   }
   if (
-    /\$\(\s*<\s*[^)]*(?:MEMBER_WEB_URL(?:_FILE)?|member-web-url)/.test(
+    /\$\(\s*<\s*[^)]*(?:(?:MEMBER|ADMIN)_WEB_URL(?:_FILE)?|(?:member|admin)-web-url)/.test(
       logicalSource
     )
   ) {
@@ -84,7 +85,7 @@ for (const path of scriptFiles) {
     }
     if (
       /\b(?:read|readarray|mapfile)\b/.test(command) &&
-      /(?:<|--file|-f)[^;\n]*(?:MEMBER_WEB_URL(?:_FILE)?|member-web-url)/.test(command)
+      /(?:<|--file|-f)[^;\n]*(?:(?:MEMBER|ADMIN)_WEB_URL(?:_FILE)?|(?:member|admin)-web-url)/.test(command)
     ) {
       fail(`Formal scripts must not load handoff bytes into shell variables: ${describe(path)}`);
     }
@@ -118,7 +119,7 @@ for (const path of scriptFiles) {
   };
   const taintedIdentifiers = new Set();
   const handoffTextPattern =
-    "(?:MEMBER_WEB_URL(?:_FILE)?|member-web-url)";
+    "(?:(?:MEMBER|ADMIN)_WEB_URL(?:_FILE)?|(?:member|admin)-web-url)";
   const identifierPattern = "([A-Za-z_$][\\w$]*)";
   const callbackReadPattern = new RegExp(
     `\\breadFile\\s*\\([^;]{0,1000}${handoffTextPattern}[^;]{0,1000}?` +
@@ -251,6 +252,7 @@ member_handoff_scan "$ROOT_DIR"
 
 preview_scripts=(
   scripts/member-preview-up.sh
+  scripts/member-preview-admin.mjs
   scripts/member-preview-pair.mjs
   scripts/member-preview-revoke.mjs
   scripts/member-preview-secret-audit.mjs
@@ -332,7 +334,7 @@ if grep -Eq 'set[[:space:]]+-x|#token=|/member/\?pairingRef=' "${preview_scripts
   printf 'Preview scripts contain a secret-bearing output pattern.\n' >&2
   exit 1
 fi
-if grep -Eq '(cat|head|tail)[[:space:]][^[:cntrl:]]*(device-token|admin-entry|member-web-url)' \
+if grep -Eq '(cat|head|tail)[[:space:]][^[:cntrl:]]*(device-token|admin-entry|member-web-url|admin-web-url)' \
   "${preview_scripts[@]}"; then
   printf 'Preview scripts must not print protected handoff or credential files.\n' >&2
   exit 1
@@ -370,7 +372,7 @@ if grep -Fq '#token=' "${executable_scripts[@]}"; then
   exit 1
 fi
 
-if grep -Eq '(xdg-open|gio[[:space:]]+open|(^|[[:space:]])open[[:space:]])[^[:cntrl:]]*(#token=|pairingRef=|MEMBER_WEB_URL|member-web-url)' "${executable_scripts[@]}"; then
+if grep -Eq '(xdg-open|gio[[:space:]]+open|(^|[[:space:]])open[[:space:]])[^[:cntrl:]]*(#token=|pairingRef=|(MEMBER|ADMIN)_WEB_URL|(member|admin)-web-url)' "${executable_scripts[@]}"; then
   printf 'Executable scripts must not open secret-bearing handoff URLs.\n' >&2
   exit 1
 fi

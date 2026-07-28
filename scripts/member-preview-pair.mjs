@@ -204,13 +204,20 @@ async function removeIfPresent(path) {
   }
 }
 
-async function atomicProtectedJson(path, value) {
+async function atomicProtectedText(path, value) {
+  if (
+    typeof value !== "string" ||
+    value.includes("\0") ||
+    Buffer.byteLength(value, "utf8") > MAX_JSON_BYTES
+  ) {
+    fail("PREVIEW_PROTECTED_TEXT_INVALID");
+  }
   const parent = await ensureDirectory(dirname(path));
   const temporary = join(parent, `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
   let handle;
   try {
     handle = await open(temporary, "wx", 0o600);
-    await handle.writeFile(`${JSON.stringify(value)}\n`, "utf8");
+    await handle.writeFile(value, "utf8");
     await handle.chmod(0o600);
     await handle.sync();
     await handle.close();
@@ -227,6 +234,10 @@ async function atomicProtectedJson(path, value) {
     if (handle) await handle.close().catch(() => undefined);
     await removeIfPresent(temporary);
   }
+}
+
+async function atomicProtectedJson(path, value) {
+  return atomicProtectedText(path, `${JSON.stringify(value)}\n`);
 }
 
 function processStarttimeFromStat(bytes) {
@@ -587,6 +598,49 @@ async function verifyAdmin(origin, admin, fetchImpl) {
   validateContext(response.body, admin);
 }
 
+export async function loadPreviewAdminHandoff(options = {}) {
+  const paths = await prepareRuntime(options.runtimeDir);
+  const origin = normalizeOrigin(options.origin ?? "http://127.0.0.1:8791");
+  const adminPath = join(paths.configDir, "admin-entry.json");
+  const lock = await acquireAdminLock(paths);
+  try {
+    const statusResponse = await previewJsonRequest(origin, "/api/v1/onboarding/status", {
+      fetchImpl: options.fetchImpl
+    });
+    if (statusResponse.status !== 200) fail("PREVIEW_ONBOARDING_STATUS_INVALID");
+    requireExact(statusResponse.body, ["initialized"], "PREVIEW_ONBOARDING_STATUS_INVALID");
+    if (typeof statusResponse.body.initialized !== "boolean") {
+      fail("PREVIEW_ONBOARDING_STATUS_INVALID");
+    }
+
+    if (statusResponse.body.initialized === false) {
+      if (await protectedFile(adminPath, { required: false }) !== null) {
+        fail("PREVIEW_ADMIN_ENTRY_CONFLICT");
+      }
+      return {
+        kind: "bootstrap",
+        deviceRef: "device:test",
+        token: await deviceToken(paths),
+        runtimeDir: paths.runtimeDir
+      };
+    }
+
+    const admin = await readProtectedJson(
+      adminPath,
+      value => validateAdminFile(value, origin)
+    );
+    await verifyAdmin(origin, admin, options.fetchImpl);
+    return {
+      kind: "entry",
+      entrySessionRef: admin.entrySessionRef,
+      token: admin.token,
+      runtimeDir: paths.runtimeDir
+    };
+  } finally {
+    await releaseAdminLock(lock);
+  }
+}
+
 export async function loadOrInitializePreviewAdmin(options = {}) {
   const paths = await prepareRuntime(options.runtimeDir);
   const origin = normalizeOrigin(options.origin ?? "http://127.0.0.1:8791");
@@ -751,6 +805,7 @@ export const previewInternals = Object.freeze({
   adminHeaders,
   acquireAdminLock,
   atomicProtectedJson,
+  atomicProtectedText,
   hasExactKeys,
   normalizeOrigin,
   prepareRuntime,

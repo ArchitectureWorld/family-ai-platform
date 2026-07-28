@@ -21,6 +21,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const scripts = [
   "scripts/member-preview-up.sh",
+  "scripts/member-preview-admin.mjs",
   "scripts/member-preview-pair.mjs",
   "scripts/member-preview-revoke.mjs",
   "scripts/member-preview-secret-audit.mjs",
@@ -720,6 +721,76 @@ describe("isolated Member Web Preview scripts", () => {
       runtimeDir: staleRuntime,
       fetchImpl: initializedAdminFetch(staleAdmin)
     })).rejects.toBeTruthy();
+  });
+
+  it("writes protected bootstrap and initialized Admin Web handoffs without exposing credentials", async () => {
+    const { createAdminPreviewHandoff } = await import(
+      `${new URL("../../../scripts/member-preview-admin.mjs", import.meta.url).href}?admin-handoff=${Date.now()}`
+    );
+    const lanOrigin = "https://192.168.110.84:9443";
+
+    const newRuntime = temporaryDirectory();
+    const newConfig = join(newRuntime, "config");
+    mkdirSync(newConfig, { recursive: true, mode: 0o700 });
+    const bootstrapToken = fixtureToken("B");
+    writeFileSync(join(newConfig, "device-token"), `${bootstrapToken}\n`, {
+      mode: 0o600
+    });
+    const victim = join(newRuntime, "must-not-change");
+    writeFileSync(victim, "safe\n", { mode: 0o600 });
+    symlinkSync(victim, join(newConfig, "admin-web-url-9443"));
+    let onboardingCalls = 0;
+    const bootstrapPath = await createAdminPreviewHandoff({
+      origin: lanOrigin,
+      gatewayOrigin: fixtureOrigin,
+      runtimeDir: newRuntime,
+      fetchImpl: async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/api/v1/onboarding/status") {
+          return jsonResponse({ initialized: false });
+        }
+        onboardingCalls += 1;
+        throw new Error("BOOTSTRAP_HANDOFF_MUST_NOT_INITIALIZE");
+      }
+    });
+    expect(onboardingCalls).toBe(0);
+    expect(bootstrapPath).toBe(join(newConfig, "admin-web-url-9443"));
+    expect(permissions(bootstrapPath)).toBe(0o600);
+    expect(readFileSync(victim, "utf8")).toBe("safe\n");
+    expect(readFileSync(bootstrapPath, "utf8")).toBe(
+      `${lanOrigin}/admin/#deviceRef=device%3Atest&bootstrapToken=${bootstrapToken}\n`
+    );
+
+    const initializedRuntime = temporaryDirectory();
+    const admin = installAdminFixture(initializedRuntime);
+    const initializedPath = await createAdminPreviewHandoff({
+      origin: lanOrigin,
+      gatewayOrigin: fixtureOrigin,
+      runtimeDir: initializedRuntime,
+      fetchImpl: initializedAdminFetch(admin)
+    });
+    expect(permissions(initializedPath)).toBe(0o600);
+    expect(readFileSync(initializedPath, "utf8")).toBe(
+      `${lanOrigin}/admin/#entrySessionRef=entry-session%3Apreview-admin&token=${admin.token}\n`
+    );
+
+    for (const origin of [
+      "http://192.168.110.84:9443",
+      "https://127.0.0.1:9443",
+      "https://8.8.8.8:9443",
+      "https://192.168.110.84:443",
+      "https://user@192.168.110.84:9443",
+      "https://192.168.110.84:9443/path",
+      "https://192.168.110.84:9443/?query=1",
+      "https://192.168.110.84:9443/#fragment"
+    ]) {
+      await expect(createAdminPreviewHandoff({
+        origin,
+        gatewayOrigin: fixtureOrigin,
+        runtimeDir: initializedRuntime,
+        fetchImpl: initializedAdminFetch(admin)
+      }), origin).rejects.toBeTruthy();
+    }
   });
 
   it("writes only durable long-lived Pair material and rearms consumed 8792 state", async () => {
