@@ -36,6 +36,7 @@ import {
 } from "./eventStream.js";
 import { FamilyDomainRepository } from "./familyDomain.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
+import { registerAdminWeb } from "./adminWeb.js";
 import { registerMemberWeb } from "./memberWeb.js";
 import { MobileDeviceSummaryRepository } from "./mobileDeviceSummary.js";
 import { MobilePairingRepository } from "./mobilePairing.js";
@@ -261,6 +262,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
 
   registerWebEntryCookieBridge(app);
   registerMemberWeb(app);
+  registerAdminWeb(app, options.mode);
   registerFamilyRoutes(app, {
     familyRepository,
     gatewayRepository: repository,

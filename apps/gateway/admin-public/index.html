@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Family AI 家庭管理</title>
+    <link rel="stylesheet" href="/admin/assets/admin.css">
+  </head>
+  <body>
+    <main class="admin-shell" aria-live="polite">
+      <header class="brand">
+        <span class="brand-mark" aria-hidden="true">F</span>
+        <div>
+          <p class="eyebrow">Family AI</p>
+          <h1>家庭管理</h1>
+        </div>
+      </header>
+
+      <section class="state-card" data-state="initializing">
+        <p class="eyebrow">正在准备</p>
+        <h2>连接你的家庭空间</h2>
+        <p>正在验证管理员入口与家庭状态，请稍候。</p>
+        <div class="progress" role="progressbar" aria-label="正在加载"></div>
+      </section>
+
+      <section class="state-card" data-state="create-family" hidden>
+        <p class="eyebrow">首次使用</p>
+        <h2>创建家庭</h2>
+        <p>设置家庭、管理员和这台管理设备后，就能邀请成员进入个人工作台。</p>
+        <div id="family-setup-root"></div>
+      </section>
+
+      <section class="state-card" data-state="management" hidden>
+        <p class="eyebrow">家庭控制台</p>
+        <h2>成员与配对</h2>
+        <div id="family-summary"></div>
+        <div id="member-management-root"></div>
+      </section>
+
+      <section class="state-card recovery" data-state="recovery-required" hidden>
+        <p class="eyebrow">需要管理员入口</p>
+        <h2>无法验证管理员身份</h2>
+        <p>请重新使用受保护的管理员入口打开本页面。成员端仍可从原设备继续使用。</p>
+      </section>
+    </main>
+    <script type="module" src="/admin/assets/admin.js"></script>
+  </body>
+</html>
