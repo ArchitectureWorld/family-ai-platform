@@ -58,3 +58,14 @@ The task-requested npm command was also executed:
 ## Concerns
 
 - The repository-wide Gateway command is not fully green on this base because it unintentionally includes unrelated failing suites noted above. Task 8 focused tests, adjacent regression tests, syntax checks, diff checks, and Gateway typecheck are green.
+
+## P1 review fix round
+
+- Reproduced the SSE race with deferred Work/progress and Thread/failure responses: each request captured Agent A, the store switched to Agent B, and the late A result overwrote B's visible Works, selected Work, messages, outgoing state, and progress.
+- Root cause: `createEventApplier` captured `agentRef` before asynchronous refreshes but unconditionally published the cached Agent A snapshot after those awaits.
+- Fix: capture the Agent selection generation, observe ownership after every external/cache await, use the original Agent A projection for failure reconciliation, and atomically re-check generation plus `currentAgentRef` inside the final store update. Late A data can still commit to A's cache and advance the durable event cursor, but it cannot publish over B.
+- RED: `memberPersistenceReview.test.ts` failed 2 tests with Agent A replacing Agent B's visible Work/progress and Thread/messages/outgoing projections.
+- GREEN:
+  - focused Task 8 regression bundle: **10 files, 102 tests passed**
+  - Sync/module regression bundle: **3 files, 38 tests passed**
+  - `node --check apps/gateway/member-public/product.js`, `git diff --check`, and Gateway typecheck: passed

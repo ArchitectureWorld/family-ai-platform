@@ -219,6 +219,7 @@ function failedOutgoing(target, message) {
 export function createEventApplier(input) {
   const { api, cache, store } = input;
   const timeZone = input.timeZone ?? "UTC";
+  const selectionGeneration = input.selectionGeneration ?? (() => 0);
 
   return async function applyEvent(target) {
     const beforeSnapshot = await readBootstrapSnapshot(cache);
@@ -235,6 +236,20 @@ export function createEventApplier(input) {
     const agentRef = hasAgentProjection
       ? selectionState.currentAgentRef
       : selectionState.context?.agent?.agentRef ?? "agent:personal-assistant";
+    const capturedGeneration = selectionGeneration();
+    let projectionInvalidated = false;
+    function observeProjectionOwnership() {
+      if (
+        hasAgentProjection &&
+        (
+          store.getState().currentAgentRef !== agentRef ||
+          selectionGeneration() !== capturedGeneration
+        )
+      ) {
+        projectionInvalidated = true;
+      }
+      return !projectionInvalidated;
+    }
     const eventAgentRef = target.payload?.agentRef ?? null;
     if (!agentRef || (eventAgentRef && eventAgentRef !== agentRef)) {
       return applyEventTransaction(
@@ -244,19 +259,24 @@ export function createEventApplier(input) {
       );
     }
     const plan = eventRefreshPlan(target, store.getState().activeThreadRef);
-    const chatResponse = plan.chat
-      ? hasAgentProjection
+    let chatResponse = null;
+    if (plan.chat) {
+      chatResponse = hasAgentProjection
         ? await api.getHomeChat(agentRef, timeZone)
-        : await api.getHomeChat(timeZone)
-      : null;
-    const worksResponse = plan.works
-      ? hasAgentProjection
+        : await api.getHomeChat(timeZone);
+      observeProjectionOwnership();
+    }
+    let worksResponse = null;
+    if (plan.works) {
+      worksResponse = hasAgentProjection
         ? await api.listWorks(agentRef)
-        : await api.listWorks()
-      : null;
+        : await api.listWorks();
+      observeProjectionOwnership();
+    }
     const threadPages = new Map();
     for (const threadRef of plan.threads) {
       threadPages.set(threadRef, await api.getThreadMessages(threadRef, { limit: 100 }));
+      observeProjectionOwnership();
     }
     const progressResponses = new Map();
     for (const workConversationRef of plan.progress) {
@@ -264,10 +284,10 @@ export function createEventApplier(input) {
         workConversationRef,
         await api.getWorkProgress(workConversationRef)
       );
+      observeProjectionOwnership();
     }
 
-    const currentState = store.getState();
-    const userMessage = userMessageForEvent(target, threadPages, currentState);
+    const userMessage = userMessageForEvent(target, threadPages, selectionState);
     const failureBase = target.eventType === "thread.provider_turn.failed"
       ? failedOutgoing(target, userMessage)
       : null;
@@ -318,10 +338,24 @@ export function createEventApplier(input) {
         await transaction.delete("outgoing", succeededClientMessageId);
       }
     });
+    observeProjectionOwnership();
     if (!committed) return false;
 
     const afterSnapshot = await readBootstrapSnapshot(cache, agentRef);
+    observeProjectionOwnership();
     store.setState((current) => {
+      if (
+        projectionInvalidated ||
+        (
+          hasAgentProjection &&
+          (
+            current.currentAgentRef !== agentRef ||
+            selectionGeneration() !== capturedGeneration
+          )
+        )
+      ) {
+        return current;
+      }
       const paginationByThread = { ...(current.paginationByThread ?? {}) };
       for (const [threadRef, page] of threadPages) {
         if (!Object.prototype.hasOwnProperty.call(paginationByThread, threadRef)) {
@@ -784,9 +818,15 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     timeZone
   });
   const workController = createWorkController({ api, cache, store, threadController });
-  const applyEvent = createEventApplier({ api, cache, store, timeZone });
-
   let agentSwitchGeneration = 0;
+  const applyEvent = createEventApplier({
+    api,
+    cache,
+    store,
+    timeZone,
+    selectionGeneration: () => agentSwitchGeneration
+  });
+
   let startupSettled = false;
   let startupEntryFailure = null;
   let entryRecoveryPromise = null;
