@@ -236,10 +236,12 @@ export function registerChatWorkRoutes(
     );
     const result = await input.messageService.sendPersonMessage({
       personRef: context.person.personRef,
+      attachmentFamilyRef: context.family.familyRef,
       deviceRef: context.device.deviceRef,
       threadRef: params.threadRef,
       clientMessageId: command.clientMessageId,
       content: command.content,
+      attachmentRefs: command.attachmentRefs,
       occurredAt: command.occurredAt
     });
     return reply.code(201).send(sendThreadMessageResponseSchema.parse({

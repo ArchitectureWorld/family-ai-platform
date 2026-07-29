@@ -93,6 +93,50 @@ describe("attachment upload and download routes", () => {
     });
   }
 
+  async function completeUpload(input: {
+    bytes: Buffer;
+    fileName?: string;
+    mediaType?: string;
+  }): Promise<string> {
+    const begun = await beginUpload({
+      fileName: input.fileName,
+      mediaType: input.mediaType,
+      sizeBytes: input.bytes.length
+    });
+    expect(begun.statusCode).toBe(201);
+    const attachmentRef = String(begun.json().attachmentRef);
+    const chunk = await app.inject({
+      method: "PUT",
+      url:
+        `/api/v1/attachments/uploads/${encodeURIComponent(attachmentRef)}/chunks/0`,
+      headers: {
+        ...entryHeaders(personal),
+        "x-family-ai-web-request": "1",
+        "content-type": "application/octet-stream",
+        "x-family-ai-chunk-sha256": sha256(input.bytes),
+        "content-length": String(input.bytes.length)
+      },
+      payload: input.bytes
+    });
+    expect(chunk.statusCode).toBe(200);
+    const completed = await app.inject({
+      method: "POST",
+      url:
+        `/api/v1/attachments/uploads/${encodeURIComponent(attachmentRef)}/complete`,
+      headers: {
+        ...entryHeaders(personal),
+        "x-family-ai-web-request": "1"
+      },
+      payload: {
+        protocolVersion: 1,
+        sha256: sha256(input.bytes),
+        chunkCount: 1
+      }
+    });
+    expect(completed.statusCode).toBe(200);
+    return attachmentRef;
+  }
+
   it("streams, replays, completes, and downloads an owner attachment", async () => {
     const bytes = Buffer.from("%PDF-1.7\nattachment route fixture\n", "utf8");
     const begun = await beginUpload({ sizeBytes: bytes.length });
@@ -319,5 +363,133 @@ describe("attachment upload and download routes", () => {
     expect(completed.json()).toMatchObject({
       code: "ATTACHMENT_TEXT_INVALID"
     });
+  });
+
+  it("atomically attaches ready uploads to an attachment-only Thread message", async () => {
+    const chatResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat?timezone=UTC",
+      headers: entryHeaders(personal)
+    });
+    expect(chatResponse.statusCode).toBe(200);
+    const threadRef = String(chatResponse.json().chat.threadRef);
+    const bytes = Buffer.from("%PDF-1.7\nmessage attachment\n", "utf8");
+    const attachmentRef = await completeUpload({ bytes });
+    const payload = {
+      protocolVersion: 1,
+      clientMessageId: "attachment-message-0001",
+      occurredAt: "2026-07-29T08:01:00.000Z",
+      content: { type: "text", text: "" },
+      attachmentRefs: [attachmentRef]
+    };
+
+    const sent = await app.inject({
+      method: "POST",
+      url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+      headers: entryHeaders(personal),
+      payload
+    });
+    expect(sent.statusCode).toBe(201);
+    expect(sent.json()).toMatchObject({
+      protocolVersion: 1,
+      message: {
+        threadRef,
+        content: { type: "text", text: "" },
+        attachments: [
+          {
+            attachmentRef,
+            fileName: "report.pdf",
+            mediaType: "application/pdf",
+            sizeBytes: bytes.length,
+            sha256: sha256(bytes),
+            downloadUrl:
+              `/api/v1/attachments/${encodeURIComponent(attachmentRef)}`
+          }
+        ]
+      }
+    });
+
+    const replay = await app.inject({
+      method: "POST",
+      url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+      headers: entryHeaders(personal),
+      payload
+    });
+    expect(replay.statusCode).toBe(201);
+    expect(replay.json()).toEqual(sent.json());
+
+    const conflictingRef = await completeUpload({
+      bytes: Buffer.from("%PDF-1.7\nconflicting attachment\n", "utf8")
+    });
+    const conflict = await app.inject({
+      method: "POST",
+      url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+      headers: entryHeaders(personal),
+      payload: {
+        ...payload,
+        attachmentRefs: [conflictingRef]
+      }
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({ code: "THREAD_MESSAGE_CONFLICT" });
+    const cancelledAfterConflict = await app.inject({
+      method: "DELETE",
+      url:
+        `/api/v1/attachments/uploads/${encodeURIComponent(conflictingRef)}`,
+      headers: {
+        ...entryHeaders(personal),
+        "x-family-ai-web-request": "1"
+      }
+    });
+    expect(cancelledAfterConflict.statusCode).toBe(204);
+
+    const listed = await app.inject({
+      method: "GET",
+      url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+      headers: entryHeaders(personal)
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().messages[0].attachments).toEqual(
+      sent.json().message.attachments
+    );
+
+    const reused = await app.inject({
+      method: "POST",
+      url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+      headers: entryHeaders(personal),
+      payload: {
+        ...payload,
+        clientMessageId: "attachment-message-0002",
+        occurredAt: "2026-07-29T08:02:00.000Z"
+      }
+    });
+    expect(reused.statusCode).toBe(409);
+    expect(reused.json()).toMatchObject({ code: "ATTACHMENT_NOT_READY" });
+
+    const rollbackRef = await completeUpload({
+      bytes: Buffer.from("%PDF-1.7\nrollback attachment\n", "utf8")
+    });
+    const missingThread = await app.inject({
+      method: "POST",
+      url: "/api/v1/threads/thread%3Amissing/messages",
+      headers: entryHeaders(personal),
+      payload: {
+        ...payload,
+        clientMessageId: "attachment-message-0003",
+        attachmentRefs: [rollbackRef]
+      }
+    });
+    expect(missingThread.statusCode).toBe(404);
+
+    const cancelledAfterRollback = await app.inject({
+      method: "DELETE",
+      url:
+        `/api/v1/attachments/uploads/${encodeURIComponent(rollbackRef)}`,
+      headers: {
+        ...entryHeaders(personal),
+        "x-family-ai-web-request": "1"
+      }
+    });
+    expect(cancelledAfterRollback.statusCode).toBe(204);
   });
 });

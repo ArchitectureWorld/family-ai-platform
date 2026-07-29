@@ -190,11 +190,13 @@ export function registerAdminWorkspaceRoutes(
       const result = await input.messageService.sendAdminMessage({
         familyRef: context.family.familyRef,
         personRef: context.person.personRef,
+        attachmentFamilyRef: context.family.familyRef,
         deviceRef: context.device.deviceRef,
         agentRef,
         threadRef: params.threadRef,
         clientMessageId: command.clientMessageId,
         content: command.content,
+        attachmentRefs: command.attachmentRefs,
         occurredAt: command.occurredAt
       });
       return reply.code(201).send(sendThreadMessageResponseSchema.parse({

@@ -7,6 +7,7 @@ function message(input: {
   sequence: number;
   actor: ThreadMessage["actor"];
   text: string;
+  attachments?: ThreadMessage["attachments"];
 }): ThreadMessage {
   return {
     messageRef: input.ref,
@@ -20,6 +21,7 @@ function message(input: {
       entryAudience: "personal"
     },
     content: { type: "text", text: input.text },
+    attachments: input.attachments ?? [],
     occurredAt: `2026-07-28T00:00:${String(input.sequence).padStart(2, "0")}.000Z`,
     createdAt: `2026-07-28T00:00:${String(input.sequence).padStart(2, "0")}.000Z`
   };
@@ -91,5 +93,38 @@ describe("Provider history context", () => {
     expect(capsule?.text).not.toContain("内部错误详情");
     expect(capsule?.text).not.toContain("message:");
     expect(capsule?.text.length).toBeLessThanOrEqual(12_000);
+  });
+
+  it("adds only neutral public attachment metadata to Provider text context", () => {
+    const current = message({
+      ref: "message:attachment-current",
+      sequence: 1,
+      actor: { type: "person", personRef: "person:owner" },
+      text: "",
+      attachments: [
+        {
+          attachmentRef: "attachment:provider-context",
+          fileName: "家庭预算.pdf",
+          mediaType: "application/pdf",
+          sizeBytes: 12345,
+          sha256: "a".repeat(64),
+          downloadUrl:
+            "/api/v1/attachments/attachment%3Aprovider-context"
+        }
+      ]
+    });
+
+    const [context] = buildProviderContext({
+      messages: [current],
+      currentMessageRef: current.messageRef,
+      externalSessionRef: "external-session:active"
+    });
+
+    expect(context?.text).toBe(
+      "[附件:家庭预算.pdf | application/pdf | 12345 bytes]"
+    );
+    expect(context?.text).not.toContain("attachment:provider-context");
+    expect(context?.text).not.toContain("/api/v1/attachments");
+    expect(context?.text).not.toContain("a".repeat(64));
   });
 });

@@ -20,10 +20,12 @@ import { GatewayDomainError } from "./service.js";
 
 export interface SendChatWorkMessageInput {
   personRef: string;
+  attachmentFamilyRef?: string;
   deviceRef: string;
   threadRef: string;
   clientMessageId: string;
   content: ThreadMessageContent;
+  attachmentRefs?: string[];
   occurredAt: string;
 }
 
@@ -152,6 +154,9 @@ export class ChatWorkMessageService {
     const message = this.domainRepository.appendThreadMessage({
       personRef: input.personRef,
       familyRef: accessContext.familyRef,
+      ...(input.attachmentFamilyRef === undefined
+        ? {}
+        : { attachmentFamilyRef: input.attachmentFamilyRef }),
       agentRef: accessContext.agentRef,
       entryAudience: accessContext.entryAudience,
       threadRef: input.threadRef,
@@ -163,6 +168,9 @@ export class ChatWorkMessageService {
         entryAudience: accessContext.entryAudience
       },
       content: input.content,
+      ...(input.attachmentRefs === undefined
+        ? {}
+        : { attachmentRefs: input.attachmentRefs }),
       occurredAt: input.occurredAt
     });
 

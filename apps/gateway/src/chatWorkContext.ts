@@ -14,6 +14,23 @@ function visibleRole(message: ThreadMessage): "成员" | "助理" | null {
   return null;
 }
 
+function visibleMessageText(message: ThreadMessage): string {
+  const attachmentLines = message.attachments.map(
+    (attachment) =>
+      `[附件:${attachment.fileName} | ${attachment.mediaType} | ${attachment.sizeBytes} bytes]`
+  );
+  return [message.content.text, ...attachmentLines]
+    .filter((line) => line.length > 0)
+    .join("\n");
+}
+
+function currentProviderContent(message: ThreadMessage): ThreadMessageContent {
+  const text = visibleMessageText(message);
+  return message.content.language
+    ? { type: "text", text, language: message.content.language }
+    : { type: "text", text };
+}
+
 function boundedCapsule(lines: readonly string[]): string {
   let result = "";
   for (let index = lines.length - 1; index >= 0; index -= 1) {
@@ -40,7 +57,7 @@ export function buildProviderContext(input: {
   }
 
   if (input.externalSessionRef !== null || input.messages.length === 1) {
-    return [current.content];
+    return [currentProviderContent(current)];
   }
 
   const previous = input.messages
@@ -51,7 +68,7 @@ export function buildProviderContext(input: {
   const lines = capsuleMessages.map((message) => {
     const role = visibleRole(message);
     if (!role) throw new Error("Provider capsule included a hidden message");
-    return `${role}:${message.content.text}`;
+    return `${role}:${visibleMessageText(message)}`;
   });
   return [{ type: "text", text: boundedCapsule(lines) }];
 }

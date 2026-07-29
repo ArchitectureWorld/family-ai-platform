@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  AttachmentPublicMetadata,
   ChatWorkConversion,
   DailyEpisode,
   HomeChatStream,
@@ -10,6 +11,10 @@ import type {
   WorkConversation,
   WorkConversationStatus,
   WorkProgressSnapshot
+} from "@family-ai/contracts";
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_MESSAGE_ATTACHMENT_BYTES
 } from "@family-ai/contracts";
 import type { GatewayDatabase } from "./database.js";
 import { AgentManagementRepository } from "./agentManagement.js";
@@ -105,6 +110,26 @@ function messageInvalid(message: string): GatewayDomainError {
   );
 }
 
+function attachmentNotFound(): GatewayDomainError {
+  return new GatewayDomainError(
+    "ATTACHMENT_NOT_FOUND",
+    404,
+    "permission",
+    false,
+    "没有找到这个附件。"
+  );
+}
+
+function attachmentNotReady(): GatewayDomainError {
+  return new GatewayDomainError(
+    "ATTACHMENT_NOT_READY",
+    409,
+    "conflict",
+    false,
+    "附件尚未上传完成，或已经随其他消息发送。"
+  );
+}
+
 function mapHomeChatRecord(row: Record<string, unknown>): HomeChatRecord {
   const currentEpisodeRef = nullableString(row.daily_episode_ref);
   const currentEpisode: DailyEpisode | null = currentEpisodeRef
@@ -188,7 +213,24 @@ function mapThreadActor(row: Record<string, unknown>): ThreadActor {
   }
 }
 
-function mapThreadMessage(row: Record<string, unknown>): ThreadMessage {
+function mapAttachmentMetadata(
+  row: Record<string, unknown>
+): AttachmentPublicMetadata {
+  const attachmentRef = String(row.attachment_ref);
+  return {
+    attachmentRef,
+    fileName: String(row.file_name),
+    mediaType: String(row.detected_media_type),
+    sizeBytes: Number(row.size_bytes),
+    sha256: String(row.sha256),
+    downloadUrl: `/api/v1/attachments/${encodeURIComponent(attachmentRef)}`
+  };
+}
+
+function mapThreadMessage(
+  row: Record<string, unknown>,
+  attachments: AttachmentPublicMetadata[] = []
+): ThreadMessage {
   const language = nullableString(row.content_language);
   const content: ThreadMessageContent = language
     ? {
@@ -213,7 +255,7 @@ function mapThreadMessage(row: Record<string, unknown>): ThreadMessage {
       entryAudience: row.entry_audience as ThreadMessageOrigin["entryAudience"]
     },
     content,
-    attachments: [],
+    attachments,
     occurredAt: String(row.occurred_at),
     createdAt: String(row.created_at)
   };
@@ -273,11 +315,13 @@ function logicalMessageFingerprint(input: {
   actor: ThreadActor;
   content: ThreadMessageContent;
   occurredAt: string;
+  attachmentRefs?: readonly string[];
 }): string {
   return canonicalJson({
     actor: input.actor,
     content: input.content,
-    occurredAt: input.occurredAt
+    occurredAt: input.occurredAt,
+    attachmentRefs: input.attachmentRefs ?? []
   });
 }
 
@@ -657,6 +701,7 @@ export class ChatWorkDomainRepository {
   appendThreadMessage(input: {
     personRef: string;
     familyRef?: string | null;
+    attachmentFamilyRef?: string | null;
     agentRef?: string;
     entryAudience?: "personal" | "family_admin";
     threadRef: string;
@@ -664,10 +709,21 @@ export class ChatWorkDomainRepository {
     actor: ThreadActor;
     origin: ThreadMessageOrigin;
     content: ThreadMessageContent;
+    attachmentRefs?: string[];
     occurredAt: string;
   }): ThreadMessage {
     const agentRef = input.agentRef ?? PERSONAL_AGENT_REF;
     const entryAudience = input.entryAudience ?? "personal";
+    const attachmentRefs = input.attachmentRefs ?? [];
+    if (
+      attachmentRefs.length > MAX_ATTACHMENTS_PER_MESSAGE ||
+      new Set(attachmentRefs).size !== attachmentRefs.length
+    ) {
+      throw messageInvalid("每条消息最多挂载 10 个互不重复的附件。");
+    }
+    if (input.content.text.trim().length === 0 && attachmentRefs.length === 0) {
+      throw messageInvalid("消息需要正文或至少一个附件。");
+    }
     const append = this.db.transaction(() => {
       this.requireThread({
         personRef: input.personRef,
@@ -682,9 +738,15 @@ export class ChatWorkDomainRepository {
         const existingFingerprint = logicalMessageFingerprint({
           actor: existing.actor,
           content: existing.content,
-          occurredAt: existing.occurredAt
+          occurredAt: existing.occurredAt,
+          attachmentRefs: existing.attachments.map(
+            (attachment) => attachment.attachmentRef
+          )
         });
-        const incomingFingerprint = logicalMessageFingerprint(input);
+        const incomingFingerprint = logicalMessageFingerprint({
+          ...input,
+          attachmentRefs
+        });
         if (existingFingerprint !== incomingFingerprint) {
           throw new GatewayDomainError(
             "THREAD_MESSAGE_CONFLICT",
@@ -698,6 +760,44 @@ export class ChatWorkDomainRepository {
       }
 
       const now = this.now().toISOString();
+      let attachmentFamilyRef =
+        input.attachmentFamilyRef ?? input.familyRef ?? null;
+      let totalAttachmentBytes = 0;
+      for (const attachmentRef of attachmentRefs) {
+        const row = this.db.prepare(
+          `SELECT a.*
+           FROM attachments a
+           JOIN family_memberships fm
+             ON fm.family_ref = a.family_ref
+            AND fm.person_ref = a.owner_person_ref
+            AND fm.status = 'active'
+           WHERE a.attachment_ref = ?
+             AND a.owner_person_ref = ?
+             AND (? IS NULL OR a.family_ref = ?)`
+        ).get(
+          attachmentRef,
+          input.personRef,
+          attachmentFamilyRef,
+          attachmentFamilyRef
+        ) as Record<string, unknown> | undefined;
+        if (!row) throw attachmentNotFound();
+        if (attachmentFamilyRef === null) {
+          attachmentFamilyRef = String(row.family_ref);
+        }
+        if (
+          row.state !== "ready" ||
+          row.detected_media_type === null ||
+          row.sha256 === null ||
+          row.storage_key === null
+        ) {
+          throw attachmentNotReady();
+        }
+        totalAttachmentBytes += Number(row.size_bytes);
+      }
+      if (totalAttachmentBytes > MAX_MESSAGE_ATTACHMENT_BYTES) {
+        throw messageInvalid("单条消息的附件总大小超过限制。");
+      }
+
       const sequenceRow = this.db.prepare(
         `UPDATE interaction_threads
          SET last_sequence = last_sequence + 1, last_active_at = ?
@@ -735,6 +835,20 @@ export class ChatWorkDomainRepository {
         input.occurredAt,
         now
       );
+      for (const [attachmentOrder, attachmentRef] of attachmentRefs.entries()) {
+        const attached = this.db.prepare(
+          `UPDATE attachments
+           SET state = 'attached', attached_at = ?
+           WHERE attachment_ref = ? AND owner_person_ref = ?
+             AND state = 'ready'`
+        ).run(now, attachmentRef, input.personRef);
+        if (attached.changes !== 1) throw attachmentNotReady();
+        this.db.prepare(
+          `INSERT INTO message_attachments
+           (message_ref, attachment_ref, attachment_order)
+           VALUES(?, ?, ?)`
+        ).run(messageRef, attachmentRef, attachmentOrder);
+      }
       this.db.prepare(
         `UPDATE daily_episodes
          SET last_message_sequence = ?
@@ -746,7 +860,7 @@ export class ChatWorkDomainRepository {
       return message;
     });
 
-    return append();
+    return append.immediate();
   }
 
   listThreadMessages(input: {
@@ -781,7 +895,16 @@ export class ChatWorkDomainRepository {
         ).all(input.threadRef, input.beforeSequence, limit + 1);
     const typedRows = rows as Array<Record<string, unknown>>;
     const hasMore = typedRows.length > limit;
-    const messages = typedRows.slice(0, limit).reverse().map(mapThreadMessage);
+    const visibleRows = typedRows.slice(0, limit).reverse();
+    const attachments = this.attachmentsForMessageRefs(
+      visibleRows.map((row) => String(row.message_ref))
+    );
+    const messages = visibleRows.map((row) =>
+      mapThreadMessage(
+        row,
+        attachments.get(String(row.message_ref)) ?? []
+      )
+    );
     return {
       threadRef: input.threadRef,
       messages,
@@ -1268,14 +1391,48 @@ export class ChatWorkDomainRepository {
       `SELECT * FROM thread_messages
        WHERE thread_ref = ? AND client_message_id = ?`
     ).get(threadRef, clientMessageId) as Record<string, unknown> | undefined;
-    return row ? mapThreadMessage(row) : null;
+    if (!row) return null;
+    return mapThreadMessage(
+      row,
+      this.attachmentsForMessageRefs([String(row.message_ref)]).get(
+        String(row.message_ref)
+      ) ?? []
+    );
   }
 
   private getMessageByRef(messageRef: string): ThreadMessage | null {
     const row = this.db.prepare(
       "SELECT * FROM thread_messages WHERE message_ref = ?"
     ).get(messageRef) as Record<string, unknown> | undefined;
-    return row ? mapThreadMessage(row) : null;
+    if (!row) return null;
+    return mapThreadMessage(
+      row,
+      this.attachmentsForMessageRefs([messageRef]).get(messageRef) ?? []
+    );
+  }
+
+  private attachmentsForMessageRefs(
+    messageRefs: readonly string[]
+  ): Map<string, AttachmentPublicMetadata[]> {
+    const result = new Map<string, AttachmentPublicMetadata[]>();
+    if (messageRefs.length === 0) return result;
+    const placeholders = messageRefs.map(() => "?").join(", ");
+    const rows = this.db.prepare(
+      `SELECT ma.message_ref, ma.attachment_order,
+              a.attachment_ref, a.file_name, a.detected_media_type,
+              a.size_bytes, a.sha256
+       FROM message_attachments ma
+       JOIN attachments a ON a.attachment_ref = ma.attachment_ref
+       WHERE ma.message_ref IN (${placeholders})
+       ORDER BY ma.message_ref, ma.attachment_order`
+    ).all(...messageRefs) as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      const messageRef = String(row.message_ref);
+      const values = result.get(messageRef) ?? [];
+      values.push(mapAttachmentMetadata(row));
+      result.set(messageRef, values);
+    }
+    return result;
   }
 
   private insertWorkConversation(input: {
