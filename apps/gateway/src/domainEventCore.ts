@@ -479,7 +479,7 @@ END;
 `;
 
 function eventSchemaForCoreVersion(coreVersion: number): string {
-  const homeChatAgent = coreVersion === 7
+  const homeChatAgent = coreVersion >= 7
     ? `(SELECT agent_ref FROM home_chat_streams
         WHERE home_chat_stream_ref = NEW.home_chat_stream_ref)`
     : `(SELECT aa.agent_ref
@@ -490,7 +490,7 @@ function eventSchemaForCoreVersion(coreVersion: number): string {
         )
           AND aa.status = 'active'
         LIMIT 1)`;
-  const workAgent = coreVersion === 7
+  const workAgent = coreVersion >= 7
     ? "NEW.agent_ref"
     : `(SELECT aa.agent_ref
         FROM assistant_assignments aa
@@ -541,8 +541,14 @@ export class DomainEventStore {
     const coreVersion = this.db.prepare(
       "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
     ).get() as { version: number } | undefined;
-    if (coreVersion?.version !== 6 && coreVersion?.version !== 7) {
-      throw new Error(`Domain Event schema requires Gateway schema version 6 or 7, got ${String(coreVersion?.version)}`);
+    if (
+      coreVersion?.version !== 6 &&
+      coreVersion?.version !== 7 &&
+      coreVersion?.version !== 8
+    ) {
+      throw new Error(
+        `Domain Event schema requires Gateway schema version 6, 7, or 8, got ${String(coreVersion?.version)}`
+      );
     }
     this.db.transaction(() => {
       this.db.exec(eventSchemaForCoreVersion(coreVersion.version));

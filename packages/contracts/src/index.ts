@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  attachmentRefSchema,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_FILE_BYTES
+} from "./chatWork.js";
 
 export const PROTOCOL_VERSION = "1.0" as const;
 
@@ -40,6 +45,21 @@ export const textPayloadSchema = z
   })
   .strict();
 
+export const providerAttachmentSchema = z
+  .object({
+    attachmentRef: attachmentRefSchema,
+    fileName: z.string().min(1).max(255),
+    mediaType: z
+      .string()
+      .min(3)
+      .max(127)
+      .regex(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/),
+    sizeBytes: z.number().int().positive().max(MAX_FILE_BYTES),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    localPath: z.string().min(1).max(4096)
+  })
+  .strict();
+
 export const messageEnvelopeSchema = z
   .object({
     protocolVersion: protocolVersionSchema,
@@ -74,6 +94,10 @@ export const providerInvocationRequestSchema = z
     conversationRef: conversationRefSchema,
     externalSessionRef: externalSessionRefSchema.optional(),
     content: z.array(textPayloadSchema).min(1).max(20),
+    attachments: z
+      .array(providerAttachmentSchema)
+      .max(MAX_ATTACHMENTS_PER_MESSAGE)
+      .default([]),
     timeoutMs: z.number().int().min(1000).max(300000)
   })
   .strict();
@@ -120,6 +144,7 @@ export const adapterHealthSchema = z
 
 export type Endpoint = z.infer<typeof endpointSchema>;
 export type TextPayload = z.infer<typeof textPayloadSchema>;
+export type ProviderAttachment = z.infer<typeof providerAttachmentSchema>;
 export type MessageEnvelope = z.infer<typeof messageEnvelopeSchema>;
 export type PublicError = z.infer<typeof publicErrorSchema>;
 export type ProviderInvocationRequest = z.infer<typeof providerInvocationRequestSchema>;

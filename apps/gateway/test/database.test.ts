@@ -28,7 +28,8 @@ const migrationVersions = [
   { version: 4 },
   { version: 5 },
   { version: 6 },
-  { version: 7 }
+  { version: 7 },
+  { version: 8 }
 ];
 
 const mobilePairingColumnNames = [
@@ -239,10 +240,10 @@ describe("gateway database", () => {
     `);
     legacy.close();
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { migrationLimit: 7 });
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
-    ).toEqual(migrationVersions);
+    ).toEqual(migrationVersions.slice(0, 7));
     expect(
       db.prepare(
         `SELECT pairing_ref, status, web_claim_session_ref, web_replay_count
@@ -304,12 +305,12 @@ describe("gateway database", () => {
         applied_at TEXT NOT NULL
       );
       INSERT INTO schema_migrations(version, applied_at)
-      VALUES(8, '2026-07-25T00:00:00.000Z');
+      VALUES(9, '2026-07-25T00:00:00.000Z');
     `);
     legacy.close();
 
     expect(() => openGatewayDatabase(databasePath)).toThrow(
-      "Unsupported Gateway schema version: 8"
+      "Unsupported Gateway schema version: 9"
     );
   });
 

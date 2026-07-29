@@ -2,6 +2,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  attachmentChunkResponseSchema,
+  attachmentCompleteRequestSchema,
+  attachmentCompleteResponseSchema,
+  attachmentPublicMetadataSchema,
+  attachmentUploadCreateRequestSchema,
+  attachmentUploadCreateResponseSchema,
   chatWorkConversionSchema,
   createWorkConversationRequestSchema,
   createWorkConversationResponseSchema,
@@ -115,7 +121,10 @@ describe("Chat / Work protocol v1 commands", () => {
       createWorkFromChatRequestSchema.parse(fixture("create-work-from-chat-request.json"))
     ).toBeTruthy();
     expect(workProgressSnapshotResponseSchema.parse(fixture("work-progress-response.json"))).toBeTruthy();
-    expect(sendThreadMessageRequestSchema.parse(sendMessage)).toEqual(sendMessage);
+    expect(sendThreadMessageRequestSchema.parse(sendMessage)).toEqual({
+      ...sendMessage,
+      attachmentRefs: []
+    });
   });
 
   it("requires an Agent reference when creating Work", () => {
@@ -144,6 +153,104 @@ describe("Chat / Work protocol v1 commands", () => {
         clientMessageId: " web-chat-0003 "
       }).success
     ).toBe(false);
+  });
+
+  it("accepts verified attachment metadata and bounded resumable upload envelopes", () => {
+    const attachment = {
+      attachmentRef: "attachment:018f47a2-1f10-7a3d-8c2d-61f369284f19",
+      fileName: "report.pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 1234,
+      sha256: "a".repeat(64),
+      downloadUrl:
+        "/api/v1/attachments/attachment%3A018f47a2-1f10-7a3d-8c2d-61f369284f19"
+    };
+
+    expect(attachmentPublicMetadataSchema.parse(attachment)).toEqual(attachment);
+    expect(attachmentUploadCreateRequestSchema.parse({
+      protocolVersion: 1,
+      fileName: "report.pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 1234
+    })).toBeTruthy();
+    expect(attachmentUploadCreateResponseSchema.parse({
+      protocolVersion: 1,
+      attachmentRef: attachment.attachmentRef,
+      chunkBytes: 8388608,
+      chunkCount: 1,
+      receivedChunkIndexes: [],
+      expiresAt: "2026-07-30T08:03:00.000Z"
+    })).toBeTruthy();
+    expect(attachmentChunkResponseSchema.parse({
+      protocolVersion: 1,
+      attachmentRef: attachment.attachmentRef,
+      chunkIndex: 0,
+      receivedBytes: 1234,
+      sha256: "b".repeat(64),
+      replayed: false
+    })).toBeTruthy();
+    expect(attachmentCompleteRequestSchema.parse({
+      protocolVersion: 1,
+      sha256: attachment.sha256,
+      chunkCount: 1
+    })).toBeTruthy();
+    expect(attachmentCompleteResponseSchema.parse({
+      protocolVersion: 1,
+      attachment
+    })).toBeTruthy();
+  });
+
+  it("allows attachment-only commands but rejects an empty message body", () => {
+    const attachmentRef =
+      "attachment:018f47a2-1f10-7a3d-8c2d-61f369284f19";
+
+    expect(sendThreadMessageRequestSchema.safeParse({
+      ...sendMessage,
+      content: { type: "text", text: "" },
+      attachmentRefs: [attachmentRef]
+    }).success).toBe(true);
+    expect(sendThreadMessageRequestSchema.safeParse({
+      ...sendMessage,
+      content: { type: "text", text: "   " },
+      attachmentRefs: []
+    }).success).toBe(false);
+    expect(sendThreadMessageRequestSchema.safeParse({
+      ...sendMessage,
+      attachmentRefs: [attachmentRef, attachmentRef]
+    }).success).toBe(false);
+    expect(sendThreadMessageRequestSchema.safeParse({
+      ...sendMessage,
+      attachmentRefs: Array.from(
+        { length: 11 },
+        (_, index) => `attachment:file-${index}`
+      )
+    }).success).toBe(false);
+  });
+
+  it("allows attachment-only stored messages and defaults old messages to no attachments", () => {
+    const response = fixture("thread-message-list-response.json") as {
+      messages: Record<string, unknown>[];
+    };
+    const message = response.messages[0]!;
+    expect(threadMessageSchema.parse(message).attachments).toEqual([]);
+    expect(threadMessageSchema.safeParse({
+      ...message,
+      content: { type: "text", text: "" },
+      attachments: [{
+        attachmentRef: "attachment:018f47a2-1f10-7a3d-8c2d-61f369284f19",
+        fileName: "report.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 1234,
+        sha256: "a".repeat(64),
+        downloadUrl:
+          "/api/v1/attachments/attachment%3A018f47a2-1f10-7a3d-8c2d-61f369284f19"
+      }]
+    }).success).toBe(true);
+    expect(threadMessageSchema.safeParse({
+      ...message,
+      content: { type: "text", text: " " },
+      attachments: []
+    }).success).toBe(false);
   });
 
   it("accepts canonical response envelopes", () => {

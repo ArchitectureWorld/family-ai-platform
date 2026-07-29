@@ -25,11 +25,104 @@ const connectionRefSchema = refSchema("connection");
 const systemRefSchema = refSchema("system");
 const messageRefSchema = refSchema("message");
 
+export const attachmentRefSchema = refSchema("attachment");
 export const interactionThreadRefSchema = refSchema("thread");
 export const homeChatStreamRefSchema = refSchema("home-chat");
 export const dailyEpisodeRefSchema = refSchema("daily-episode");
 export const workConversationRefSchema = refSchema("work");
 export const chatWorkConversionRefSchema = refSchema("chat-work-conversion");
+
+export const MAX_FILE_BYTES = 209715200;
+export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+export const MAX_MESSAGE_ATTACHMENT_BYTES = 2147483648;
+export const ATTACHMENT_CHUNK_BYTES = 8388608;
+export const DEFAULT_FAMILY_ATTACHMENT_QUOTA_BYTES = 21474836480;
+export const INCOMPLETE_UPLOAD_TTL_MS = 86400000;
+
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+const attachmentFileNameSchema = z.string().min(1).max(255);
+const attachmentMediaTypeSchema = z
+  .string()
+  .min(3)
+  .max(127)
+  .regex(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/);
+
+export const attachmentPublicMetadataSchema = z
+  .object({
+    attachmentRef: attachmentRefSchema,
+    fileName: attachmentFileNameSchema,
+    mediaType: attachmentMediaTypeSchema,
+    sizeBytes: z.number().int().positive().max(MAX_FILE_BYTES),
+    sha256: sha256Schema,
+    downloadUrl: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^\/api\/v1\/attachments\/attachment%3A[a-z0-9][a-z0-9._:%-]{1,380}$/)
+  })
+  .strict();
+
+export const attachmentUploadCreateRequestSchema = z
+  .object({
+    protocolVersion: protocolVersionSchema,
+    fileName: attachmentFileNameSchema,
+    mediaType: attachmentMediaTypeSchema,
+    sizeBytes: z.number().int().positive().max(MAX_FILE_BYTES)
+  })
+  .strict();
+
+export const attachmentUploadCreateResponseSchema = z
+  .object({
+    protocolVersion: protocolVersionSchema,
+    attachmentRef: attachmentRefSchema,
+    chunkBytes: z.literal(ATTACHMENT_CHUNK_BYTES),
+    chunkCount: z.number().int().min(1).max(25),
+    receivedChunkIndexes: z.array(z.number().int().min(0).max(24)).max(25),
+    expiresAt: timestampSchema
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.receivedChunkIndexes).size !== value.receivedChunkIndexes.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["receivedChunkIndexes"],
+        message: "received chunk indexes must be unique"
+      });
+    }
+    if (value.receivedChunkIndexes.some((index) => index >= value.chunkCount)) {
+      context.addIssue({
+        code: "custom",
+        path: ["receivedChunkIndexes"],
+        message: "received chunk index is outside the upload"
+      });
+    }
+  });
+
+export const attachmentChunkResponseSchema = z
+  .object({
+    protocolVersion: protocolVersionSchema,
+    attachmentRef: attachmentRefSchema,
+    chunkIndex: z.number().int().min(0).max(24),
+    receivedBytes: z.number().int().positive().max(ATTACHMENT_CHUNK_BYTES),
+    sha256: sha256Schema,
+    replayed: z.boolean()
+  })
+  .strict();
+
+export const attachmentCompleteRequestSchema = z
+  .object({
+    protocolVersion: protocolVersionSchema,
+    sha256: sha256Schema,
+    chunkCount: z.number().int().min(1).max(25)
+  })
+  .strict();
+
+export const attachmentCompleteResponseSchema = z
+  .object({
+    protocolVersion: protocolVersionSchema,
+    attachment: attachmentPublicMetadataSchema
+  })
+  .strict();
 
 export const interactionThreadSchema = z
   .object({
@@ -136,7 +229,7 @@ export const workConversationSchema = workConversationBaseSchema.superRefine((va
 export const threadMessageContentSchema = z
   .object({
     type: z.literal("text"),
-    text: z.string().min(1).max(12000),
+    text: z.string().max(12000),
     language: z.string().regex(/^[a-z]{2,3}(?:-[A-Z]{2})?$/).optional()
   })
   .strict();
@@ -178,12 +271,26 @@ const threadMessageBaseSchema = z
     actor: threadActorSchema,
     origin: threadMessageOriginSchema,
     content: threadMessageContentSchema,
+    attachments: z
+      .array(attachmentPublicMetadataSchema)
+      .max(MAX_ATTACHMENTS_PER_MESSAGE)
+      .default([]),
     occurredAt: timestampSchema,
     createdAt: timestampSchema
   })
   .strict();
 
 export const threadMessageSchema = threadMessageBaseSchema.superRefine((value, context) => {
+  if (
+    value.content.text.trim().length === 0 &&
+    value.attachments.length === 0
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["content", "text"],
+      message: "message requires text or an attachment"
+    });
+  }
   if (value.actor.type === "person" && value.origin.deviceRef === null) {
     context.addIssue({
       code: "custom",
@@ -294,14 +401,39 @@ export const createWorkConversationResponseSchema = z
   })
   .strict();
 
-export const sendThreadMessageRequestSchema = z
+const sendThreadMessageRequestBaseSchema = z
   .object({
     protocolVersion: protocolVersionSchema,
     clientMessageId: clientMessageIdSchema,
     occurredAt: timestampSchema,
-    content: threadMessageContentSchema
+    content: threadMessageContentSchema,
+    attachmentRefs: z
+      .array(attachmentRefSchema)
+      .max(MAX_ATTACHMENTS_PER_MESSAGE)
+      .default([])
   })
   .strict();
+
+export const sendThreadMessageRequestSchema =
+  sendThreadMessageRequestBaseSchema.superRefine((value, context) => {
+    if (
+      value.content.text.trim().length === 0 &&
+      value.attachmentRefs.length === 0
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["content", "text"],
+        message: "message requires text or an attachment"
+      });
+    }
+    if (new Set(value.attachmentRefs).size !== value.attachmentRefs.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["attachmentRefs"],
+        message: "attachment references must be unique"
+      });
+    }
+  });
 
 export const sendThreadMessageResponseSchema = z
   .object({
@@ -413,6 +545,18 @@ export type HomeChatStream = z.infer<typeof homeChatStreamSchema>;
 export type DailyEpisode = z.infer<typeof dailyEpisodeSchema>;
 export type WorkConversationStatus = z.infer<typeof workConversationStatusSchema>;
 export type WorkConversation = z.infer<typeof workConversationSchema>;
+export type AttachmentPublicMetadata = z.infer<typeof attachmentPublicMetadataSchema>;
+export type AttachmentUploadCreateRequest = z.infer<
+  typeof attachmentUploadCreateRequestSchema
+>;
+export type AttachmentUploadCreateResponse = z.infer<
+  typeof attachmentUploadCreateResponseSchema
+>;
+export type AttachmentChunkResponse = z.infer<typeof attachmentChunkResponseSchema>;
+export type AttachmentCompleteRequest = z.infer<typeof attachmentCompleteRequestSchema>;
+export type AttachmentCompleteResponse = z.infer<
+  typeof attachmentCompleteResponseSchema
+>;
 export type ThreadMessageContent = z.infer<typeof threadMessageContentSchema>;
 export type ThreadActor = z.infer<typeof threadActorSchema>;
 export type ThreadMessageOrigin = z.infer<typeof threadMessageOriginSchema>;

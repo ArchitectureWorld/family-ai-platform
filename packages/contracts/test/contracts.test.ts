@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   messageEnvelopeSchema,
+  providerAttachmentSchema,
   providerInvocationRequestSchema,
   providerInvocationResultSchema
 } from "../src/index.js";
@@ -51,6 +52,38 @@ describe("provider invocation", () => {
       providerInvocationRequestSchema.safeParse({ ...request, executablePath: "/usr/bin/fake" })
         .success
     ).toBe(false);
+    expect(providerInvocationRequestSchema.parse(request).attachments).toEqual([]);
+  });
+
+  it("accepts verified attachment paths only inside the Provider request boundary", () => {
+    const attachment = {
+      attachmentRef: "attachment:018f47a2-1f10-7a3d-8c2d-61f369284f19",
+      fileName: "report.pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 1234,
+      sha256: "a".repeat(64),
+      localPath: "/srv/family-ai/attachments/aa/report.blob"
+    };
+
+    expect(providerAttachmentSchema.parse(attachment)).toEqual(attachment);
+    expect(providerInvocationRequestSchema.safeParse({
+      ...request,
+      attachments: [attachment]
+    }).success).toBe(true);
+    expect(providerInvocationRequestSchema.safeParse({
+      ...request,
+      attachments: [{
+        ...attachment,
+        sha256: "A".repeat(64)
+      }]
+    }).success).toBe(false);
+    expect(providerInvocationRequestSchema.safeParse({
+      ...request,
+      attachments: Array.from(
+        { length: 11 },
+        (_, index) => ({ ...attachment, attachmentRef: `attachment:file-${index}` })
+      )
+    }).success).toBe(false);
   });
 
   it("requires output for success and a safe error for failure", () => {

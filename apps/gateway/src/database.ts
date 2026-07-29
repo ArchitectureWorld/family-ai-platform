@@ -672,6 +672,159 @@ function applyMigrationV7(db: GatewayDatabase): void {
   }
 }
 
+const MIGRATION_V8 = `
+DROP TRIGGER IF EXISTS domain_event_thread_message_created;
+
+CREATE TABLE thread_messages_v8 (
+  message_ref TEXT PRIMARY KEY,
+  thread_ref TEXT NOT NULL REFERENCES interaction_threads(thread_ref) ON DELETE CASCADE,
+  thread_sequence INTEGER NOT NULL CHECK (thread_sequence > 0),
+  client_message_id TEXT NOT NULL,
+  actor_type TEXT NOT NULL CHECK (actor_type IN ('person', 'assistant', 'agent', 'system')),
+  actor_person_ref TEXT REFERENCES persons(person_ref),
+  actor_assignment_ref TEXT,
+  actor_agent_ref TEXT REFERENCES agents(agent_ref),
+  actor_provider_profile_ref TEXT REFERENCES provider_profiles(provider_profile_ref),
+  actor_system_ref TEXT,
+  origin_device_ref TEXT REFERENCES managed_devices(device_ref),
+  origin_connection_ref TEXT,
+  entry_audience TEXT NOT NULL CHECK (entry_audience IN ('personal', 'family_admin', 'system')),
+  content_type TEXT NOT NULL CHECK (content_type = 'text'),
+  content_text TEXT NOT NULL CHECK (length(content_text) <= 12000),
+  content_language TEXT,
+  occurred_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  CHECK (
+    (actor_type = 'person' AND actor_person_ref IS NOT NULL AND origin_device_ref IS NOT NULL
+      AND actor_assignment_ref IS NULL AND actor_agent_ref IS NULL
+      AND actor_provider_profile_ref IS NULL AND actor_system_ref IS NULL) OR
+    (actor_type = 'assistant' AND actor_person_ref IS NULL AND actor_assignment_ref IS NOT NULL
+      AND actor_agent_ref IS NOT NULL AND actor_provider_profile_ref IS NOT NULL
+      AND actor_system_ref IS NULL) OR
+    (actor_type = 'agent' AND actor_person_ref IS NULL AND actor_assignment_ref IS NULL
+      AND actor_agent_ref IS NOT NULL AND actor_provider_profile_ref IS NOT NULL
+      AND actor_system_ref IS NULL) OR
+    (actor_type = 'system' AND actor_person_ref IS NULL AND actor_assignment_ref IS NULL
+      AND actor_agent_ref IS NULL AND actor_provider_profile_ref IS NULL
+      AND actor_system_ref IS NOT NULL AND entry_audience = 'system')
+  )
+);
+
+INSERT INTO thread_messages_v8
+  (message_ref, thread_ref, thread_sequence, client_message_id, actor_type,
+   actor_person_ref, actor_assignment_ref, actor_agent_ref,
+   actor_provider_profile_ref, actor_system_ref, origin_device_ref,
+   origin_connection_ref, entry_audience, content_type, content_text,
+   content_language, occurred_at, created_at)
+SELECT
+   message_ref, thread_ref, thread_sequence, client_message_id, actor_type,
+   actor_person_ref, actor_assignment_ref, actor_agent_ref,
+   actor_provider_profile_ref, actor_system_ref, origin_device_ref,
+   origin_connection_ref, entry_audience, content_type, content_text,
+   content_language, occurred_at, created_at
+FROM thread_messages;
+
+DROP INDEX thread_messages_sequence_idx;
+DROP INDEX thread_messages_client_id_idx;
+DROP INDEX thread_messages_page_idx;
+DROP TABLE thread_messages;
+ALTER TABLE thread_messages_v8 RENAME TO thread_messages;
+
+CREATE UNIQUE INDEX thread_messages_sequence_idx
+  ON thread_messages(thread_ref, thread_sequence);
+CREATE UNIQUE INDEX thread_messages_client_id_idx
+  ON thread_messages(thread_ref, client_message_id);
+CREATE INDEX thread_messages_page_idx
+  ON thread_messages(thread_ref, thread_sequence DESC);
+
+CREATE TABLE attachments (
+  attachment_ref TEXT PRIMARY KEY,
+  family_ref TEXT NOT NULL REFERENCES families(family_ref) ON DELETE CASCADE,
+  owner_person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  file_name TEXT NOT NULL CHECK (length(file_name) BETWEEN 1 AND 255),
+  declared_media_type TEXT NOT NULL CHECK (length(declared_media_type) BETWEEN 3 AND 127),
+  detected_media_type TEXT CHECK (
+    detected_media_type IS NULL OR length(detected_media_type) BETWEEN 3 AND 127
+  ),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 209715200),
+  reserved_bytes INTEGER NOT NULL CHECK (
+    reserved_bytes >= 0 AND reserved_bytes <= size_bytes
+  ),
+  sha256 TEXT CHECK (
+    sha256 IS NULL OR
+    (length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*')
+  ),
+  storage_key TEXT UNIQUE,
+  state TEXT NOT NULL CHECK (
+    state IN ('uploading', 'ready', 'attached', 'expired', 'deleted')
+  ),
+  created_at TEXT NOT NULL,
+  expires_at TEXT,
+  completed_at TEXT,
+  attached_at TEXT,
+  CHECK (
+    (state = 'uploading' AND reserved_bytes = size_bytes AND sha256 IS NULL
+      AND storage_key IS NULL AND expires_at IS NOT NULL
+      AND completed_at IS NULL AND attached_at IS NULL) OR
+    (state = 'ready' AND reserved_bytes = size_bytes AND sha256 IS NOT NULL
+      AND storage_key IS NOT NULL AND expires_at IS NULL
+      AND completed_at IS NOT NULL AND attached_at IS NULL) OR
+    (state = 'attached' AND reserved_bytes = size_bytes AND sha256 IS NOT NULL
+      AND storage_key IS NOT NULL AND expires_at IS NULL
+      AND completed_at IS NOT NULL AND attached_at IS NOT NULL) OR
+    (state IN ('expired', 'deleted') AND reserved_bytes = 0)
+  )
+);
+CREATE INDEX attachments_family_quota_state_idx
+  ON attachments(family_ref, state, reserved_bytes);
+CREATE INDEX attachments_owner_state_idx
+  ON attachments(owner_person_ref, state, created_at);
+CREATE INDEX attachments_expiry_idx
+  ON attachments(state, expires_at) WHERE state = 'uploading';
+
+CREATE TABLE attachment_chunks (
+  attachment_ref TEXT NOT NULL REFERENCES attachments(attachment_ref) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0 AND chunk_index < 25),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 8388608),
+  sha256 TEXT NOT NULL CHECK (
+    length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'
+  ),
+  storage_key TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (attachment_ref, chunk_index)
+);
+
+CREATE TABLE message_attachments (
+  message_ref TEXT NOT NULL REFERENCES thread_messages(message_ref) ON DELETE CASCADE,
+  attachment_ref TEXT NOT NULL UNIQUE REFERENCES attachments(attachment_ref),
+  attachment_order INTEGER NOT NULL CHECK (
+    attachment_order >= 0 AND attachment_order < 10
+  ),
+  PRIMARY KEY (message_ref, attachment_ref),
+  UNIQUE (message_ref, attachment_order)
+);
+CREATE INDEX message_attachments_message_order_idx
+  ON message_attachments(message_ref, attachment_order);
+`;
+
+function applyMigrationV8(db: GatewayDatabase): void {
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(MIGRATION_V8);
+      db.prepare(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES(8, ?)"
+      ).run(new Date().toISOString());
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  const violations = db.pragma("foreign_key_check") as unknown[];
+  if (violations.length > 0) {
+    throw new Error("Gateway V8 migration produced foreign key violations");
+  }
+}
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -679,7 +832,7 @@ function latestMigrationVersion(db: GatewayDatabase): number {
   return row?.version ?? 0;
 }
 
-function applyMigrations(db: GatewayDatabase, migrationLimit: 6 | 7): void {
+function applyMigrations(db: GatewayDatabase, migrationLimit: 6 | 7 | 8): void {
   const ledgerExists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
     .get();
@@ -741,9 +894,13 @@ function applyMigrations(db: GatewayDatabase, migrationLimit: 6 | 7): void {
     })();
     latest = 6;
   }
-  if (latest === 6 && migrationLimit === 7) {
+  if (latest === 6 && migrationLimit >= 7) {
     applyMigrationV7(db);
     latest = 7;
+  }
+  if (latest === 7 && migrationLimit === 8) {
+    applyMigrationV8(db);
+    latest = 8;
   }
   if (latest !== migrationLimit) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
@@ -751,7 +908,7 @@ function applyMigrations(db: GatewayDatabase, migrationLimit: 6 | 7): void {
 }
 
 export interface GatewayDatabaseOpenOptions {
-  migrationLimit?: 6 | 7;
+  migrationLimit?: 6 | 7 | 8;
 }
 
 export function openGatewayDatabase(
@@ -763,7 +920,7 @@ export function openGatewayDatabase(
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
-  applyMigrations(db, options.migrationLimit ?? 7);
+  applyMigrations(db, options.migrationLimit ?? 8);
   return db;
 }
 
