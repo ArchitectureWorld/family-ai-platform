@@ -279,6 +279,7 @@ describe("isolated Member Web Preview scripts", () => {
     expect(up).not.toContain('GATEWAY_PORT=8790');
     expect(up).not.toContain('docker compose');
     expect(up).not.toContain('dev-reset');
+    expect(up).toContain('wait_health http://127.0.0.1:8791 1200');
   });
 
   it("discovers explicit real Provider inputs into the protected Gateway config", () => {

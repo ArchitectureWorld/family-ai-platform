@@ -653,7 +653,7 @@ write_manifest() {
   atomic_text_file "$1" "$2"$'\n'
 }
 
-wait_health() { local origin="$1"; for _ in $(seq 1 100); do curl --fail --silent --max-time 1 "$origin/health" >/dev/null 2>&1 && return 0; sleep 0.1; done; return 1; }
+wait_health() { local origin="$1" attempts="${2:-100}"; for _ in $(seq 1 "$attempts"); do curl --fail --silent --max-time 1 "$origin/health" >/dev/null 2>&1 && return 0; sleep 0.1; done; return 1; }
 
 SUCCESS=0
 NEW_GATEWAY_PID=""
@@ -693,7 +693,7 @@ case "$gateway_state" in
   owned-match)
     gateway_pid="$(manifest_pid "$GATEWAY_MANIFEST")" || fail PREVIEW_GATEWAY_OWNERSHIP_FAILED
     gateway_starttime="$(manifest_starttime_for_pid "$GATEWAY_MANIFEST" "$gateway_pid")" || fail PREVIEW_GATEWAY_OWNERSHIP_FAILED
-    wait_health http://127.0.0.1:8791 || fail PREVIEW_GATEWAY_HEALTH_FAILED
+    wait_health http://127.0.0.1:8791 1200 || fail PREVIEW_GATEWAY_HEALTH_FAILED
     export EXPECTED_CONFIG_SHA="$CONFIG_SHA"
     [[ "$(manifest_status "$GATEWAY_MANIFEST" gateway apps/gateway/dist/index.js 8791 "$LAUNCH_COMMIT" "$DIST_SHA" "$MEMBER_PUBLIC_SHA" "$gateway_pid")" == owned-match ]] || fail PREVIEW_GATEWAY_OWNERSHIP_FAILED
     unset EXPECTED_CONFIG_SHA
@@ -716,7 +716,7 @@ if [[ "$gateway_state" == absent ]]; then
   nohup /bin/bash -c 'set -a; . "$1"; set +a; exec node "$2"' preview-runtime "$CONFIG_DIR/gateway.env" "$ROOT_DIR/apps/gateway/dist/index.js" >>"$GATEWAY_LOG" 2>&1 </dev/null &
   NEW_GATEWAY_PID="$!"
   NEW_GATEWAY_STARTTIME="$(awk '{print $22}' "/proc/$NEW_GATEWAY_PID/stat")" || fail PREVIEW_GATEWAY_OWNERSHIP_FAILED
-  wait_health http://127.0.0.1:8791 || fail PREVIEW_GATEWAY_START_FAILED
+  wait_health http://127.0.0.1:8791 1200 || fail PREVIEW_GATEWAY_START_FAILED
   raw_pid_owned "$NEW_GATEWAY_PID" apps/gateway/dist/index.js 8791 "$NEW_GATEWAY_STARTTIME" || fail PREVIEW_GATEWAY_OWNERSHIP_FAILED
   gateway_starttime="$NEW_GATEWAY_STARTTIME"
   gateway_json="$(node -e 'const [pid,starttime,cwd,commit,dist,pub,config]=process.argv.slice(1);process.stdout.write(JSON.stringify({version:1,kind:"gateway",pid:Number(pid),starttime,cwd,entrypoint:"apps/gateway/dist/index.js",host:"127.0.0.1",port:8791,launchCommit:commit,distSha256:dist,memberPublicSha256:pub,configSha256:config}))' "$NEW_GATEWAY_PID" "$gateway_starttime" "$ROOT_DIR" "$LAUNCH_COMMIT" "$DIST_SHA" "$MEMBER_PUBLIC_SHA" "$CONFIG_SHA")"
