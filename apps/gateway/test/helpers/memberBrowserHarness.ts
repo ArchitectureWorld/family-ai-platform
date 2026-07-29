@@ -3,6 +3,9 @@ class C {
   add(...v: string[]) {
     v.forEach((x) => this.values.add(x));
   }
+  remove(...v: string[]) {
+    v.forEach((x) => this.values.delete(x));
+  }
   toggle(v: string, force?: boolean) {
     const yes = force ?? !this.values.has(v);
     if (yes) this.values.add(v);
@@ -17,11 +20,17 @@ class E extends EventTarget {
   children: E[] = [];
   dataset: Record<string, string> = {};
   classList = new C();
+  attributes = new Map<string, string>();
   parentElement: E | null = null;
   value = "";
   placeholder = "";
   disabled = false;
   type = "";
+  accept = "";
+  multiple = false;
+  files: Array<Record<string, unknown>> = [];
+  href = "";
+  download = "";
   checked = false;
   selected = false;
   scrollHeight = 0;
@@ -31,6 +40,7 @@ class E extends EventTarget {
   open = false;
   showModalCalls = 0;
   closeCalls = 0;
+  clickCalls = 0;
   private _id = "";
   constructor(
     readonly tagName: string,
@@ -116,12 +126,18 @@ class E extends EventTarget {
     return out;
   }
   setAttribute(name: string, value: string) {
+    this.attributes.set(name, String(value));
     if (name.startsWith("data-"))
       this.dataset[
         name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())
       ] = value;
   }
-  removeAttribute(_name: string) {}
+  getAttribute(name: string) {
+    return this.attributes.get(name) ?? null;
+  }
+  removeAttribute(name: string) {
+    this.attributes.delete(name);
+  }
   focus() {
     this.ownerDocument.activeElement = this;
   }
@@ -157,6 +173,7 @@ class E extends EventTarget {
     return event;
   }
   click() {
+    this.clickCalls += 1;
     this.dispatchEvent(new Event("click", { cancelable: true }));
   }
 }
@@ -212,6 +229,11 @@ const tag: Record<string, string> = {
   workspaceKicker: "p",
   workspaceTitle: "h2",
   currentAgentIdentity: "div",
+  agentWorkspaceAnnouncement: "p",
+  agentWorkspaceState: "section",
+  agentWorkspaceStateTitle: "h2",
+  agentWorkspaceStateMessage: "p",
+  retryAgentLoadButton: "button",
   syncStatus: "span",
   workList: "div",
   createWorkButton: "button",
@@ -222,8 +244,16 @@ const tag: Record<string, string> = {
   workLoadEarlierButton: "button",
   messageComposer: "form",
   messageInput: "textarea",
+  messageAttachmentButton: "button",
+  messageAttachmentInput: "input",
+  messageAttachmentTray: "div",
+  messageAttachmentError: "p",
   workMessageComposer: "form",
   workMessageInput: "textarea",
+  workAttachmentButton: "button",
+  workAttachmentInput: "input",
+  workAttachmentTray: "div",
+  workAttachmentError: "p",
   createWorkDialog: "dialog",
   createWorkForm: "form",
   createWorkTitleInput: "input",
@@ -236,7 +266,11 @@ const tag: Record<string, string> = {
   threadMessages: "div",
   workThreadMessages: "div",
   chatEmptyState: "div",
+  chatEmptyTitle: "h3",
+  chatEmptyMessage: "p",
   workEmptyState: "div",
+  workEmptyTitle: "h3",
+  workEmptyMessage: "p",
   selectionCount: "span",
   chatToWorkSelectionSummary: "p",
   composerStatus: "span",
@@ -281,7 +315,14 @@ export function createMemberDocumentHarness() {
     nodes.workspaceSidebar,
     nodes.primaryNavigation,
     nodes.currentAgentIdentity,
+    nodes.agentWorkspaceAnnouncement,
+    nodes.agentWorkspaceState,
     nodes.mobileNavigation,
+  );
+  nodes.agentWorkspaceState.append(
+    nodes.agentWorkspaceStateTitle,
+    nodes.agentWorkspaceStateMessage,
+    nodes.retryAgentLoadButton,
   );
   nodes.workspaceSidebar.append(
     nodes.personAvatar,
@@ -293,8 +334,19 @@ export function createMemberDocumentHarness() {
     nodes.logoutButton,
     nodes.revokeButton,
   );
-  nodes.messageComposer.append(nodes.composerStatus, nodes.sendMessageButton);
+  nodes.messageComposer.append(
+    nodes.messageAttachmentButton,
+    nodes.messageAttachmentInput,
+    nodes.messageAttachmentTray,
+    nodes.messageAttachmentError,
+    nodes.composerStatus,
+    nodes.sendMessageButton,
+  );
   nodes.workMessageComposer.append(
+    nodes.workAttachmentButton,
+    nodes.workAttachmentInput,
+    nodes.workAttachmentTray,
+    nodes.workAttachmentError,
     nodes.workComposerStatus,
     nodes.workSendMessageButton,
   );
@@ -304,6 +356,8 @@ export function createMemberDocumentHarness() {
     nodes.workProgress,
   );
   nodes.workProgress.append(nodes.workPhaseSummary, nodes.workProgressGroups);
+  nodes.chatEmptyState.append(nodes.chatEmptyTitle, nodes.chatEmptyMessage);
+  nodes.workEmptyState.append(nodes.workEmptyTitle, nodes.workEmptyMessage);
   nodes.createWorkForm.append(nodes.createWorkTitle);
   nodes.chatToWorkForm.append(nodes.chatToWorkTitle);
   for (const navigation of [nodes.primaryNavigation, nodes.mobileNavigation]) {
@@ -351,6 +405,11 @@ export function createMemberDocumentHarness() {
     workspaceKicker: "workspaceView",
     workspaceTitle: "workspaceView",
     currentAgentIdentity: "workspaceView",
+    agentWorkspaceAnnouncement: "workspaceView",
+    agentWorkspaceState: "workspaceView",
+    agentWorkspaceStateTitle: "agentWorkspaceState",
+    agentWorkspaceStateMessage: "agentWorkspaceState",
+    retryAgentLoadButton: "agentWorkspaceState",
     syncStatus: "workspaceView",
     deviceName: "workspaceView",
     chatSection: "workspaceView",
@@ -360,8 +419,14 @@ export function createMemberDocumentHarness() {
     loadEarlierButton: "chatSection",
     threadMessages: "chatSection",
     chatEmptyState: "chatSection",
+    chatEmptyTitle: "chatEmptyState",
+    chatEmptyMessage: "chatEmptyState",
     messageComposer: "chatSection",
     messageInput: "messageComposer",
+    messageAttachmentButton: "messageComposer",
+    messageAttachmentInput: "messageComposer",
+    messageAttachmentTray: "messageComposer",
+    messageAttachmentError: "messageComposer",
     composerStatus: "messageComposer",
     sendMessageButton: "messageComposer",
     workSection: "workspaceView",
@@ -372,8 +437,14 @@ export function createMemberDocumentHarness() {
     workLoadEarlierButton: "workSection",
     workThreadMessages: "workSection",
     workEmptyState: "workSection",
+    workEmptyTitle: "workEmptyState",
+    workEmptyMessage: "workEmptyState",
     workMessageComposer: "workSection",
     workMessageInput: "workMessageComposer",
+    workAttachmentButton: "workMessageComposer",
+    workAttachmentInput: "workMessageComposer",
+    workAttachmentTray: "workMessageComposer",
+    workAttachmentError: "workMessageComposer",
     workComposerStatus: "workMessageComposer",
     workSendMessageButton: "workMessageComposer",
     workDetail: "workSection",
@@ -409,6 +480,24 @@ export function createMemberDocumentHarness() {
     input(id: string, value: string) {
       nodes[id].value = value;
       nodes[id].dispatchEvent(new Event("input", { cancelable: true }));
+    },
+    files(id: string, files: Array<Record<string, unknown>>) {
+      nodes[id].files = files;
+      nodes[id].dispatchEvent(new Event("change", { cancelable: true }));
+    },
+    transfer(
+      id: string,
+      type: "paste" | "dragover" | "dragleave" | "drop",
+      files: Array<Record<string, unknown>>,
+    ) {
+      const event = new Event(type, { cancelable: true });
+      const transfer = { files, types: files.length ? ["Files"] : [] };
+      Object.defineProperties(event, {
+        clipboardData: { value: transfer },
+        dataTransfer: { value: transfer },
+      });
+      nodes[id].dispatchEvent(event);
+      return event;
     },
     key(id: string, key: string, shiftKey = false, isComposing = false) {
       return nodes[id].dispatchKeyboard(
@@ -752,6 +841,7 @@ export function memberState(overrides: Record<string, unknown> = {}) {
       },
     ],
     drafts: {},
+    attachmentDrafts: [],
     selectedMessageRefs: [],
     progressByWork: {},
     network: { online: true },
@@ -762,11 +852,14 @@ export function memberState(overrides: Record<string, unknown> = {}) {
 }
 export function memberActions(overrides: Record<string, unknown> = {}) {
   return {
+    switchAgent: vi.fn(async () => undefined),
     navigate: vi.fn(),
     openWork: vi.fn(async () => undefined),
     createWork: vi.fn(async () => undefined),
-    send: vi.fn(async () => ({ status: "succeeded" })),
+    send: vi.fn(async () => ({ status: "queued" })),
     saveDraft: vi.fn(async () => undefined),
+    addAttachments: vi.fn(async () => undefined),
+    cancelAttachment: vi.fn(async () => undefined),
     loadEarlier: vi.fn(async () => undefined),
     retry: vi.fn(async () => ({ status: "succeeded" })),
     toggleMessageSelection: vi.fn(),

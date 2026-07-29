@@ -78,6 +78,8 @@ function initialState(context, snapshot, selection) {
   return {
     context,
     currentAgentRef,
+    agentWorkspaceStatus: currentAgentRef ? "ready" : "empty",
+    agentWorkspaceError: null,
     legacyAgentProjection: !Array.isArray(context?.mountedAgents),
     agentSelectionKind: selection.kind,
     section,
@@ -972,26 +974,32 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       throw agentUnavailableError();
     }
     const switchGeneration = ++agentSwitchGeneration;
-    store.setState((state) => projectAgentState(
-      state,
-      state.context,
-      emptyAgentSnapshot({ selectedSection: state.section }),
-      agentRef
-    ));
+    store.setState((state) => ({
+      ...projectAgentState(
+        state,
+        state.context,
+        emptyAgentSnapshot({ selectedSection: state.section }),
+        agentRef
+      ),
+      agentWorkspaceStatus: "loading",
+      agentWorkspaceError: null
+    }));
     await saveMeta(cache, "selectedAgentRef", agentRef);
     const projected = await readBootstrapSnapshot(cache, agentRef);
-    if (
-      switchGeneration !== agentSwitchGeneration ||
-      !isMountedAgent(store.getState().context, agentRef)
-    ) {
+    if (switchGeneration !== agentSwitchGeneration) return null;
+    if (!isMountedAgent(store.getState().context, agentRef)) {
       throw agentUnavailableError();
     }
-    store.setState((state) => projectAgentState(
-      state,
-      state.context,
-      projected,
-      agentRef
-    ));
+    store.setState((state) => ({
+      ...projectAgentState(
+        state,
+        state.context,
+        projected,
+        agentRef
+      ),
+      agentWorkspaceStatus: "loading",
+      agentWorkspaceError: null
+    }));
     const results = await Promise.allSettled([
       chatController.initialize(),
       workController.initialize()
@@ -1001,6 +1009,19 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     if (failure) {
       if (failure.reason?.code === "AGENT_NOT_MOUNTED") {
         await refreshAgentContext();
+      }
+      if (
+        switchGeneration === agentSwitchGeneration &&
+        store.getState().currentAgentRef === agentRef
+      ) {
+        store.setState((state) => ({
+          ...state,
+          agentWorkspaceStatus: "error",
+          agentWorkspaceError: {
+            code: failure.reason?.code ?? "AGENT_WORKSPACE_LOAD_FAILED",
+            message: failure.reason?.message ?? "Agent 工作台加载失败。"
+          }
+        }));
       }
       throw failure.reason;
     }
@@ -1014,6 +1035,16 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       store.setState((state) => nextNavigationState(state, "work"));
     } else {
       store.setState((state) => nextNavigationState(state, "chat"));
+    }
+    if (
+      switchGeneration === agentSwitchGeneration &&
+      store.getState().currentAgentRef === agentRef
+    ) {
+      store.setState((state) => ({
+        ...state,
+        agentWorkspaceStatus: "ready",
+        agentWorkspaceError: null
+      }));
     }
     return agentRef;
   }
@@ -1055,16 +1086,24 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
         ? state.chat?.threadRef
         : selectedWork(state)?.threadRef;
       if (!threadRef) throw new Error("THREAD_NOT_SELECTED");
-      const attachments = (state.attachmentDrafts ?? []).filter(
+      const attachmentDrafts = (state.attachmentDrafts ?? []).filter(
         (attachment) =>
           attachment.agentRef === state.currentAgentRef &&
-          attachment.threadRef === threadRef &&
-          attachment.serverState === "ready"
+          attachment.threadRef === threadRef
       );
+      if (attachmentDrafts.some(
+        (attachment) => attachment.serverState !== "ready"
+      )) {
+        const error = new Error(
+          "请等待所有附件上传完成，或移除上传失败的附件。"
+        );
+        error.code = "ATTACHMENT_UPLOAD_INCOMPLETE";
+        throw error;
+      }
       const result = await threadController.enqueue(
         threadRef,
         text,
-        attachments,
+        attachmentDrafts,
         "zh-CN"
       );
       return trackTransmission(result);

@@ -40,6 +40,60 @@ function actorLabel(message) {
   }
 }
 
+function readableBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function safeDownloadUrl(value) {
+  return typeof value === "string" &&
+    value.startsWith("/api/v1/attachments/")
+    ? value
+    : null;
+}
+
+function appendMessageAttachments(
+  documentRef,
+  bubble,
+  attachments = [],
+  className = ""
+) {
+  if (!attachments.length) return;
+  const list = element(
+    documentRef,
+    "div",
+    `message-attachments${className ? ` ${className}` : ""}`
+  );
+  for (const attachment of attachments) {
+    const downloadUrl = safeDownloadUrl(attachment.downloadUrl);
+    const chip = element(
+      documentRef,
+      downloadUrl ? "a" : "span",
+      `message-attachment${downloadUrl ? " message-attachment-download" : ""}`
+    );
+    chip.append(element(documentRef, "span", "attachment-file-icon", "↗"));
+    chip.append(element(
+      documentRef,
+      "span",
+      "attachment-file-copy",
+      `${attachment.fileName ?? "附件"} · ${readableBytes(attachment.sizeBytes)}`
+    ));
+    if (downloadUrl) {
+      chip.href = downloadUrl;
+      chip.download = attachment.fileName ?? "attachment";
+      chip.setAttribute("aria-label", `下载附件 ${attachment.fileName ?? ""}`);
+    }
+    list.append(chip);
+  }
+  bubble.append(list);
+}
+
 function messageNode(documentRef, listenerOptions, message, input) {
   const row = element(documentRef, "article", `message ${message.actor?.type ?? "system"}`);
   row.dataset.messageRef = message.messageRef;
@@ -53,7 +107,15 @@ function messageNode(documentRef, listenerOptions, message, input) {
     row.append(checkbox);
   }
   const bubble = element(documentRef, "div", "message-bubble");
-  bubble.append(element(documentRef, "p", "message-content", message.content?.text ?? ""));
+  if (message.content?.text) {
+    bubble.append(element(
+      documentRef,
+      "p",
+      "message-content",
+      message.content.text
+    ));
+  }
+  appendMessageAttachments(documentRef, bubble, message.attachments);
   const meta = element(documentRef, "div", "message-meta");
   meta.append(element(documentRef, "span", "", actorLabel(message)));
   meta.append(element(documentRef, "time", "", displayTime(message.occurredAt ?? message.createdAt)));
@@ -67,7 +129,20 @@ function outgoingNode(documentRef, listenerOptions, outgoing, onRetry) {
   const row = element(documentRef, "article", `message outgoing${failed ? " failed" : ""}`);
   row.dataset.clientMessageId = outgoing.clientMessageId;
   const bubble = element(documentRef, "div", "message-bubble");
-  bubble.append(element(documentRef, "p", "message-content", outgoing.content?.text ?? ""));
+  if (outgoing.content?.text) {
+    bubble.append(element(
+      documentRef,
+      "p",
+      "message-content",
+      outgoing.content.text
+    ));
+  }
+  appendMessageAttachments(
+    documentRef,
+    bubble,
+    outgoing.attachments,
+    "outgoing-attachment"
+  );
   const meta = element(documentRef, "div", "message-meta");
   meta.append(element(documentRef, "span", "", failed ? "发送或回复失败" : "正在发送"));
   meta.append(element(documentRef, "time", "", displayTime(outgoing.occurredAt)));
@@ -142,23 +217,121 @@ function renderCurrentAgent(documentRef, state) {
   clear(identity);
   identity.className =
     `workspace-agent-identity ${agent?.status ?? "unselected"}`;
-  identity.append(element(documentRef, "span", "agent-status-dot"));
-  identity.append(element(documentRef, "span", "", "当前 Agent"));
   identity.append(element(
+    documentRef,
+    "span",
+    "workspace-agent-avatar",
+    agent?.displayName?.trim()?.slice(0, 1)?.toUpperCase() ?? "?"
+  ));
+  const copy = element(documentRef, "span", "workspace-agent-copy");
+  copy.append(element(
     documentRef,
     "strong",
     "",
     agent?.displayName ?? "尚未选择"
   ));
+  copy.append(element(documentRef, "span", "", "独立会话"));
+  identity.append(copy);
   if (agent) {
-    identity.append(element(
+    const status = element(
       documentRef,
       "span",
       "agent-status",
       publicAgentStatus(agent)
-    ));
+    );
+    status.prepend?.(element(documentRef, "span", "agent-status-dot"));
+    identity.append(status);
   }
   return agent;
+}
+
+function attachmentStateLabel(draft) {
+  if (draft.serverState === "ready") return "已就绪";
+  if (draft.serverState === "error" || draft.serverState === "failed") {
+    return "上传失败";
+  }
+  const percent = Math.max(
+    0,
+    Math.min(100, Math.round(Number(draft.progress ?? 0) * 100))
+  );
+  return `上传中 ${percent}%`;
+}
+
+function renderAttachmentTray(
+  documentRef,
+  listenerOptions,
+  tray,
+  errorNode,
+  drafts,
+  onCancel,
+  ephemeralError
+) {
+  clear(tray);
+  const errors = [];
+  for (const draft of drafts) {
+    const state = draft.serverState ?? "uploading";
+    const card = element(
+      documentRef,
+      "article",
+      `attachment-card ${state}`
+    );
+    card.setAttribute("role", "listitem");
+    const header = element(documentRef, "div", "attachment-card-header");
+    const copy = element(documentRef, "span", "attachment-card-copy");
+    copy.append(element(
+      documentRef,
+      "strong",
+      "attachment-name",
+      draft.fileName ?? "附件"
+    ));
+    copy.append(element(
+      documentRef,
+      "span",
+      "attachment-details",
+      `${readableBytes(draft.sizeBytes)} · ${draft.mediaType ?? "文件"}`
+    ));
+    header.append(copy);
+    const remove = element(documentRef, "button", "attachment-remove", "×");
+    remove.type = "button";
+    remove.setAttribute(
+      "aria-label",
+      `移除附件 ${draft.fileName ?? ""}`
+    );
+    remove.addEventListener("click", () => {
+      onCancel(draft.attachmentRef);
+    }, listenerOptions);
+    header.append(remove);
+    card.append(header);
+    const progress = element(documentRef, "div", "attachment-progress");
+    const progressValue = element(documentRef, "span", "");
+    const percent = Math.max(
+      0,
+      Math.min(100, Math.round(Number(draft.progress ?? 0) * 100))
+    );
+    progressValue.setAttribute("style", `width:${percent}%`);
+    progress.append(progressValue);
+    card.append(progress);
+    card.append(element(
+      documentRef,
+      "span",
+      "attachment-state",
+      attachmentStateLabel(draft)
+    ));
+    tray.append(card);
+    if (
+      (state === "error" || state === "failed") &&
+      draft.error?.message
+    ) {
+      errors.push(`${draft.fileName ?? "附件"}：${draft.error.message}`);
+    }
+  }
+  if (ephemeralError) errors.push(ephemeralError);
+  errorNode.textContent = errors.join("；");
+  errorNode.classList.toggle("hidden", errors.length === 0);
+  return {
+    hasReady: drafts.some((draft) => draft.serverState === "ready"),
+    blocked: drafts.some((draft) => draft.serverState !== "ready")
+  };
 }
 
 function renderAgentSelector(documentRef, listenerOptions, state, actions, onError) {
@@ -275,6 +448,8 @@ export function createRenderer(input) {
   const setTimeoutFn = input.setTimeoutFn ?? globalThis.setTimeout.bind(globalThis);
   const clearTimeoutFn = input.clearTimeoutFn ?? globalThis.clearTimeout.bind(globalThis);
   let toastTimer = null;
+  let lastAnnouncedAgentRef = null;
+  const composerErrors = { chat: "", work: "" };
   ensureMobileWorkSelect(documentRef, listenerOptions, actions);
 
   function showToast(message, kind = "info") {
@@ -299,6 +474,73 @@ export function createRenderer(input) {
   function navigate(section) {
     actions.navigate(section);
   }
+
+  function threadForTarget(state, target) {
+    if (target === "chat") return state.chat?.threadRef ?? null;
+    const work = state.works?.find(
+      (item) => item.workConversationRef === state.selectedWorkRef
+    );
+    return work?.threadRef ?? null;
+  }
+
+  function attachmentDraftsFor(state, target) {
+    const threadRef = threadForTarget(state, target);
+    return (state.attachmentDrafts ?? []).filter(
+      (draft) =>
+        draft.agentRef === state.currentAgentRef &&
+        draft.threadRef === threadRef
+    );
+  }
+
+  function updateComposerAvailability(target) {
+    const state = store.getState();
+    const isChat = target === "chat";
+    const textarea = $(documentRef, isChat ? "messageInput" : "workMessageInput");
+    const sendButton = $(
+      documentRef,
+      isChat ? "sendMessageButton" : "workSendMessageButton"
+    );
+    const drafts = attachmentDraftsFor(state, target);
+    const hasReady = drafts.some((draft) => draft.serverState === "ready");
+    const blocked = drafts.some((draft) => draft.serverState !== "ready");
+    const workspaceReady =
+      (state.agentWorkspaceStatus ?? "ready") === "ready";
+    const targetReady = isChat || Boolean(threadForTarget(state, target));
+    sendButton.disabled =
+      !state.currentAgentRef ||
+      !workspaceReady ||
+      !targetReady ||
+      blocked ||
+      (!textarea.value.trim() && !hasReady);
+  }
+
+  async function addFiles(target, files) {
+    const values = [...(files ?? [])];
+    if (values.length === 0) return;
+    composerErrors[target] = "";
+    try {
+      await actions.addAttachments(target, values);
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      const names = values
+        .map((file) => file?.name)
+        .filter(Boolean)
+        .join("、");
+      composerErrors[target] =
+        `${names ? `${names}：` : ""}${error?.message ?? "附件添加失败。"}`;
+      showToast(error?.message ?? "附件添加失败。", "error");
+    } finally {
+      render(store.getState());
+    }
+  }
+
+  $(documentRef, "retryAgentLoadButton").addEventListener("click", () => {
+    const agentRef = store.getState().currentAgentRef;
+    if (!agentRef) return;
+    void actions.switchAgent(agentRef).catch(
+      (error) => showToast(error.message ?? "Agent 加载失败。", "error")
+    );
+  }, listenerOptions);
 
   $(documentRef, "mobileAgentSelect")?.addEventListener("change", (event) => {
     if (!event.target.value) return;
@@ -333,6 +575,44 @@ export function createRenderer(input) {
   ]) {
     const form = $(documentRef, formId);
     const textarea = $(documentRef, inputId);
+    const isChat = target === "chat";
+    const attachmentButton = $(
+      documentRef,
+      isChat ? "messageAttachmentButton" : "workAttachmentButton"
+    );
+    const attachmentInput = $(
+      documentRef,
+      isChat ? "messageAttachmentInput" : "workAttachmentInput"
+    );
+    attachmentButton.addEventListener("click", () => {
+      attachmentInput.click();
+    }, listenerOptions);
+    attachmentInput.addEventListener("change", () => {
+      const files = [...(attachmentInput.files ?? [])];
+      attachmentInput.value = "";
+      void addFiles(target, files);
+    }, listenerOptions);
+    textarea.addEventListener("paste", (event) => {
+      const files = [...(event.clipboardData?.files ?? [])];
+      if (files.length === 0) return;
+      event.preventDefault();
+      void addFiles(target, files);
+    }, listenerOptions);
+    form.addEventListener("dragover", (event) => {
+      if (![...(event.dataTransfer?.types ?? [])].includes("Files")) return;
+      event.preventDefault();
+      form.classList.add("drag-active");
+    }, listenerOptions);
+    form.addEventListener("dragleave", () => {
+      form.classList.remove("drag-active");
+    }, listenerOptions);
+    form.addEventListener("drop", (event) => {
+      const files = [...(event.dataTransfer?.files ?? [])];
+      form.classList.remove("drag-active");
+      if (files.length === 0) return;
+      event.preventDefault();
+      void addFiles(target, files);
+    }, listenerOptions);
     textarea.addEventListener("keydown", (event) => {
       if (
         event.key === "Enter" &&
@@ -344,16 +624,33 @@ export function createRenderer(input) {
       }
     }, listenerOptions);
     textarea.addEventListener("input", () => {
+      if (textarea.style) {
+        textarea.style.height = "auto";
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
+      }
+      updateComposerAvailability(target);
       void actions.saveDraft(target, textarea.value)
         .catch((error) => showToast(error.message ?? "草稿保存失败。", "error"));
     }, listenerOptions);
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const text = textarea.value;
-      if (!text.trim()) return;
+      const drafts = attachmentDraftsFor(store.getState(), target);
+      const hasReady = drafts.some(
+        (draft) => draft.serverState === "ready"
+      );
+      const blocked = drafts.some(
+        (draft) => draft.serverState !== "ready"
+      );
+      if (blocked || (!text.trim() && !hasReady)) return;
       try {
         const result = await actions.send(target, text);
-        if (result?.status === "queued") textarea.value = "";
+        if (result?.status === "queued") {
+          textarea.value = "";
+          if (textarea.style) textarea.style.height = "auto";
+          textarea.focus();
+          updateComposerAvailability(target);
+        }
         else if (result?.status === "draft") {
           showToast("当前离线，内容已保存为草稿。", "error");
         } else if (result?.status === "failed") {
@@ -409,6 +706,32 @@ export function createRenderer(input) {
     const agentReady = Boolean(state.currentAgentRef);
     const currentAgent = renderCurrentAgent(documentRef, state);
     const agentName = currentAgent?.displayName ?? null;
+    if (state.currentAgentRef !== lastAnnouncedAgentRef) {
+      lastAnnouncedAgentRef = state.currentAgentRef;
+      $(documentRef, "agentWorkspaceAnnouncement").textContent = agentName
+        ? `已切换到 ${agentName} 的独立会话`
+        : "当前未选择 Agent";
+    }
+    const workspaceStatus = state.agentWorkspaceStatus ??
+      (agentReady ? "ready" : "empty");
+    const workspaceBlocked =
+      workspaceStatus === "loading" || workspaceStatus === "error";
+    const workspaceState = $(documentRef, "agentWorkspaceState");
+    workspaceState.className =
+      `agent-workspace-state ${workspaceStatus}${workspaceBlocked ? "" : " hidden"}`;
+    $(documentRef, "agentWorkspaceStateTitle").textContent =
+      workspaceStatus === "error"
+        ? `${agentName ?? "Agent"} 加载失败`
+        : `正在打开 ${agentName ?? "Agent"}`;
+    $(documentRef, "agentWorkspaceStateMessage").textContent =
+      workspaceStatus === "error"
+        ? state.agentWorkspaceError?.message ??
+          "没有覆盖成其他 Agent 的内容。你可以安全重试。"
+        : `正在恢复 ${agentName ?? "这个 Agent"} 的独立 Chat、Work、草稿和附件。`;
+    $(documentRef, "retryAgentLoadButton").classList.toggle(
+      "hidden",
+      workspaceStatus !== "error"
+    );
     renderAgentSelector(
       documentRef,
       listenerOptions,
@@ -422,8 +745,14 @@ export function createRenderer(input) {
       button.disabled = !agentReady;
     });
     const section = state.section ?? "chat";
-    $(documentRef, "chatSection").classList.toggle("hidden", section !== "chat");
-    $(documentRef, "workSection").classList.toggle("hidden", section !== "work");
+    $(documentRef, "chatSection").classList.toggle(
+      "hidden",
+      workspaceBlocked || section !== "chat"
+    );
+    $(documentRef, "workSection").classList.toggle(
+      "hidden",
+      workspaceBlocked || section !== "work"
+    );
     documentRef.querySelectorAll("[data-section]").forEach((button) => {
       const active = button.dataset.section === section;
       button.classList.toggle("active", active);
@@ -440,6 +769,18 @@ export function createRenderer(input) {
     $(documentRef, "workMessageInput").placeholder = agentName
       ? `让 ${agentName} 继续推进当前 Work…`
       : "在当前 Work 中继续…";
+    $(documentRef, "chatEmptyTitle").textContent = agentName
+      ? `开始和 ${agentName} 对话`
+      : "从一句话开始";
+    $(documentRef, "chatEmptyMessage").textContent = agentName
+      ? `这里是你和 ${agentName} 在所有个人设备上共享的独立 Chat。`
+      : "选择 Agent 后开始独立会话。";
+    $(documentRef, "workEmptyTitle").textContent = agentName
+      ? `让 ${agentName} 继续推进`
+      : "让这个事项继续推进";
+    $(documentRef, "workEmptyMessage").textContent = agentName
+      ? `打开或创建一个只属于 ${agentName} 的 Work。`
+      : "打开或创建一个 Work 后，可以在独立上下文中继续对话。";
 
     const syncStatus = state.sync?.status ?? "idle";
     $(documentRef, "syncStatus").className = `sync-pill ${syncStatus}`;
@@ -487,10 +828,31 @@ export function createRenderer(input) {
     if (documentRef.activeElement !== $(documentRef, "messageInput") && $(documentRef, "messageInput").value !== chatDraft) {
       $(documentRef, "messageInput").value = chatDraft;
     }
-    $(documentRef, "messageInput").disabled = !agentReady;
-    $(documentRef, "sendMessageButton").disabled = !agentReady;
+    const chatAttachments = attachmentDraftsFor(state, "chat");
+    const chatAttachmentState = renderAttachmentTray(
+      documentRef,
+      listenerOptions,
+      $(documentRef, "messageAttachmentTray"),
+      $(documentRef, "messageAttachmentError"),
+      chatAttachments,
+      (attachmentRef) => {
+        void Promise.resolve(actions.cancelAttachment(attachmentRef)).catch(
+          (error) => showToast(error.message ?? "附件移除失败。", "error")
+        );
+      },
+      composerErrors.chat
+    );
+    $(documentRef, "messageInput").disabled =
+      !agentReady || workspaceBlocked;
+    $(documentRef, "messageAttachmentButton").disabled =
+      !agentReady || workspaceBlocked;
+    $(documentRef, "messageAttachmentInput").disabled =
+      !agentReady || workspaceBlocked;
+    updateComposerAvailability("chat");
     $(documentRef, "composerStatus").textContent = state.network?.online === false
       ? "当前离线，输入会保存为草稿"
+      : chatAttachmentState.blocked
+        ? "等待全部附件上传完成"
       : agentReady
         ? "Enter 发送 · Shift+Enter 换行"
         : state.agentSelectionKind === "unconfigured"
@@ -519,16 +881,37 @@ export function createRenderer(input) {
       onSelect: () => undefined,
       onRetry: retryOutgoing
     });
-    $(documentRef, "workMessageInput").disabled = !agentReady || !work;
-    $(documentRef, "workSendMessageButton").disabled = !agentReady || !work;
+    $(documentRef, "workMessageInput").disabled =
+      !agentReady || !work || workspaceBlocked;
     const workDraft = workThreadRef ? state.drafts?.[workThreadRef] ?? "" : "";
     if (documentRef.activeElement !== $(documentRef, "workMessageInput") && $(documentRef, "workMessageInput").value !== workDraft) {
       $(documentRef, "workMessageInput").value = workDraft;
     }
+    const workAttachments = attachmentDraftsFor(state, "work");
+    const workAttachmentState = renderAttachmentTray(
+      documentRef,
+      listenerOptions,
+      $(documentRef, "workAttachmentTray"),
+      $(documentRef, "workAttachmentError"),
+      workAttachments,
+      (attachmentRef) => {
+        void Promise.resolve(actions.cancelAttachment(attachmentRef)).catch(
+          (error) => showToast(error.message ?? "附件移除失败。", "error")
+        );
+      },
+      composerErrors.work
+    );
+    $(documentRef, "workAttachmentButton").disabled =
+      !agentReady || !work || workspaceBlocked;
+    $(documentRef, "workAttachmentInput").disabled =
+      !agentReady || !work || workspaceBlocked;
+    updateComposerAvailability("work");
     $(documentRef, "workComposerStatus").textContent = !work
       ? "先选择一个 Work"
       : state.network?.online === false
         ? "当前离线，输入会保存为草稿"
+        : workAttachmentState.blocked
+          ? "等待全部附件上传完成"
         : "只在当前 Work 上下文中发送";
   }
 

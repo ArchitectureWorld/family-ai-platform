@@ -316,6 +316,156 @@ afterEach(async () => {
 });
 
 describe("Member ProductWorkbench secure lifecycle", () => {
+  it("keeps a late zzh initialization from replacing or rejecting the newer Codex workspace", async () => {
+    const zzhSnapshotEntered = deferred<void>();
+    const releaseZzhSnapshot = deferred<void>();
+    const memory = createMemoryCache();
+    let delayNextSnapshot = false;
+    let delayed = false;
+    const cache = {
+      transaction: vi.fn(async (
+        stores: string[],
+        callback: (transaction: unknown) => unknown
+      ) => {
+        if (
+          delayNextSnapshot &&
+          !delayed &&
+          stores.length === MEMBER_CACHE_STORES.length &&
+          MEMBER_CACHE_STORES.every((store) => stores.includes(store))
+        ) {
+          delayed = true;
+          zzhSnapshotEntered.resolve();
+          await releaseZzhSnapshot.promise;
+        }
+        return memory.transaction(stores, callback as never);
+      }),
+      close: vi.fn()
+    };
+    const mountedAgents = [
+      {
+        assignmentRef: "assignment:zzh",
+        agentRef: "agent:hermes-zzh",
+        displayName: "zzh",
+        providerProfileRef: "provider-profile:hermes-zzh",
+        isDefault: true,
+        status: "idle",
+        statusLabel: "空闲"
+      },
+      {
+        assignmentRef: "assignment:codex",
+        agentRef: "agent:codex-cli",
+        displayName: "Codex",
+        providerProfileRef: "provider-profile:codex-cli",
+        isDefault: false,
+        status: "working",
+        statusLabel: "工作中"
+      }
+    ];
+    const context = memberContextFixture({
+      mountedAgents,
+      defaultAgentRef: "agent:hermes-zzh"
+    });
+    const fetchImpl = vi.fn(async (
+      input: RequestInfo | URL,
+      init: RequestInit = {}
+    ) => {
+      const url = new URL(
+        typeof input === "string" ? input : input.toString(),
+        "http://member.test"
+      );
+      const method = String(init.method ?? "GET").toUpperCase();
+      const agentRef = url.searchParams.get("agentRef");
+      if (method === "GET" && url.pathname === "/api/v1/chat") {
+        const suffix = agentRef === "agent:codex-cli" ? "codex" : "zzh";
+        return Response.json({
+          protocolVersion: 1,
+          chat: {
+            threadRef: `thread:${suffix}-chat`,
+            homeChatStreamRef: `home-chat:${suffix}`
+          },
+          currentEpisode: {
+            dailyEpisodeRef: `daily-episode:${suffix}`,
+            threadRef: `thread:${suffix}-chat`
+          }
+        });
+      }
+      if (
+        method === "GET" &&
+        url.pathname === "/api/v1/work-conversations"
+      ) {
+        return Response.json({ protocolVersion: 1, conversations: [] });
+      }
+      const messages = url.pathname.match(
+        /^\/api\/v1\/threads\/([^/]+)\/messages$/u
+      );
+      if (method === "GET" && messages) {
+        const threadRef = decodeURIComponent(messages[1]);
+        return Response.json({
+          protocolVersion: 1,
+          threadRef,
+          messages: [],
+          nextBeforeSequence: null
+        });
+      }
+      throw new Error(`UNEXPECTED_FETCH:${method} ${url.pathname}${url.search}`);
+    });
+    const env = harness({ context, cache, fetchImpl });
+    const workbench = await startProductWorkbench(context, env.options);
+
+    delayNextSnapshot = true;
+    const zzhSwitch = workbench.actions.switchAgent("agent:hermes-zzh");
+    await zzhSnapshotEntered.promise;
+    expect(workbench.store.getState()).toMatchObject({
+      currentAgentRef: "agent:hermes-zzh",
+      agentWorkspaceStatus: "loading",
+      chat: null,
+      messagesByThread: {}
+    });
+
+    await expect(
+      workbench.actions.switchAgent("agent:codex-cli")
+    ).resolves.toBe("agent:codex-cli");
+    expect(workbench.store.getState()).toMatchObject({
+      currentAgentRef: "agent:codex-cli",
+      agentWorkspaceStatus: "ready",
+      chat: { threadRef: "thread:codex-chat" }
+    });
+
+    releaseZzhSnapshot.resolve();
+    await expect(zzhSwitch).resolves.toBeNull();
+    expect(workbench.store.getState()).toMatchObject({
+      currentAgentRef: "agent:codex-cli",
+      agentWorkspaceStatus: "ready",
+      chat: { threadRef: "thread:codex-chat" }
+    });
+  });
+
+  it("blocks a programmatic send while the selected Thread has an incomplete attachment", async () => {
+    const env = harness();
+    const workbench = await startProductWorkbench(env.context, env.options);
+    const state = workbench.store.getState();
+    workbench.store.setState({
+      network: { online: true },
+      attachmentDrafts: [{
+        attachmentRef: "attachment:uploading",
+        agentRef: state.currentAgentRef,
+        threadRef: state.chat.threadRef,
+        fileName: "pending.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 1024,
+        progress: 0.5,
+        serverState: "uploading"
+      }]
+    });
+
+    await expect(
+      workbench.actions.send("chat", "不能绕过上传状态")
+    ).rejects.toMatchObject({
+      code: "ATTACHMENT_UPLOAD_INCOMPLETE"
+    });
+    expect(workbench.store.getState().outgoing).toEqual([]);
+  });
+
   it("validates identity and publishes the cleanup pointer before projections, rendering, initialization, or Sync", async () => {
     const env = harness();
 

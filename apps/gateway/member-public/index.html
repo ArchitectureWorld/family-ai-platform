@@ -131,6 +131,15 @@
             <span class="device-pill" id="deviceName">当前浏览器</span>
           </div>
         </header>
+        <p class="sr-only" id="agentWorkspaceAnnouncement" aria-live="polite"></p>
+        <section class="agent-workspace-state hidden" id="agentWorkspaceState" role="status" aria-live="polite">
+          <div class="workspace-skeleton" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <h2 id="agentWorkspaceStateTitle">正在打开 Agent</h2>
+          <p id="agentWorkspaceStateMessage">正在恢复这个 Agent 的独立 Chat、Work 和附件。</p>
+          <button class="secondary-button hidden" id="retryAgentLoadButton" type="button">重试加载</button>
+        </section>
 
         <section class="product-section" id="chatSection" aria-labelledby="chatHeading">
           <header class="section-heading">
@@ -149,14 +158,22 @@
             <div class="message-list" id="threadMessages" role="log" aria-live="polite" aria-relevant="additions text"></div>
             <div class="empty-thread" id="chatEmptyState">
               <span aria-hidden="true">✦</span>
-              <h3>从一句话开始</h3>
-              <p>这里是你在所有个人设备上共享的长期 Chat。</p>
+              <h3 id="chatEmptyTitle">从一句话开始</h3>
+              <p id="chatEmptyMessage">这里是你在所有个人设备上共享的长期 Chat。</p>
             </div>
           </div>
 
           <form class="message-composer" id="messageComposer">
+            <div class="attachment-tray" id="messageAttachmentTray" role="list" aria-label="Chat 附件"></div>
+            <p class="attachment-error hidden" id="messageAttachmentError" role="alert"></p>
             <label class="sr-only" for="messageInput">消息输入</label>
-            <textarea id="messageInput" aria-label="消息输入" rows="1" maxlength="12000" placeholder="给个人助理发消息…"></textarea>
+            <div class="composer-input-row">
+              <button class="attachment-button" id="messageAttachmentButton" type="button" aria-label="添加 Chat 附件" title="添加附件">
+                <span aria-hidden="true">📎</span>
+              </button>
+              <input class="file-input" id="messageAttachmentInput" type="file" multiple aria-label="选择 Chat 附件" accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.doc,.docx,.csv,.xls,.xlsx,.ppt,.pptx,.txt,.md,.markdown,.js,.mjs,.cjs,.ts,.tsx,.jsx,.py,.java,.c,.cc,.cpp,.h,.hpp,.go,.rs,.rb,.php,.sh,.bash,.zsh,.sql,.html,.css,.json,.yaml,.yml,.toml,.xml">
+              <textarea id="messageInput" aria-label="消息输入" rows="1" maxlength="12000" placeholder="给个人助理发消息…"></textarea>
+            </div>
             <div class="composer-footer">
               <span id="composerStatus" role="status">Enter 发送 · Shift+Enter 换行</span>
               <button class="primary-button compact-button" id="sendMessageButton" type="submit">发送</button>
@@ -181,14 +198,22 @@
                 <div class="message-list" id="workThreadMessages" role="log" aria-live="polite" aria-relevant="additions text"></div>
                 <div class="empty-thread" id="workEmptyState">
                   <span aria-hidden="true">⌁</span>
-                  <h3>让这个事项继续推进</h3>
-                  <p>打开或创建一个 Work 后，可以在独立上下文中继续对话。</p>
+                  <h3 id="workEmptyTitle">让这个事项继续推进</h3>
+                  <p id="workEmptyMessage">打开或创建一个 Work 后，可以在独立上下文中继续对话。</p>
                 </div>
               </div>
 
               <form class="message-composer" id="workMessageComposer">
+                <div class="attachment-tray" id="workAttachmentTray" role="list" aria-label="Work 附件"></div>
+                <p class="attachment-error hidden" id="workAttachmentError" role="alert"></p>
                 <label class="sr-only" for="workMessageInput">Work 消息输入</label>
-                <textarea id="workMessageInput" aria-label="Work 消息输入" rows="1" maxlength="12000" placeholder="在当前 Work 中继续…" disabled></textarea>
+                <div class="composer-input-row">
+                  <button class="attachment-button" id="workAttachmentButton" type="button" aria-label="添加 Work 附件" title="添加附件" disabled>
+                    <span aria-hidden="true">📎</span>
+                  </button>
+                  <input class="file-input" id="workAttachmentInput" type="file" multiple aria-label="选择 Work 附件" accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.doc,.docx,.csv,.xls,.xlsx,.ppt,.pptx,.txt,.md,.markdown,.js,.mjs,.cjs,.ts,.tsx,.jsx,.py,.java,.c,.cc,.cpp,.h,.hpp,.go,.rs,.rb,.php,.sh,.bash,.zsh,.sql,.html,.css,.json,.yaml,.yml,.toml,.xml" disabled>
+                  <textarea id="workMessageInput" aria-label="Work 消息输入" rows="1" maxlength="12000" placeholder="在当前 Work 中继续…" disabled></textarea>
+                </div>
                 <div class="composer-footer">
                   <span id="workComposerStatus" role="status">先选择一个 Work</span>
                   <button class="primary-button compact-button" id="workSendMessageButton" type="submit" disabled>发送</button>
