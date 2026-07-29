@@ -807,6 +807,75 @@ CREATE INDEX message_attachments_message_order_idx
   ON message_attachments(message_ref, attachment_order);
 `;
 
+const MIGRATION_V9 = `
+CREATE TABLE attachments_v9 (
+  attachment_ref TEXT PRIMARY KEY,
+  family_ref TEXT NOT NULL REFERENCES families(family_ref) ON DELETE CASCADE,
+  owner_person_ref TEXT NOT NULL REFERENCES persons(person_ref) ON DELETE CASCADE,
+  file_name TEXT NOT NULL CHECK (length(file_name) BETWEEN 1 AND 255),
+  declared_media_type TEXT NOT NULL CHECK (length(declared_media_type) BETWEEN 3 AND 127),
+  detected_media_type TEXT CHECK (
+    detected_media_type IS NULL OR length(detected_media_type) BETWEEN 3 AND 127
+  ),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 209715200),
+  reserved_bytes INTEGER NOT NULL CHECK (
+    reserved_bytes >= 0 AND reserved_bytes <= size_bytes
+  ),
+  sha256 TEXT CHECK (
+    sha256 IS NULL OR
+    (length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*')
+  ),
+  storage_key TEXT,
+  state TEXT NOT NULL CHECK (
+    state IN ('uploading', 'ready', 'attached', 'expired', 'deleted')
+  ),
+  created_at TEXT NOT NULL,
+  expires_at TEXT,
+  completed_at TEXT,
+  attached_at TEXT,
+  CHECK (
+    (state = 'uploading' AND reserved_bytes = size_bytes AND sha256 IS NULL
+      AND storage_key IS NULL AND expires_at IS NOT NULL
+      AND completed_at IS NULL AND attached_at IS NULL) OR
+    (state = 'ready' AND reserved_bytes = size_bytes AND sha256 IS NOT NULL
+      AND storage_key IS NOT NULL AND expires_at IS NULL
+      AND completed_at IS NOT NULL AND attached_at IS NULL) OR
+    (state = 'attached' AND reserved_bytes = size_bytes AND sha256 IS NOT NULL
+      AND storage_key IS NOT NULL AND expires_at IS NULL
+      AND completed_at IS NOT NULL AND attached_at IS NOT NULL) OR
+    (state IN ('expired', 'deleted') AND reserved_bytes = 0)
+  )
+);
+
+INSERT INTO attachments_v9(
+  attachment_ref, family_ref, owner_person_ref, file_name,
+  declared_media_type, detected_media_type, size_bytes, reserved_bytes,
+  sha256, storage_key, state, created_at, expires_at, completed_at,
+  attached_at
+)
+SELECT
+  attachment_ref, family_ref, owner_person_ref, file_name,
+  declared_media_type, detected_media_type, size_bytes, reserved_bytes,
+  sha256, storage_key, state, created_at, expires_at, completed_at,
+  attached_at
+FROM attachments;
+
+DROP INDEX attachments_family_quota_state_idx;
+DROP INDEX attachments_owner_state_idx;
+DROP INDEX attachments_expiry_idx;
+DROP TABLE attachments;
+ALTER TABLE attachments_v9 RENAME TO attachments;
+
+CREATE INDEX attachments_family_quota_state_idx
+  ON attachments(family_ref, state, reserved_bytes);
+CREATE INDEX attachments_owner_state_idx
+  ON attachments(owner_person_ref, state, created_at);
+CREATE INDEX attachments_expiry_idx
+  ON attachments(state, expires_at) WHERE state = 'uploading';
+CREATE INDEX attachments_storage_key_idx
+  ON attachments(storage_key) WHERE storage_key IS NOT NULL;
+`;
+
 function applyMigrationV8(db: GatewayDatabase): void {
   db.pragma("foreign_keys = OFF");
   try {
@@ -825,6 +894,24 @@ function applyMigrationV8(db: GatewayDatabase): void {
   }
 }
 
+function applyMigrationV9(db: GatewayDatabase): void {
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(MIGRATION_V9);
+      db.prepare(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES(9, ?)"
+      ).run(new Date().toISOString());
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  const violations = db.pragma("foreign_key_check") as unknown[];
+  if (violations.length > 0) {
+    throw new Error("Gateway V9 migration produced foreign key violations");
+  }
+}
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -832,7 +919,10 @@ function latestMigrationVersion(db: GatewayDatabase): number {
   return row?.version ?? 0;
 }
 
-function applyMigrations(db: GatewayDatabase, migrationLimit: 6 | 7 | 8): void {
+function applyMigrations(
+  db: GatewayDatabase,
+  migrationLimit: 6 | 7 | 8 | 9
+): void {
   const ledgerExists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
     .get();
@@ -898,9 +988,13 @@ function applyMigrations(db: GatewayDatabase, migrationLimit: 6 | 7 | 8): void {
     applyMigrationV7(db);
     latest = 7;
   }
-  if (latest === 7 && migrationLimit === 8) {
+  if (latest === 7 && migrationLimit >= 8) {
     applyMigrationV8(db);
     latest = 8;
+  }
+  if (latest === 8 && migrationLimit >= 9) {
+    applyMigrationV9(db);
+    latest = 9;
   }
   if (latest !== migrationLimit) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
@@ -908,7 +1002,7 @@ function applyMigrations(db: GatewayDatabase, migrationLimit: 6 | 7 | 8): void {
 }
 
 export interface GatewayDatabaseOpenOptions {
-  migrationLimit?: 6 | 7 | 8;
+  migrationLimit?: 6 | 7 | 8 | 9;
 }
 
 export function openGatewayDatabase(
@@ -920,7 +1014,7 @@ export function openGatewayDatabase(
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
-  applyMigrations(db, options.migrationLimit ?? 8);
+  applyMigrations(db, options.migrationLimit ?? 9);
   return db;
 }
 

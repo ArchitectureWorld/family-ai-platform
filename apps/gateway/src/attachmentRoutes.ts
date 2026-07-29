@@ -277,6 +277,7 @@ export function registerAttachmentRoutes(
           "附件分片尚未上传完整。"
         );
       }
+      let assembledStorageKey: string | null = null;
       try {
         const assembled = await input.storage.assemble({
           attachmentRef: attachment.attachmentRef,
@@ -284,6 +285,7 @@ export function registerAttachmentRoutes(
           expectedBytes: attachment.sizeBytes,
           expectedSha256: command.sha256
         });
+        assembledStorageKey = assembled.storageKey;
         const inspection = inspectAttachmentPrefix({
           fileName: attachment.fileName,
           declaredMediaType: attachment.declaredMediaType,
@@ -305,6 +307,12 @@ export function registerAttachmentRoutes(
           attachment: input.repository.publicMetadata(completed)
         });
       } catch (error) {
+        if (
+          assembledStorageKey &&
+          !input.repository.hasLiveStorageReference(assembledStorageKey)
+        ) {
+          input.storage.removeStorageKeys([assembledStorageKey]);
+        }
         return attachmentError(error);
       }
     }

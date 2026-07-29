@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -172,6 +172,32 @@ describe("attachment upload and download routes", () => {
     expect(completed.statusCode).toBe(200);
     return attachmentRef;
   }
+
+  it("accepts identical content twice and preserves the shared blob when one upload is cancelled", async () => {
+    const bytes = Buffer.from("%PDF-1.7\nshared attachment bytes\n", "utf8");
+    const firstRef = await completeUpload({ bytes, fileName: "first.pdf" });
+    const secondRef = await completeUpload({ bytes, fileName: "second.pdf" });
+    expect(secondRef).not.toBe(firstRef);
+
+    const cancelled = await app.inject({
+      method: "DELETE",
+      url:
+        `/api/v1/attachments/uploads/${encodeURIComponent(secondRef)}`,
+      headers: {
+        ...entryHeaders(personal),
+        "x-family-ai-web-request": "1"
+      }
+    });
+    expect(cancelled.statusCode).toBe(204);
+
+    const firstDownload = await app.inject({
+      method: "GET",
+      url: `/api/v1/attachments/${encodeURIComponent(firstRef)}`,
+      headers: entryHeaders(personal)
+    });
+    expect(firstDownload.statusCode).toBe(200);
+    expect(firstDownload.rawPayload).toEqual(bytes);
+  });
 
   it("streams, replays, completes, and downloads an owner attachment", async () => {
     const bytes = Buffer.from("%PDF-1.7\nattachment route fixture\n", "utf8");
@@ -399,6 +425,13 @@ describe("attachment upload and download routes", () => {
     expect(completed.json()).toMatchObject({
       code: "ATTACHMENT_TEXT_INVALID"
     });
+    expect(existsSync(join(
+      directory,
+      "attachments",
+      "files",
+      sha256(bytes).slice(0, 2),
+      `${sha256(bytes)}.blob`
+    ))).toBe(false);
   });
 
   it("atomically attaches ready uploads to an attachment-only Thread message", async () => {

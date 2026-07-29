@@ -433,10 +433,33 @@ export class AttachmentRepository {
       `SELECT storage_key FROM attachment_chunks
        WHERE attachment_ref = ? ORDER BY chunk_index`
     ).all(attachmentRef) as Array<{ storage_key: string }>;
+    const finalStorageKey = attachment?.storage_key;
+    const finalIsShared = finalStorageKey
+      ? this.hasLiveStorageReference(finalStorageKey, attachmentRef)
+      : false;
     return [
       ...chunks.map((row) => row.storage_key),
-      ...(attachment?.storage_key ? [attachment.storage_key] : [])
+      ...(finalStorageKey && !finalIsShared ? [finalStorageKey] : [])
     ];
+  }
+
+  hasLiveStorageReference(
+    storageKey: string,
+    excludingAttachmentRef?: string
+  ): boolean {
+    const row = excludingAttachmentRef
+      ? this.db.prepare(
+          `SELECT 1 FROM attachments
+           WHERE storage_key = ? AND attachment_ref <> ?
+             AND state IN ('ready', 'attached')
+           LIMIT 1`
+        ).get(storageKey, excludingAttachmentRef)
+      : this.db.prepare(
+          `SELECT 1 FROM attachments
+           WHERE storage_key = ? AND state IN ('ready', 'attached')
+           LIMIT 1`
+        ).get(storageKey);
+    return row !== undefined;
   }
 
   cancelUpload(input: {

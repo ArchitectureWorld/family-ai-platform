@@ -544,10 +544,11 @@ export class DomainEventStore {
     if (
       coreVersion?.version !== 6 &&
       coreVersion?.version !== 7 &&
-      coreVersion?.version !== 8
+      coreVersion?.version !== 8 &&
+      coreVersion?.version !== 9
     ) {
       throw new Error(
-        `Domain Event schema requires Gateway schema version 6, 7, or 8, got ${String(coreVersion?.version)}`
+        `Domain Event schema requires Gateway schema version 6, 7, 8, or 9, got ${String(coreVersion?.version)}`
       );
     }
     this.db.transaction(() => {

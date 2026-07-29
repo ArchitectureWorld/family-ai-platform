@@ -139,6 +139,39 @@ describe("attachment metadata repository", () => {
     expect(expired).toEqual([]);
   });
 
+  it("shares one content-addressed blob without deleting another attachment's bytes", () => {
+    const storageKey = "files/ee/shared.blob";
+    const first = reserve(4, "first.pdf");
+    repository.completeUpload({
+      familyRef,
+      personRef,
+      attachmentRef: first.attachmentRef,
+      detectedMediaType: "application/pdf",
+      sha256: "e".repeat(64),
+      storageKey
+    });
+    const second = reserve(4, "second.pdf");
+    repository.completeUpload({
+      familyRef,
+      personRef,
+      attachmentRef: second.attachmentRef,
+      detectedMediaType: "application/pdf",
+      sha256: "e".repeat(64),
+      storageKey
+    });
+
+    expect(repository.cancelUpload({
+      familyRef,
+      personRef,
+      attachmentRef: second.attachmentRef
+    })).toEqual([]);
+    expect(repository.requireReady({
+      familyRef,
+      personRef,
+      attachmentRef: first.attachmentRef
+    })).toMatchObject({ storageKey, sha256: "e".repeat(64) });
+  });
+
   it("expires incomplete uploads after 24 hours and releases reservation", () => {
     const upload = reserve(8);
     repository.recordChunk({

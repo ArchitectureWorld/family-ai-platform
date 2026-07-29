@@ -11,7 +11,7 @@ import { FamilyDomainRepository } from "../src/familyDomain.js";
 
 const openAtVersion = openGatewayDatabase as unknown as (
   databasePath: string,
-  options: { migrationLimit: 7 | 8 }
+  options: { migrationLimit: 7 | 8 | 9 }
 ) => GatewayDatabase;
 
 describe("attachment metadata migration", () => {
@@ -84,7 +84,7 @@ describe("attachment metadata migration", () => {
     db = openGatewayDatabase(databasePath);
     expect(
       db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()
-    ).toEqual({ version: 8 });
+    ).toEqual({ version: 9 });
     expect(
       db.prepare(
         `SELECT message_ref, thread_sequence, content_text
@@ -169,6 +169,16 @@ describe("attachment metadata migration", () => {
       "2026-07-29T08:01:00.000Z",
       "2026-07-29T08:01:00.000Z"
     );
+    expect(() => insertAttachment.run(
+      "attachment:v9-same-content",
+      onboarding.family.familyRef,
+      onboarding.owner.personRef,
+      "same-content.pdf",
+      "a".repeat(64),
+      "files/aa/first.blob",
+      "2026-07-29T08:01:00.000Z",
+      "2026-07-29T08:01:00.000Z"
+    )).not.toThrow();
     db.prepare(
       `INSERT INTO message_attachments
        (message_ref, attachment_ref, attachment_order) VALUES(?, ?, 0)`
