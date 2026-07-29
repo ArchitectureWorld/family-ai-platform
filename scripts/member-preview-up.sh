@@ -272,8 +272,6 @@ prepare_config() {
       builtin printf 'FAMILY_AI_HERMES_JARVIS_HOME=%s\n' "$HERMES_JARVIS_HOME"
       builtin printf 'FAMILY_AI_HERMES_PERSONAL_HOME=%s\n' "$HERMES_PERSONAL_HOME"
       builtin printf 'FAMILY_AI_HERMES_PROFILES=%s\n' "$HERMES_PROFILES"
-      builtin printf 'FAMILY_AI_HERMES_MODEL=deepseek-v4-flash\n'
-      builtin printf 'FAMILY_AI_HERMES_PROVIDER=sensenova\n'
       builtin printf 'FAMILY_AI_CODEX_EXECUTABLE=%s\n' "$CODEX_EXECUTABLE"
       builtin printf 'FAMILY_AI_CODEX_WORKING_DIRECTORY=%s\n' "$CODEX_WORKING_DIRECTORY"
     )"
@@ -314,7 +312,6 @@ const expected = [
   "GATEWAY_PREVIEW_ADMIN_ORIGIN", "FAMILY_AI_PROVIDER_MODE",
   "FAMILY_AI_HERMES_EXECUTABLE", "FAMILY_AI_HERMES_JARVIS_HOME",
   "FAMILY_AI_HERMES_PERSONAL_HOME", "FAMILY_AI_HERMES_PROFILES",
-  "FAMILY_AI_HERMES_MODEL", "FAMILY_AI_HERMES_PROVIDER",
   "FAMILY_AI_CODEX_EXECUTABLE", "FAMILY_AI_CODEX_WORKING_DIRECTORY"
 ];
 if (lines.length !== expected.length) process.exit(1);
@@ -330,8 +327,6 @@ if (
   values.get("GATEWAY_PREVIEW_ADMIN_ENTRY_PATH") !== adminEntryPath ||
   values.get("GATEWAY_PREVIEW_ADMIN_ORIGIN") !== "http://127.0.0.1:8791" ||
   values.get("FAMILY_AI_PROVIDER_MODE") !== "real" ||
-  values.get("FAMILY_AI_HERMES_MODEL") !== "deepseek-v4-flash" ||
-  values.get("FAMILY_AI_HERMES_PROVIDER") !== "sensenova" ||
   !/^(?:[a-z0-9_-]+)(?:,[a-z0-9_-]+)*$/.test(
     values.get("FAMILY_AI_HERMES_PROFILES") ?? ""
   ) ||

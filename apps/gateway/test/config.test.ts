@@ -2,6 +2,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync
 } from "node:fs";
@@ -23,16 +24,26 @@ function runtimeFixture() {
   const root = mkdtempSync(join(tmpdir(), "family-ai-runtime-config-"));
   temporaryDirectories.push(root);
   const executable = join(root, "provider-cli");
+  const invocationLog = join(root, "invocations.jsonl");
   const jarvisHome = join(root, "jarvis");
   const personalHome = join(root, "personal");
   const codexWorkingDirectory = join(root, "workspace");
-  writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  writeFileSync(executable, `#!/usr/bin/env node
+const { appendFileSync } = require("node:fs");
+appendFileSync(
+  ${JSON.stringify(invocationLog)},
+  JSON.stringify(process.argv.slice(2)) + "\\n"
+);
+process.stdout.write("Profile native reply");
+process.stderr.write("session_id: profile_native_session_42\\n");
+`, { mode: 0o700 });
   for (const directory of [jarvisHome, personalHome, codexWorkingDirectory]) {
     mkdirSync(directory);
   }
   return {
     root,
     executable,
+    invocationLog,
     jarvisHome,
     personalHome,
     codexWorkingDirectory
@@ -47,8 +58,6 @@ function realEnvironment(fixture = runtimeFixture()): NodeJS.ProcessEnv {
     FAMILY_AI_HERMES_JARVIS_HOME: fixture.jarvisHome,
     FAMILY_AI_HERMES_PERSONAL_HOME: fixture.personalHome,
     FAMILY_AI_HERMES_PROFILES: "ZZH,nsy",
-    FAMILY_AI_HERMES_MODEL: "deepseek-v4-flash",
-    FAMILY_AI_HERMES_PROVIDER: "sensenova",
     FAMILY_AI_CODEX_EXECUTABLE: fixture.executable,
     FAMILY_AI_CODEX_WORKING_DIRECTORY: fixture.codexWorkingDirectory
   };
@@ -157,9 +166,7 @@ describe("Gateway configuration", () => {
         executable: fixture.executable,
         jarvisHome: fixture.jarvisHome,
         personalHome: fixture.personalHome,
-        profiles: ["zzh", "nsy"],
-        model: "deepseek-v4-flash",
-        provider: "sensenova"
+        profiles: ["zzh", "nsy"]
       },
       codex: {
         executable: fixture.executable,
@@ -169,8 +176,6 @@ describe("Gateway configuration", () => {
 
     for (const key of [
       "FAMILY_AI_HERMES_EXECUTABLE",
-      "FAMILY_AI_HERMES_MODEL",
-      "FAMILY_AI_HERMES_PROVIDER",
       "FAMILY_AI_CODEX_EXECUTABLE"
     ]) {
       const env = { ...valid };
@@ -205,15 +210,58 @@ describe("Gateway configuration", () => {
     })).toThrow("runtime configuration");
   });
 
-  it("rejects unsafe Hermes model and Provider identifiers", () => {
-    expect(() => loadGatewayConfig({
+  it("ignores stale global Hermes model routing overrides", () => {
+    const runtime = loadGatewayConfig({
       ...realEnvironment(),
-      FAMILY_AI_HERMES_MODEL: "deepseek-v4-flash --quiet"
-    })).toThrow("runtime configuration");
-    expect(() => loadGatewayConfig({
-      ...realEnvironment(),
+      FAMILY_AI_HERMES_MODEL: "deepseek-v4-flash --quiet",
       FAMILY_AI_HERMES_PROVIDER: "SenseNova"
-    })).toThrow("runtime configuration");
+    }).providerRuntime;
+
+    expect(runtime).toMatchObject({ mode: "real" });
+    if (runtime.mode !== "real") throw new Error("real runtime expected");
+    expect(runtime.hermes).not.toHaveProperty("model");
+    expect(runtime.hermes).not.toHaveProperty("provider");
+  });
+
+  it("builds Jarvis and personal invocations without global route overrides", async () => {
+    const fixture = runtimeFixture();
+    const runtime = buildProviderRuntime(
+      loadGatewayConfig(realEnvironment(fixture)).providerRuntime
+    );
+    const baseRequest = {
+      protocolVersion: "1.0" as const,
+      invocationRef: "invocation:018f47a2-1f10-7a3d-8c2d-61f369284f31",
+      correlationRef: "correlation:018f47a2-1f10-7a3d-8c2d-61f369284f32",
+      idempotencyKey: "device:test:message:routing",
+      requestedAt: "2026-07-29T08:00:00.000Z",
+      targetAgentRef: "agent:test",
+      conversationRef: "conversation:018f47a2-1f10-7a3d-8c2d-61f369284f33",
+      content: [{ type: "text" as const, text: "route probe" }],
+      timeoutMs: 2_000
+    };
+
+    for (const providerProfileRef of [
+      "provider-profile:hermes-jarvis",
+      "provider-profile:hermes-zzh"
+    ]) {
+      await runtime.router.resolve(providerProfileRef).invoke({
+        ...baseRequest,
+        providerProfileRef
+      });
+    }
+
+    const [jarvisArgs, zzhArgs] = readFileSync(
+      fixture.invocationLog,
+      "utf8"
+    ).trim().split("\n").map(line => JSON.parse(line) as string[]);
+
+    for (const args of [jarvisArgs, zzhArgs]) {
+      expect(args).not.toContain("-m");
+      expect(args).not.toContain("--provider");
+    }
+    expect(jarvisArgs).not.toContain("-p");
+    expect(zzhArgs).toContain("-p");
+    expect(zzhArgs).toContain("zzh");
   });
 
   it("composes deterministic Agent and Provider refs for every real runtime", () => {
