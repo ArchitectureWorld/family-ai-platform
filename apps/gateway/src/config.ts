@@ -26,6 +26,8 @@ export interface RealGatewayProviderRuntimeConfig {
     jarvisHome: string;
     personalHome: string;
     profiles: readonly string[];
+    model: string;
+    provider: string;
   };
   codex: {
     executable: string;
@@ -109,6 +111,20 @@ function profileNames(raw: string | undefined): readonly string[] {
   return profiles;
 }
 
+function hermesModel(raw: string | undefined): string {
+  if (!raw || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(raw)) {
+    throw runtimeConfigurationError();
+  }
+  return raw;
+}
+
+function hermesProvider(raw: string | undefined): string {
+  if (!raw || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(raw)) {
+    throw runtimeConfigurationError();
+  }
+  return raw;
+}
+
 function providerRuntimeConfig(env: NodeJS.ProcessEnv): GatewayProviderRuntimeConfig {
   const mode = env.FAMILY_AI_PROVIDER_MODE ?? "fake";
   if (mode === "fake") return { mode };
@@ -119,7 +135,9 @@ function providerRuntimeConfig(env: NodeJS.ProcessEnv): GatewayProviderRuntimeCo
       executable: existingExecutable(env.FAMILY_AI_HERMES_EXECUTABLE),
       jarvisHome: existingDirectory(env.FAMILY_AI_HERMES_JARVIS_HOME),
       personalHome: existingDirectory(env.FAMILY_AI_HERMES_PERSONAL_HOME),
-      profiles: profileNames(env.FAMILY_AI_HERMES_PROFILES)
+      profiles: profileNames(env.FAMILY_AI_HERMES_PROFILES),
+      model: hermesModel(env.FAMILY_AI_HERMES_MODEL),
+      provider: hermesProvider(env.FAMILY_AI_HERMES_PROVIDER)
     },
     codex: {
       executable: existingExecutable(env.FAMILY_AI_CODEX_EXECUTABLE),
@@ -173,6 +191,8 @@ export function buildProviderRuntime(
       allowedEnvironment: controlledEnvironment([
         ["HERMES_HOME", config.hermes.jarvisHome]
       ]),
+      model: config.hermes.model,
+      provider: config.hermes.provider,
       providerProfileRef: jarvisProviderRef
     })
   ] as const);
@@ -194,6 +214,8 @@ export function buildProviderRuntime(
           ["HERMES_HOME", config.hermes.personalHome]
         ]),
         profileName,
+        model: config.hermes.model,
+        provider: config.hermes.provider,
         providerProfileRef
       })
     ] as const);

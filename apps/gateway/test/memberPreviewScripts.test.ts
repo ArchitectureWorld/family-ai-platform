@@ -288,6 +288,8 @@ describe("isolated Member Web Preview scripts", () => {
       "FAMILY_AI_HERMES_JARVIS_HOME",
       "FAMILY_AI_HERMES_PERSONAL_HOME",
       "FAMILY_AI_HERMES_PROFILES",
+      "FAMILY_AI_HERMES_MODEL",
+      "FAMILY_AI_HERMES_PROVIDER",
       "FAMILY_AI_CODEX_EXECUTABLE",
       "FAMILY_AI_CODEX_WORKING_DIRECTORY"
     ]) {
@@ -501,11 +503,15 @@ describe("isolated Member Web Preview scripts", () => {
       "FAMILY_AI_HERMES_JARVIS_HOME",
       "FAMILY_AI_HERMES_PERSONAL_HOME",
       "FAMILY_AI_HERMES_PROFILES",
+      "FAMILY_AI_HERMES_MODEL",
+      "FAMILY_AI_HERMES_PROVIDER",
       "FAMILY_AI_CODEX_EXECUTABLE",
       "FAMILY_AI_CODEX_WORKING_DIRECTORY"
     ]);
     expect(gatewayEnvironment).toContain("FAMILY_AI_PROVIDER_MODE=real");
     expect(gatewayEnvironment).toContain("FAMILY_AI_HERMES_PROFILES=nsy,zzg,zzh");
+    expect(gatewayEnvironment).toContain("FAMILY_AI_HERMES_MODEL=deepseek-v4-flash");
+    expect(gatewayEnvironment).toContain("FAMILY_AI_HERMES_PROVIDER=sensenova");
     expect(
       ["config", "run"].flatMap(directory =>
         readdirSync(join(runtime, directory)).filter(name => name.includes(".tmp."))

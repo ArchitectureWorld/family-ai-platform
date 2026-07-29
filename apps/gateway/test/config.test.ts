@@ -47,6 +47,8 @@ function realEnvironment(fixture = runtimeFixture()): NodeJS.ProcessEnv {
     FAMILY_AI_HERMES_JARVIS_HOME: fixture.jarvisHome,
     FAMILY_AI_HERMES_PERSONAL_HOME: fixture.personalHome,
     FAMILY_AI_HERMES_PROFILES: "ZZH,nsy",
+    FAMILY_AI_HERMES_MODEL: "deepseek-v4-flash",
+    FAMILY_AI_HERMES_PROVIDER: "sensenova",
     FAMILY_AI_CODEX_EXECUTABLE: fixture.executable,
     FAMILY_AI_CODEX_WORKING_DIRECTORY: fixture.codexWorkingDirectory
   };
@@ -155,7 +157,9 @@ describe("Gateway configuration", () => {
         executable: fixture.executable,
         jarvisHome: fixture.jarvisHome,
         personalHome: fixture.personalHome,
-        profiles: ["zzh", "nsy"]
+        profiles: ["zzh", "nsy"],
+        model: "deepseek-v4-flash",
+        provider: "sensenova"
       },
       codex: {
         executable: fixture.executable,
@@ -165,6 +169,8 @@ describe("Gateway configuration", () => {
 
     for (const key of [
       "FAMILY_AI_HERMES_EXECUTABLE",
+      "FAMILY_AI_HERMES_MODEL",
+      "FAMILY_AI_HERMES_PROVIDER",
       "FAMILY_AI_CODEX_EXECUTABLE"
     ]) {
       const env = { ...valid };
@@ -196,6 +202,17 @@ describe("Gateway configuration", () => {
     expect(() => loadGatewayConfig({
       ...realEnvironment(),
       FAMILY_AI_HERMES_PROFILES: "Jarvis,zzh"
+    })).toThrow("runtime configuration");
+  });
+
+  it("rejects unsafe Hermes model and Provider identifiers", () => {
+    expect(() => loadGatewayConfig({
+      ...realEnvironment(),
+      FAMILY_AI_HERMES_MODEL: "deepseek-v4-flash --quiet"
+    })).toThrow("runtime configuration");
+    expect(() => loadGatewayConfig({
+      ...realEnvironment(),
+      FAMILY_AI_HERMES_PROVIDER: "SenseNova"
     })).toThrow("runtime configuration");
   });
 

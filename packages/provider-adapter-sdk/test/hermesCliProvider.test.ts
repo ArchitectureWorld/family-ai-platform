@@ -40,6 +40,8 @@ function options(overrides: Partial<HermesCliProviderOptions> = {}): HermesCliPr
     cwd,
     allowedEnvironment: environment(),
     profileName: "family",
+    model: "deepseek-v4-flash",
+    provider: "sensenova",
     providerProfileRef: "provider-profile:hermes-local",
     clock: () => new Date("2026-07-21T09:00:01.000Z"),
     maxStdoutBytes: 4096,
@@ -85,6 +87,11 @@ beforeEach(async () => {
     if (prompt === "partial-fatal") {
       process.stdout.write("private unsafe answer");
       process.stderr.write("Authentication failed: invalid credential\\nsession_id: partial_session_55\\n");
+      process.exit(1);
+    }
+    if (prompt === "partial-provider-error") {
+      process.stdout.write("API call failed after 3 retries: HTTP 404: model route not found");
+      process.stderr.write("session_id: partial_session_57\\n");
       process.exit(1);
     }
     if (prompt === "valid-exit-two") {
@@ -141,7 +148,9 @@ describe("HermesCliProviderAdapter", () => {
 
     expect(second.output).toEqual([{ type: "text", text: "Hermes 第二轮。" }]);
     expect(invocations[0]?.args).toEqual([
-      "chat", "-q", "第一轮。", "--quiet", "--source", "tool", "-p", "family"
+      "chat", "-q", "第一轮。",
+      "-m", "deepseek-v4-flash", "--provider", "sensenova",
+      "--quiet", "--source", "tool", "-p", "family"
     ]);
     expect(invocations[0]?.envKeys.sort()).toEqual([
       "CODEX_HOME", "HOME", "LANG", "PATH", "TERM"
@@ -178,6 +187,7 @@ describe("HermesCliProviderAdapter", () => {
     ["partial-empty", "PROVIDER_UNAVAILABLE"],
     ["partial-duplicate-id", "PROVIDER_UNAVAILABLE"],
     ["partial-fatal", "PROVIDER_UNAVAILABLE"],
+    ["partial-provider-error", "PROVIDER_UNAVAILABLE"],
     ["valid-exit-two", "PROVIDER_UNAVAILABLE"]
   ])("rejects unsafe non-zero Hermes result %s", async (prompt, code) => {
     const adapter = new HermesCliProviderAdapter(options());
@@ -189,7 +199,7 @@ describe("HermesCliProviderAdapter", () => {
 
     expect(result).toMatchObject({ status: "failed", error: { code } });
     expect(serialized).not.toMatch(
-      /private|ambiguous|unsafe|wrong-exit|credential|authentication|stderr/i
+      /private|ambiguous|unsafe|wrong-exit|credential|authentication|route not found|stderr/i
     );
   });
 

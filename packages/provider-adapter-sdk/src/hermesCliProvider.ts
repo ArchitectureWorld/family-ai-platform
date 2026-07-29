@@ -17,6 +17,8 @@ const HERMES_SESSION_NOT_FOUND =
   /\bsession(?:\s+id)?\s+(?:was\s+)?not\s+found\b/i;
 const HERMES_FATAL_DIAGNOSTIC =
   /(?:\b(?:authentication|credential|api\s+key)\b[^\n]{0,80}\b(?:failed|invalid|missing|required)\b|\b(?:failed|unable)\s+to\s+(?:initialize|start|resume)\b)/i;
+const HERMES_UPSTREAM_FAILURE =
+  /(?:^|\n)\s*api\s+call\s+failed(?:\s+after\s+\d+\s+retries)?\s*:\s*http\s+[45]\d{2}\b/i;
 
 type ProviderFailureCode =
   | "PROVIDER_TIMEOUT"
@@ -57,6 +59,8 @@ export interface HermesCliProviderOptions {
   cwd: string;
   allowedEnvironment?: ReadonlyArray<readonly [string, string]>;
   profileName?: string;
+  model?: string;
+  provider?: string;
   providerProfileRef: string;
   clock?: () => Date;
   maxStdoutBytes?: number;
@@ -143,7 +147,14 @@ export class HermesCliProviderAdapter implements ProviderAdapter {
       return failure(request, this.clock, "PROVIDER_RESPONSE_INVALID");
     }
 
-    const args = ["chat", "-q", prompt, "--quiet", "--source", "tool"];
+    const args = ["chat", "-q", prompt];
+    if (this.options.model) {
+      args.push("-m", this.options.model);
+    }
+    if (this.options.provider) {
+      args.push("--provider", this.options.provider);
+    }
+    args.push("--quiet", "--source", "tool");
     if (this.options.profileName && this.options.profileName !== "default") {
       args.push("-p", this.options.profileName);
     }
@@ -177,7 +188,8 @@ export class HermesCliProviderAdapter implements ProviderAdapter {
         safeExternalSessionRef !== undefined &&
         result.stdout.trim().length > 0 &&
         result.stdout.length <= 12_000 &&
-        !HERMES_FATAL_DIAGNOSTIC.test(result.stderr);
+        !HERMES_FATAL_DIAGNOSTIC.test(result.stderr) &&
+        !HERMES_UPSTREAM_FAILURE.test(`${result.stdout}\n${result.stderr}`);
       if (
         result.exitCode !== 0 &&
         continuationSession &&
