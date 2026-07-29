@@ -110,6 +110,22 @@ describe("Web Entry Cookie bridge", () => {
   });
 
   it("uses HttpOnly Session cookies with the existing Chat, Work and Sync APIs", async () => {
+    const attachment = await app.inject({
+      method: "POST",
+      url: "/api/v1/attachments/uploads",
+      headers: {
+        cookie,
+        "x-family-ai-web-request": "1"
+      },
+      payload: {
+        protocolVersion: 1,
+        fileName: "cookie-report.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 32
+      }
+    });
+    expect(attachment.statusCode).toBe(201);
+
     const chat = await app.inject({
       method: "GET",
       url: "/api/v1/chat?timezone=UTC",
@@ -172,6 +188,22 @@ describe("Web Entry Cookie bridge", () => {
   });
 
   it("blocks unsafe Cookie writes but keeps explicit Bearer Header behavior unchanged", async () => {
+    const blockedAttachment = await app.inject({
+      method: "POST",
+      url: "/api/v1/attachments/uploads",
+      headers: { cookie },
+      payload: {
+        protocolVersion: 1,
+        fileName: "blocked.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 32
+      }
+    });
+    expect(blockedAttachment.statusCode).toBe(403);
+    expect(blockedAttachment.json()).toMatchObject({
+      code: "WEB_REQUEST_FORBIDDEN"
+    });
+
     const blocked = await app.inject({
       method: "POST",
       url: "/api/v1/work-conversations",

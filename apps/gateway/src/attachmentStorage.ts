@@ -313,4 +313,43 @@ export class AttachmentStorage {
     }
     return realpathSync(path);
   }
+
+  createDownloadStream(storageKey: string) {
+    const path = this.requireRegularFile(storageKey);
+    return {
+      stream: createReadStream(path),
+      sizeBytes: lstatSync(path).size
+    };
+  }
+
+  async validateUtf8Text(storageKey: string): Promise<void> {
+    const path = this.requireRegularFile(storageKey);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    try {
+      for await (const value of createReadStream(path)) {
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+        if (chunk.includes(0)) {
+          throw storageError(
+            "ATTACHMENT_TEXT_INVALID",
+            "文本附件包含无效字节。"
+          );
+        }
+        decoder.decode(chunk, { stream: true });
+      }
+      decoder.decode();
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "ATTACHMENT_TEXT_INVALID"
+      ) {
+        throw error;
+      }
+      throw storageError(
+        "ATTACHMENT_TEXT_INVALID",
+        "文本附件不是有效 UTF-8。"
+      );
+    }
+  }
 }

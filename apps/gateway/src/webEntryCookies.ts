@@ -151,6 +151,7 @@ function bridgePath(url: string): boolean {
     path === "/api/v1/work-conversations" ||
     path.startsWith("/api/v1/work-conversations/") ||
     path.startsWith("/api/v1/threads/") ||
+    path.startsWith("/api/v1/attachments/") ||
     path === "/api/v1/events/stream" ||
     path.startsWith("/api/v1/sync/");
 }

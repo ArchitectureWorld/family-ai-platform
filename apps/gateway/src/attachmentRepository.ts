@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  type AttachmentPublicMetadata,
   DEFAULT_FAMILY_ATTACHMENT_QUOTA_BYTES,
   INCOMPLETE_UPLOAD_TTL_MS,
   MAX_FILE_BYTES
@@ -36,6 +37,11 @@ export interface AttachmentRecord {
 export interface ExpiredAttachment {
   attachmentRef: string;
   storageKeys: string[];
+}
+
+export interface AttachmentDownloadRecord {
+  attachment: AttachmentRecord;
+  metadata: AttachmentPublicMetadata;
 }
 
 function domainError(
@@ -210,6 +216,31 @@ export class AttachmentRepository {
     return attachment;
   }
 
+  requireUploading(input: {
+    familyRef: string;
+    personRef: string;
+    attachmentRef: string;
+  }): AttachmentRecord {
+    const attachment = this.requireOwned(
+      input.familyRef,
+      input.personRef,
+      input.attachmentRef
+    );
+    if (
+      attachment.state !== "uploading" ||
+      !attachment.expiresAt ||
+      Date.parse(attachment.expiresAt) <= this.now().getTime()
+    ) {
+      throw domainError(
+        "ATTACHMENT_UPLOAD_EXPIRED",
+        409,
+        "conflict",
+        "附件上传已经过期。"
+      );
+    }
+    return attachment;
+  }
+
   recordChunk(input: {
     familyRef: string;
     personRef: string;
@@ -220,23 +251,7 @@ export class AttachmentRepository {
     storageKey: string;
   }): "created" | "replayed" {
     const record = this.db.transaction(() => {
-      const attachment = this.requireOwned(
-        input.familyRef,
-        input.personRef,
-        input.attachmentRef
-      );
-      if (
-        attachment.state !== "uploading" ||
-        !attachment.expiresAt ||
-        Date.parse(attachment.expiresAt) <= this.now().getTime()
-      ) {
-        throw domainError(
-          "ATTACHMENT_UPLOAD_EXPIRED",
-          409,
-          "conflict",
-          "附件上传已经过期。"
-        );
-      }
+      this.requireUploading(input);
       const existing = this.db.prepare(
         `SELECT size_bytes, sha256, storage_key FROM attachment_chunks
          WHERE attachment_ref = ? AND chunk_index = ?`
@@ -310,23 +325,7 @@ export class AttachmentRepository {
     storageKey: string;
   }): AttachmentRecord {
     const complete = this.db.transaction(() => {
-      const attachment = this.requireOwned(
-        input.familyRef,
-        input.personRef,
-        input.attachmentRef
-      );
-      if (
-        attachment.state !== "uploading" ||
-        !attachment.expiresAt ||
-        Date.parse(attachment.expiresAt) <= this.now().getTime()
-      ) {
-        throw domainError(
-          "ATTACHMENT_UPLOAD_EXPIRED",
-          409,
-          "conflict",
-          "附件上传已经过期。"
-        );
-      }
+      this.requireUploading(input);
       const completedAt = this.now().toISOString();
       this.db.prepare(
         `UPDATE attachments
@@ -373,6 +372,57 @@ export class AttachmentRepository {
       );
     }
     return attachment;
+  }
+
+  publicMetadata(attachment: AttachmentRecord): AttachmentPublicMetadata {
+    if (
+      !attachment.detectedMediaType ||
+      !attachment.sha256 ||
+      !attachment.storageKey
+    ) {
+      throw domainError(
+        "ATTACHMENT_NOT_READY",
+        409,
+        "conflict",
+        "附件尚未上传完成。"
+      );
+    }
+    return {
+      attachmentRef: attachment.attachmentRef,
+      fileName: attachment.fileName,
+      mediaType: attachment.detectedMediaType,
+      sizeBytes: attachment.sizeBytes,
+      sha256: attachment.sha256,
+      downloadUrl:
+        `/api/v1/attachments/${encodeURIComponent(attachment.attachmentRef)}`
+    };
+  }
+
+  requireDownload(input: {
+    familyRef: string;
+    personRef: string;
+    attachmentRef: string;
+  }): AttachmentDownloadRecord {
+    const attachment = this.requireOwned(
+      input.familyRef,
+      input.personRef,
+      input.attachmentRef
+    );
+    if (
+      attachment.state !== "ready" &&
+      attachment.state !== "attached"
+    ) {
+      throw domainError(
+        "ATTACHMENT_NOT_FOUND",
+        404,
+        "permission",
+        "没有找到这个附件。"
+      );
+    }
+    return {
+      attachment,
+      metadata: this.publicMetadata(attachment)
+    };
   }
 
   private storageKeys(attachmentRef: string): string[] {

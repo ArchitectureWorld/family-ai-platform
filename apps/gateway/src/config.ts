@@ -1,10 +1,11 @@
 import {
   accessSync,
   constants,
+  existsSync,
   lstatSync,
   realpathSync
 } from "node:fs";
-import { resolve } from "node:path";
+import { parse, resolve, sep } from "node:path";
 import {
   CodexCliProviderAdapter,
   FakeProviderAdapter,
@@ -47,6 +48,8 @@ export interface GatewayConfig {
   host: string;
   port: number;
   databasePath: string;
+  attachmentRoot: string;
+  attachmentQuotaBytes: number;
   deviceToken: string;
   mode: GatewayMode;
   providerRuntime: GatewayProviderRuntimeConfig;
@@ -60,6 +63,26 @@ function positiveInteger(raw: string | undefined, fallback: number, name: string
     throw new Error(`${name} must be a positive integer`);
   }
   return value;
+}
+
+function attachmentDirectory(raw: string | undefined): string {
+  const path = resolve(raw ?? ".runtime/attachments");
+  const root = parse(path).root;
+  if (
+    path === root ||
+    path === resolve(".") ||
+    path.split(sep).includes(".git")
+  ) {
+    throw new Error("attachment storage path is unsafe");
+  }
+  if (existsSync(path)) {
+    const information = lstatSync(path);
+    if (!information.isDirectory() || information.isSymbolicLink()) {
+      throw new Error("attachment storage path is unsafe");
+    }
+    return realpathSync(path);
+  }
+  return path;
 }
 
 function runtimeConfigurationError(): Error {
@@ -255,6 +278,16 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     throw new Error("GATEWAY_DEVICE_TOKEN must contain at least 24 characters");
   }
 
+  const attachmentRoot = attachmentDirectory(env.FAMILY_AI_ATTACHMENT_ROOT);
+  const attachmentQuotaBytes = positiveInteger(
+    env.FAMILY_AI_ATTACHMENT_QUOTA_BYTES,
+    21474836480,
+    "FAMILY_AI_ATTACHMENT_QUOTA_BYTES"
+  );
+  if (!Number.isSafeInteger(attachmentQuotaBytes)) {
+    throw new Error("FAMILY_AI_ATTACHMENT_QUOTA_BYTES must be a safe integer");
+  }
+
   const previewAdminEntryPath = env.GATEWAY_PREVIEW_ADMIN_ENTRY_PATH;
   const previewAdminOrigin = env.GATEWAY_PREVIEW_ADMIN_ORIGIN;
   if ((previewAdminEntryPath === undefined) !== (previewAdminOrigin === undefined)) {
@@ -273,6 +306,8 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     host,
     port,
     databasePath: resolve(env.GATEWAY_DATABASE_PATH ?? ".runtime/data/gateway.sqlite"),
+    attachmentRoot,
+    attachmentQuotaBytes,
     deviceToken,
     mode,
     ...(previewAdminEntryPath === undefined

@@ -1,4 +1,5 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
   MOBILE_ENTRY_PROTOCOL_VERSION,
@@ -22,6 +23,9 @@ import {
   type ProviderAdapter
 } from "@family-ai/provider-adapter-sdk";
 import { AgentStatusService } from "./agentStatus.js";
+import { AttachmentRepository } from "./attachmentRepository.js";
+import { registerAttachmentRoutes } from "./attachmentRoutes.js";
+import { AttachmentStorage } from "./attachmentStorage.js";
 import { AdminWorkspaceRepository } from "./adminWorkspace.js";
 import { registerAdminWorkspaceRoutes } from "./adminWorkspaceRoutes.js";
 import { ChatWorkDomainRepository } from "./chatWorkDomain.js";
@@ -68,6 +72,8 @@ export type GatewayMode = "test" | "development" | "production";
 
 export interface BuildGatewayAppOptions {
   databasePath: string;
+  attachmentRoot?: string;
+  attachmentQuotaBytes?: number;
   deviceToken: string;
   mode: GatewayMode;
   configuredAgentRuntimes?: readonly ConfiguredAgentRuntime[];
@@ -107,6 +113,7 @@ function mobileErrorRoute(request: FastifyRequest): boolean {
     path === "/api/v1/work-conversations" ||
     path.startsWith("/api/v1/work-conversations/") ||
     path.startsWith("/api/v1/threads/") ||
+    path.startsWith("/api/v1/attachments/") ||
     path === "/api/v1/events/stream" ||
     path.startsWith("/api/v1/sync/") ||
     path.startsWith("/api/v1/web-entry/");
@@ -231,6 +238,10 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   }
 
   const app = Fastify({ logger: false });
+  const attachmentStorage = new AttachmentStorage(
+    options.attachmentRoot ??
+      join(dirname(options.databasePath), "attachments")
+  );
   const db = openGatewayDatabase(options.databasePath);
   const now = options.now ?? (() => new Date());
   const domainEventStore = new DomainEventStore(db, now);
@@ -279,6 +290,27 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
       options.authoritativeAgentRuntimeCatalog ?? false
   });
   const entryAuthenticator = new EntrySessionAuthenticator(db, familyRepository, now);
+  const attachmentRepository = new AttachmentRepository(db, {
+    now,
+    ...(options.attachmentQuotaBytes === undefined
+      ? {}
+      : { quotaBytes: options.attachmentQuotaBytes })
+  });
+  const cleanupExpiredAttachments = () => {
+    const expired = attachmentRepository.expireIncompleteUploads();
+    for (const attachment of expired) {
+      attachmentStorage.removeStorageKeys(attachment.storageKeys);
+    }
+  };
+  cleanupExpiredAttachments();
+  const attachmentCleanupTimer = setInterval(() => {
+    try {
+      cleanupExpiredAttachments();
+    } catch {
+      // A later cleanup pass can retry without making the Gateway unavailable.
+    }
+  }, 15 * 60 * 1000);
+  attachmentCleanupTimer.unref();
   const deviceSyncRepository = new DeviceSyncRepository(db, domainEventStore, now);
   const eventStreamHub = new PersonEventStreamHub(
     domainEventStore,
@@ -317,6 +349,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   const adminWorkspaceRepository = new AdminWorkspaceRepository(db);
 
   app.addHook("onClose", async () => {
+    clearInterval(attachmentCleanupTimer);
     await eventStreamHub.close();
     db.close();
   });
@@ -384,6 +417,11 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     agentRepository: agentManagementRepository,
     agentStatus,
     mode: options.mode
+  });
+  registerAttachmentRoutes(app, {
+    repository: attachmentRepository,
+    storage: attachmentStorage,
+    entryAuthenticator
   });
   registerChatWorkRoutes(app, {
     repository: chatWorkRepository,

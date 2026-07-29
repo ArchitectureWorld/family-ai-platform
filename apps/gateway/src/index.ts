@@ -8,6 +8,8 @@ const config = loadGatewayConfig();
 const runtime = buildProviderRuntime(config.providerRuntime);
 const app = await buildGatewayApp({
   databasePath: config.databasePath,
+  attachmentRoot: config.attachmentRoot,
+  attachmentQuotaBytes: config.attachmentQuotaBytes,
   deviceToken: config.deviceToken,
   mode: config.mode,
   providerRouter: runtime.router,

@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,7 +80,37 @@ describe("Gateway configuration", () => {
       deviceToken: token
     });
     expect(config.databasePath).toContain(".runtime/data/gateway.sqlite");
+    expect(config.attachmentRoot).toContain(".runtime/attachments");
+    expect(config.attachmentQuotaBytes).toBe(21474836480);
     expect(config.providerRuntime).toEqual({ mode: "fake" });
+  });
+
+  it("validates the protected attachment root and family quota", () => {
+    const root = mkdtempSync(join(tmpdir(), "family-ai-attachment-config-"));
+    temporaryDirectories.push(root);
+    const attachmentRoot = join(root, "attachments");
+    const config = loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      FAMILY_AI_ATTACHMENT_ROOT: attachmentRoot,
+      FAMILY_AI_ATTACHMENT_QUOTA_BYTES: "4096"
+    });
+    expect(config).toMatchObject({
+      attachmentRoot,
+      attachmentQuotaBytes: 4096
+    });
+
+    const realDirectory = join(root, "real");
+    const linkedDirectory = join(root, "linked");
+    mkdirSync(realDirectory);
+    symlinkSync(realDirectory, linkedDirectory);
+    expect(() => loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      FAMILY_AI_ATTACHMENT_ROOT: linkedDirectory
+    })).toThrow("attachment");
+    expect(() => loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      FAMILY_AI_ATTACHMENT_QUOTA_BYTES: "0"
+    })).toThrow("positive integer");
   });
 
   it("rejects non-loopback binding outside the approved container profile", () => {
