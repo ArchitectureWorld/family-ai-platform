@@ -131,6 +131,36 @@ function publicAgentStatus(agent) {
   return labels[agent.status] ?? agent.statusLabel ?? "有问题";
 }
 
+function selectedAgent(state) {
+  return (state.context?.mountedAgents ?? [])
+    .find((agent) => agent.agentRef === state.currentAgentRef) ?? null;
+}
+
+function renderCurrentAgent(documentRef, state) {
+  const agent = selectedAgent(state);
+  const identity = $(documentRef, "currentAgentIdentity");
+  clear(identity);
+  identity.className =
+    `workspace-agent-identity ${agent?.status ?? "unselected"}`;
+  identity.append(element(documentRef, "span", "agent-status-dot"));
+  identity.append(element(documentRef, "span", "", "当前 Agent"));
+  identity.append(element(
+    documentRef,
+    "strong",
+    "",
+    agent?.displayName ?? "尚未选择"
+  ));
+  if (agent) {
+    identity.append(element(
+      documentRef,
+      "span",
+      "agent-status",
+      publicAgentStatus(agent)
+    ));
+  }
+  return agent;
+}
+
 function renderAgentSelector(documentRef, listenerOptions, state, actions, onError) {
   const agents = state.context?.mountedAgents ?? [];
   const list = $(documentRef, "agentChipList");
@@ -304,7 +334,11 @@ export function createRenderer(input) {
     const form = $(documentRef, formId);
     const textarea = $(documentRef, inputId);
     textarea.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.shiftKey) {
+      if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.isComposing
+      ) {
         event.preventDefault();
         form.requestSubmit();
       }
@@ -373,6 +407,8 @@ export function createRenderer(input) {
 
   function render(state) {
     const agentReady = Boolean(state.currentAgentRef);
+    const currentAgent = renderCurrentAgent(documentRef, state);
+    const agentName = currentAgent?.displayName ?? null;
     renderAgentSelector(
       documentRef,
       listenerOptions,
@@ -395,7 +431,15 @@ export function createRenderer(input) {
       else button.removeAttribute("aria-current");
     });
     $(documentRef, "workspaceKicker").textContent = section === "chat" ? "PERSONAL CHAT" : "WORK CONVERSATIONS";
-    $(documentRef, "workspaceTitle").textContent = section === "chat" ? "和个人助理继续聊" : "持续推进重要事项";
+    $(documentRef, "workspaceTitle").textContent = section === "chat"
+      ? agentName ? `和 ${agentName} 继续聊` : "和个人助理继续聊"
+      : agentName ? `使用 ${agentName} 推进重要事项` : "持续推进重要事项";
+    $(documentRef, "messageInput").placeholder = agentName
+      ? `给 ${agentName} 发消息…`
+      : "给个人助理发消息…";
+    $(documentRef, "workMessageInput").placeholder = agentName
+      ? `让 ${agentName} 继续推进当前 Work…`
+      : "在当前 Work 中继续…";
 
     const syncStatus = state.sync?.status ?? "idle";
     $(documentRef, "syncStatus").className = `sync-pill ${syncStatus}`;

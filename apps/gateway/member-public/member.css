@@ -314,6 +314,32 @@ input:focus, textarea:focus { border-color: rgba(41, 78, 60, 0.55); box-shadow: 
 .workspace-header h2 { margin: 0; font-family: Georgia, "Noto Serif SC", serif; font-size: 28px; font-weight: 500; }
 .workspace-header .panel-kicker { margin-bottom: 5px; }
 .header-actions { display: flex; align-items: center; gap: 8px; }
+.workspace-agent-identity {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.workspace-agent-identity strong { color: var(--ink); font-size: 12px; }
+.workspace-agent-identity.unselected { color: var(--muted); }
+.workspace-agent-identity.idle .agent-status-dot {
+  background: #47745a;
+  box-shadow: 0 0 0 3px rgba(71, 116, 90, 0.12);
+}
+.workspace-agent-identity.working .agent-status-dot {
+  background: #ad8b52;
+  box-shadow: 0 0 0 3px rgba(173, 139, 82, 0.12);
+}
+.workspace-agent-identity.problem .agent-status-dot {
+  background: #a34f45;
+  box-shadow: 0 0 0 3px rgba(163, 79, 69, 0.12);
+}
 .device-pill, .sync-pill, .status-label { padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--surface-soft); font-size: 11px; }
 .sync-pill.online { color: var(--accent); border-color: rgba(41, 78, 60, 0.22); background: var(--accent-soft); }
 .sync-pill.offline, .sync-pill.degraded { color: var(--danger); background: rgba(152, 66, 56, 0.09); }

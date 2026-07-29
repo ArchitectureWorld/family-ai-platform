@@ -19,6 +19,7 @@ class E extends EventTarget {
   classList = new C();
   parentElement: E | null = null;
   value = "";
+  placeholder = "";
   disabled = false;
   type = "";
   checked = false;
@@ -140,11 +141,17 @@ class E extends EventTarget {
     this.open = false;
     this.closeCalls += 1;
   }
-  dispatchKeyboard(type: string, key: string, shiftKey = false) {
+  dispatchKeyboard(
+    type: string,
+    key: string,
+    shiftKey = false,
+    isComposing = false,
+  ) {
     const event = new Event(type, { cancelable: true });
     Object.defineProperties(event, {
       key: { value: key },
       shiftKey: { value: shiftKey },
+      isComposing: { value: isComposing },
     });
     this.dispatchEvent(event);
     return event;
@@ -204,6 +211,7 @@ const tag: Record<string, string> = {
   workSection: "section",
   workspaceKicker: "p",
   workspaceTitle: "h2",
+  currentAgentIdentity: "div",
   syncStatus: "span",
   workList: "div",
   createWorkButton: "button",
@@ -272,6 +280,7 @@ export function createMemberDocumentHarness() {
   nodes.workspaceView.append(
     nodes.workspaceSidebar,
     nodes.primaryNavigation,
+    nodes.currentAgentIdentity,
     nodes.mobileNavigation,
   );
   nodes.workspaceSidebar.append(
@@ -341,6 +350,7 @@ export function createMemberDocumentHarness() {
     revokeButton: "workspaceSidebar",
     workspaceKicker: "workspaceView",
     workspaceTitle: "workspaceView",
+    currentAgentIdentity: "workspaceView",
     syncStatus: "workspaceView",
     deviceName: "workspaceView",
     chatSection: "workspaceView",
@@ -400,8 +410,13 @@ export function createMemberDocumentHarness() {
       nodes[id].value = value;
       nodes[id].dispatchEvent(new Event("input", { cancelable: true }));
     },
-    key(id: string, key: string, shiftKey = false) {
-      return nodes[id].dispatchKeyboard("keydown", key, shiftKey);
+    key(id: string, key: string, shiftKey = false, isComposing = false) {
+      return nodes[id].dispatchKeyboard(
+        "keydown",
+        key,
+        shiftKey,
+        isComposing,
+      );
     },
     submit(id: string) {
       nodes[id].requestSubmit();

@@ -156,6 +156,7 @@ describe("Member Web product modules", () => {
     for (const required of [
       'id="chatSection"',
       'id="workSection"',
+      'id="currentAgentIdentity"',
       'id="threadMessages"',
       'aria-live="polite"',
       'id="messageComposer"',

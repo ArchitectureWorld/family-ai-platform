@@ -12,6 +12,26 @@ import {
 const indexPath = fileURLToPath(
   new URL("../member-public/index.html", import.meta.url),
 );
+const mountedAgents = [
+  {
+    assignmentRef: "assignment:zzh",
+    agentRef: "agent:hermes-zzh",
+    displayName: "zzh",
+    providerProfileRef: "provider-profile:hermes-zzh",
+    isDefault: true,
+    status: "idle",
+    statusLabel: "空闲",
+  },
+  {
+    assignmentRef: "assignment:codex",
+    agentRef: "agent:codex-cli",
+    displayName: "Codex",
+    providerProfileRef: "provider-profile:codex-cli",
+    isDefault: false,
+    status: "working",
+    statusLabel: "工作中",
+  },
+];
 describe("Member Web render lifecycle", () => {
   it("routes every static and dynamic action only to the replacement Renderer", async () => {
     const harness = createMemberDocumentHarness();
@@ -183,12 +203,83 @@ describe("Member Web render lifecycle", () => {
       });
     }
   });
+  it("makes the selected Agent explicit throughout the main workspace", () => {
+    const harness = createMemberDocumentHarness();
+    const store = createStore(memberState({
+      context: { mountedAgents, defaultAgentRef: "agent:hermes-zzh" },
+      currentAgentRef: "agent:hermes-zzh",
+    }));
+    const renderer = createRenderer({
+      store,
+      actions: memberActions(),
+      documentRef: harness.document,
+    });
+
+    expect(harness.elements.currentAgentIdentity.textContent)
+      .toContain("当前 Agentzzh空闲");
+    expect(harness.elements.workspaceTitle.textContent).toBe("和 zzh 继续聊");
+    expect(harness.elements.messageInput.placeholder).toBe("给 zzh 发消息…");
+
+    store.setState({ currentAgentRef: "agent:codex-cli" });
+
+    expect(harness.elements.currentAgentIdentity.textContent)
+      .toContain("当前 AgentCodex工作中");
+    expect(harness.elements.workspaceTitle.textContent).toBe(
+      "和 Codex 继续聊",
+    );
+    expect(harness.elements.messageInput.placeholder).toBe(
+      "给 Codex 发消息…",
+    );
+    expect(harness.elements.workMessageInput.placeholder).toBe(
+      "让 Codex 继续推进当前 Work…",
+    );
+    renderer.destroy();
+  });
+  it.each([
+    ["chat", "messageInput"],
+    ["work", "workMessageInput"],
+  ] as const)(
+    "submits %s with Enter but not Shift+Enter, IME Enter, or empty Enter",
+    async (target, inputId) => {
+      const harness = createMemberDocumentHarness();
+      const actions = memberActions();
+      const renderer = createRenderer({
+        store: createStore(memberState({
+          context: { mountedAgents, defaultAgentRef: "agent:hermes-zzh" },
+          currentAgentRef: "agent:hermes-zzh",
+        })),
+        actions,
+        documentRef: harness.document,
+      });
+
+      harness.input(inputId, "第一行");
+      const shifted = harness.key(inputId, "Enter", true);
+      expect(shifted.defaultPrevented).toBe(false);
+
+      const composing = harness.key(inputId, "Enter", false, true);
+      expect(composing.defaultPrevented).toBe(false);
+      expect(actions.send).not.toHaveBeenCalled();
+
+      harness.elements[inputId].value = "   ";
+      harness.key(inputId, "Enter");
+      await harness.whenIdle();
+      expect(actions.send).not.toHaveBeenCalled();
+
+      harness.elements[inputId].value = "发送内容";
+      const entered = harness.key(inputId, "Enter");
+      expect(entered.defaultPrevented).toBe(true);
+      await harness.whenIdle();
+      expect(actions.send).toHaveBeenCalledOnce();
+      expect(actions.send).toHaveBeenCalledWith(target, "发送内容");
+      renderer.destroy();
+    },
+  );
   it("mirrors every actual member index ID and keyboard-event contract", () => {
     const harness = createMemberDocumentHarness();
     const ids = [
       ...readFileSync(indexPath, "utf8").matchAll(/id="([^"]+)"/g),
     ].map((match) => match[1]);
-    expect(ids).toHaveLength(73);
+    expect(ids).toHaveLength(74);
     for (const id of ids)
       expect(harness.document.getElementById(id)).not.toBeNull();
     expect(harness.elements.pairingCode.parentElement).toBe(
@@ -226,7 +317,7 @@ describe("Member Web render lifecycle", () => {
         );
       if (!voidTags.has(tag) && !value.endsWith("/>")) stack.push({ tag, id });
     }
-    expect(actualParents).toHaveLength(73);
+    expect(actualParents).toHaveLength(74);
     for (const [id, expectedParent] of actualParents) {
       let parent = harness.elements[id].parentElement;
       while (parent && !parent.id) parent = parent.parentElement;
