@@ -213,6 +213,7 @@ function mapThreadMessage(row: Record<string, unknown>): ThreadMessage {
       entryAudience: row.entry_audience as ThreadMessageOrigin["entryAudience"]
     },
     content,
+    attachments: [],
     occurredAt: String(row.occurred_at),
     createdAt: String(row.created_at)
   };

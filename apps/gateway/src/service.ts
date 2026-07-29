@@ -181,6 +181,7 @@ export class MessageService {
         targetAgentRef: input.device.agentRef,
         conversationRef: input.conversationRef,
         content: [input.envelope.payload],
+        attachments: [],
         timeoutMs: 120000
       } satisfies Omit<ProviderInvocationRequest, "externalSessionRef">;
       const providerRequest: ProviderInvocationRequest = externalSessionRef
