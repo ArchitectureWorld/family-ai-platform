@@ -1429,7 +1429,12 @@ describe("Member ProductWorkbench secure lifecycle", () => {
       network: { online: true }
     }));
 
-    await expect(workbench.actions.send("chat", "测试失效入口")).resolves.toMatchObject({
+    const queued = await workbench.actions.send("chat", "测试失效入口");
+    expect(queued).toMatchObject({
+      status: "queued",
+      transmission: expect.any(Promise)
+    });
+    await expect(queued.transmission).resolves.toMatchObject({
       status: "failed",
       error: { code: "DEVICE_AUTH_INVALID" }
     });

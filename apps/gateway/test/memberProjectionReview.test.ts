@@ -77,7 +77,8 @@ describe("Member Web projection review boundaries", () => {
       protocolVersion: 1,
       clientMessageId: "web:work-message-0001",
       occurredAt: "2026-07-25T10:00:00.000Z",
-      content: acceptedMessage.content
+      content: acceptedMessage.content,
+      attachmentRefs: []
     });
   });
 });

@@ -1,4 +1,5 @@
 import {
+  enqueueOutgoingMessage,
   mergeThreadPage,
   removeOutgoing,
   saveDraft as persistDraft,
@@ -30,6 +31,8 @@ export function createOutgoingMessage(input) {
     ...(input.agentRef ? { agentRef: input.agentRef } : {}),
     occurredAt: input.occurredAt,
     content: structuredClone(input.content),
+    attachments: structuredClone(input.attachments ?? []),
+    attachmentRefs: [...(input.attachmentRefs ?? [])],
     status: "sending",
     error: null
   };
@@ -40,7 +43,8 @@ export function retryPayload(outgoing) {
     protocolVersion: 1,
     clientMessageId: outgoing.clientMessageId,
     occurredAt: outgoing.occurredAt,
-    content: structuredClone(outgoing.requestContent ?? outgoing.content)
+    content: structuredClone(outgoing.requestContent ?? outgoing.content),
+    attachmentRefs: [...(outgoing.attachmentRefs ?? [])]
   };
 }
 
@@ -96,6 +100,21 @@ function updateDraftState(store, threadRef, text) {
   });
 }
 
+function clearEnqueuedProjection(store, threadRef, attachmentRefs) {
+  const removed = new Set(attachmentRefs);
+  store.setState((current) => {
+    const drafts = { ...(current.drafts ?? {}) };
+    delete drafts[threadRef];
+    return {
+      ...current,
+      drafts,
+      attachmentDrafts: (current.attachmentDrafts ?? []).filter(
+        (draft) => !removed.has(draft.attachmentRef)
+      )
+    };
+  });
+}
+
 export function createThreadController(input) {
   const api = input.api;
   const cache = input.cache;
@@ -124,6 +143,14 @@ export function createThreadController(input) {
       error.code = "AGENT_SELECTION_CHANGED";
       throw error;
     }
+  }
+
+  function projectionIsSelected(agentRef) {
+    const state = store.getState();
+    if (!Object.prototype.hasOwnProperty.call(state, "currentAgentRef")) {
+      return true;
+    }
+    return state.currentAgentRef === agentRef;
   }
 
   async function persistReconciledOutgoing(previous, next) {
@@ -186,40 +213,68 @@ export function createThreadController(input) {
     updateDraftState(store, threadRef, text);
   }
 
+  async function applyTransmissionPage(outgoing, page) {
+    await mergeThreadPage(cache, outgoing.threadRef, page.messages);
+    await removeOutgoing(cache, outgoing.clientMessageId);
+    if (!projectionIsSelected(outgoing.agentRef)) return page;
+    const current = store.getState();
+    const messages = mergeThreadMessages(
+      current.messagesByThread?.[outgoing.threadRef] ?? [],
+      page.messages
+    );
+    store.setState((state) => ({
+      ...state,
+      messagesByThread: {
+        ...(state.messagesByThread ?? {}),
+        [outgoing.threadRef]: messages
+      },
+      outgoing: (state.outgoing ?? []).filter(
+        (item) => item.clientMessageId !== outgoing.clientMessageId
+      )
+    }));
+    return page;
+  }
+
   async function transmit(outgoing) {
     try {
-      assertStillSelected(outgoing.agentRef);
       await api.sendThreadMessage(outgoing.threadRef, retryPayload(outgoing));
-      assertStillSelected(outgoing.agentRef);
-      await loadLatest(outgoing.threadRef);
-      assertStillSelected(outgoing.agentRef);
-      await removeOutgoing(cache, outgoing.clientMessageId);
-      const remaining = (store.getState().outgoing ?? []).filter(
-        (item) => item.clientMessageId !== outgoing.clientMessageId
-      );
-      setOutgoing(store, remaining);
-      await saveDraft(outgoing.threadRef, "");
+      const page = await api.getThreadMessages(outgoing.threadRef, {
+        limit: 100
+      });
+      await applyTransmissionPage(outgoing, page);
       return { status: "succeeded" };
     } catch (error) {
-      if (error?.code === "AGENT_SELECTION_CHANGED") throw error;
+      if (error?.name === "AbortError") throw error;
       const failed = {
         ...outgoing,
         status: "failed",
         error: errorProjection(error)
       };
       await saveOutgoing(cache, failed);
-      const current = store.getState().outgoing ?? [];
-      const next = [
-        ...current.filter((item) => item.clientMessageId !== failed.clientMessageId),
-        failed
-      ];
-      setOutgoing(store, next);
+      if (projectionIsSelected(outgoing.agentRef)) {
+        const current = store.getState().outgoing ?? [];
+        const next = [
+          ...current.filter(
+            (item) => item.clientMessageId !== failed.clientMessageId
+          ),
+          failed
+        ];
+        setOutgoing(store, next);
+      }
       return { status: "failed", error: failed.error };
     }
   }
 
-  async function send(threadRef, text, language = undefined) {
-    if (typeof text !== "string" || text.trim().length === 0) {
+  async function enqueue(
+    threadRef,
+    text,
+    attachments = [],
+    language = undefined
+  ) {
+    if (
+      typeof text !== "string" ||
+      (text.trim().length === 0 && attachments.length === 0)
+    ) {
       throw new Error("MESSAGE_TEXT_REQUIRED");
     }
     if (!isOnline()) {
@@ -227,6 +282,24 @@ export function createThreadController(input) {
       return { status: "draft" };
     }
     const agentRef = selectedAgentRef();
+    for (const attachment of attachments) {
+      if (
+        attachment.agentRef !== agentRef ||
+        attachment.threadRef !== threadRef ||
+        attachment.serverState !== "ready" ||
+        !attachment.publicMetadata
+      ) {
+        const error = new Error("Attachment tray changed before enqueue.");
+        error.code = "ATTACHMENT_DRAFT_INVALID";
+        throw error;
+      }
+    }
+    const publicAttachments = attachments.map(
+      (attachment) => structuredClone(attachment.publicMetadata)
+    );
+    const attachmentRefs = publicAttachments.map(
+      (attachment) => attachment.attachmentRef
+    );
     const outgoing = createOutgoingMessage({
       threadRef,
       agentRef,
@@ -236,12 +309,28 @@ export function createThreadController(input) {
         type: "text",
         text,
         ...(language ? { language } : {})
-      }
+      },
+      attachments: publicAttachments,
+      attachmentRefs
     });
-    await saveOutgoing(cache, outgoing);
-    assertStillSelected(agentRef);
-    setOutgoing(store, [...(store.getState().outgoing ?? []), outgoing]);
-    return transmit(outgoing);
+    await enqueueOutgoingMessage(cache, {
+      outgoing,
+      attachmentRefs
+    });
+    if (projectionIsSelected(agentRef)) {
+      clearEnqueuedProjection(store, threadRef, attachmentRefs);
+      setOutgoing(store, [...(store.getState().outgoing ?? []), outgoing]);
+    }
+    const transmission = transmit(outgoing);
+    return {
+      status: "queued",
+      outgoing: structuredClone(outgoing),
+      transmission
+    };
+  }
+
+  async function send(threadRef, text, language = undefined) {
+    return enqueue(threadRef, text, [], language);
   }
 
   async function retry(clientMessageId) {
@@ -254,13 +343,19 @@ export function createThreadController(input) {
       throw new Error("OUTGOING_AGENT_MISMATCH");
     }
     if (!isOnline()) return { status: "draft" };
-    const sending = { ...existing, agentRef, status: "sending", error: null };
+    const sending = { ...existing, status: "sending", error: null };
     await saveOutgoing(cache, sending);
-    assertStillSelected(agentRef);
-    setOutgoing(store, (store.getState().outgoing ?? []).map((item) =>
-      item.clientMessageId === clientMessageId ? sending : item
-    ));
-    return transmit(sending);
+    if (projectionIsSelected(agentRef)) {
+      setOutgoing(store, (store.getState().outgoing ?? []).map((item) =>
+        item.clientMessageId === clientMessageId ? sending : item
+      ));
+    }
+    const transmission = transmit(sending);
+    return {
+      status: "queued",
+      outgoing: structuredClone(sending),
+      transmission
+    };
   }
 
   return {
@@ -268,6 +363,7 @@ export function createThreadController(input) {
     loadEarlier,
     refresh: loadLatest,
     saveDraft,
+    enqueue,
     send,
     retry
   };

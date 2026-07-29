@@ -81,7 +81,8 @@ describe("Member Web thread model", () => {
       protocolVersion: 1,
       clientMessageId: "web:retry-0001",
       occurredAt: "2026-07-25T10:05:00.000Z",
-      content: { type: "text", text: "请继续。", language: "zh-CN" }
+      content: { type: "text", text: "请继续。", language: "zh-CN" },
+      attachmentRefs: []
     });
   });
 

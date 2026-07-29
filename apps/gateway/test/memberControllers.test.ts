@@ -3,7 +3,8 @@ import { GatewayError } from "../member-public/api.js";
 import { createChatController } from "../member-public/chat.js";
 import {
   createMemoryCache,
-  readBootstrapSnapshot
+  readBootstrapSnapshot,
+  saveAttachmentDraft
 } from "../member-public/cache.js";
 import { createStore } from "../member-public/store.js";
 import { createThreadController } from "../member-public/thread.js";
@@ -21,6 +22,7 @@ function state() {
     paginationByThread: {},
     outgoing: [],
     drafts: {},
+    attachmentDrafts: [],
     selectedMessageRefs: [],
     progressByWork: {},
     network: { online: true },
@@ -55,6 +57,216 @@ const assistantMessage = {
 };
 
 describe("Member Web Thread controller", () => {
+  it("commits outgoing text and ready attachments before a pending Provider settles", async () => {
+    let resolveSend!: (value: unknown) => void;
+    const pendingSend = new Promise((resolve) => {
+      resolveSend = resolve;
+    });
+    const cache = createMemoryCache();
+    const store = createStore(state());
+    const api = {
+      sendThreadMessage: vi.fn(() => pendingSend),
+      getThreadMessages: vi.fn(async () => ({
+        protocolVersion: 1,
+        threadRef: "thread:chat-0001",
+        messages: [personMessage, assistantMessage],
+        nextBeforeSequence: null
+      }))
+    };
+    const controller = createThreadController({
+      api,
+      cache,
+      store,
+      isOnline: () => true,
+      now: () => new Date("2026-07-25T10:00:00.000Z"),
+      uuid: () => "fixed-uuid"
+    });
+    await controller.saveDraft("thread:chat-0001", "你好");
+    const publicMetadata = {
+      attachmentRef: "attachment:ready-0001",
+      fileName: "report.pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 123,
+      sha256: "a".repeat(64),
+      downloadUrl:
+        "/api/v1/attachments/attachment%3Aready-0001"
+    };
+    const attachmentDraft = {
+      ...publicMetadata,
+      agentRef: "agent:personal-assistant",
+      threadRef: "thread:chat-0001",
+      serverState: "ready",
+      publicMetadata
+    };
+    await saveAttachmentDraft(cache, attachmentDraft);
+    store.setState((current) => ({
+      ...current,
+      attachmentDrafts: [attachmentDraft]
+    }));
+
+    const queued = await controller.enqueue(
+      "thread:chat-0001",
+      "你好",
+      [attachmentDraft],
+      "zh-CN"
+    );
+
+    expect(queued).toMatchObject({
+      status: "queued",
+      outgoing: {
+        clientMessageId: "web:fixed-uuid",
+        attachmentRefs: ["attachment:ready-0001"]
+      },
+      transmission: expect.any(Promise)
+    });
+    expect(store.getState()).toMatchObject({
+      drafts: {},
+      attachmentDrafts: [],
+      outgoing: [{ status: "sending" }]
+    });
+    expect(await readBootstrapSnapshot(cache)).toMatchObject({
+      drafts: [],
+      attachmentDrafts: [],
+      outgoing: [{
+        clientMessageId: "web:fixed-uuid",
+        attachmentRefs: ["attachment:ready-0001"]
+      }]
+    });
+
+    resolveSend({ protocolVersion: 1, message: personMessage });
+    await expect(queued.transmission).resolves.toEqual({
+      status: "succeeded"
+    });
+    expect(api.sendThreadMessage).toHaveBeenCalledWith(
+      "thread:chat-0001",
+      {
+        protocolVersion: 1,
+        clientMessageId: "web:fixed-uuid",
+        occurredAt: "2026-07-25T10:00:00.000Z",
+        content: { type: "text", text: "你好", language: "zh-CN" },
+        attachmentRefs: ["attachment:ready-0001"]
+      }
+    );
+  });
+
+  it("finishes the captured Agent Thread after selection changes without projecting into the new Agent", async () => {
+    let resolveSend!: (value: unknown) => void;
+    const pendingSend = new Promise((resolve) => {
+      resolveSend = resolve;
+    });
+    const cache = createMemoryCache();
+    const store = createStore(state());
+    const controller = createThreadController({
+      api: {
+        sendThreadMessage: vi.fn(() => pendingSend),
+        getThreadMessages: vi.fn(async () => ({
+          protocolVersion: 1,
+          threadRef: "thread:chat-0001",
+          messages: [personMessage, assistantMessage],
+          nextBeforeSequence: null
+        }))
+      },
+      cache,
+      store,
+      isOnline: () => true,
+      now: () => new Date("2026-07-25T10:00:00.000Z"),
+      uuid: () => "fixed-uuid"
+    });
+
+    const queued = await controller.enqueue(
+      "thread:chat-0001",
+      "发给原 Agent",
+      [],
+      "zh-CN"
+    );
+    store.setState((current) => ({
+      ...current,
+      currentAgentRef: "agent:second",
+      messagesByThread: {},
+      outgoing: []
+    }));
+    resolveSend({ protocolVersion: 1, message: personMessage });
+
+    await expect(queued.transmission).resolves.toEqual({
+      status: "succeeded"
+    });
+    expect(store.getState()).toMatchObject({
+      currentAgentRef: "agent:second",
+      messagesByThread: {},
+      outgoing: []
+    });
+    expect((await readBootstrapSnapshot(cache)).messages).toHaveLength(2);
+    expect((await readBootstrapSnapshot(cache)).outgoing).toEqual([]);
+  });
+
+  it("preserves the draft and attachment tray when the enqueue transaction fails", async () => {
+    const backingCache = createMemoryCache();
+    const store = createStore(state());
+    const publicMetadata = {
+      attachmentRef: "attachment:ready-0001",
+      fileName: "report.pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 123,
+      sha256: "a".repeat(64),
+      downloadUrl:
+        "/api/v1/attachments/attachment%3Aready-0001"
+    };
+    const attachmentDraft = {
+      ...publicMetadata,
+      agentRef: "agent:personal-assistant",
+      threadRef: "thread:chat-0001",
+      serverState: "ready",
+      publicMetadata
+    };
+    const api = {
+      sendThreadMessage: vi.fn(),
+      getThreadMessages: vi.fn()
+    };
+    const controller = createThreadController({
+      api,
+      cache: {
+        transaction(storeNames: string[], callback: (transaction: unknown) => unknown) {
+          if (storeNames.includes("outgoing")) {
+            throw new Error("IDB_COMMIT_FAILED");
+          }
+          return backingCache.transaction(storeNames, callback);
+        },
+        close() {}
+      },
+      store,
+      isOnline: () => true,
+      now: () => new Date("2026-07-25T10:00:00.000Z"),
+      uuid: () => "fixed-uuid"
+    });
+    await controller.saveDraft("thread:chat-0001", "你好");
+    await saveAttachmentDraft(backingCache, attachmentDraft);
+    store.setState((current) => ({
+      ...current,
+      attachmentDrafts: [attachmentDraft]
+    }));
+
+    await expect(
+      controller.enqueue(
+        "thread:chat-0001",
+        "你好",
+        [attachmentDraft],
+        "zh-CN"
+      )
+    ).rejects.toThrow("IDB_COMMIT_FAILED");
+
+    expect(api.sendThreadMessage).not.toHaveBeenCalled();
+    expect(store.getState()).toMatchObject({
+      drafts: { "thread:chat-0001": "你好" },
+      attachmentDrafts: [attachmentDraft],
+      outgoing: []
+    });
+    expect(await readBootstrapSnapshot(backingCache)).toMatchObject({
+      drafts: [{ threadRef: "thread:chat-0001", text: "你好" }],
+      attachmentDrafts: [attachmentDraft],
+      outgoing: []
+    });
+  });
+
   it("does not project a late message page after the selected Agent changes", async () => {
     let resolvePage!: (value: Record<string, unknown>) => void;
     const page = new Promise<Record<string, unknown>>((resolve) => {
@@ -136,7 +348,16 @@ describe("Member Web Thread controller", () => {
     });
 
     await controller.saveDraft("thread:chat-0001", "你好");
-    await expect(controller.send("thread:chat-0001", "你好", "zh-CN")).resolves.toEqual({
+    const queued = await controller.send(
+      "thread:chat-0001",
+      "你好",
+      "zh-CN"
+    );
+    expect(queued).toMatchObject({
+      status: "queued",
+      transmission: expect.any(Promise)
+    });
+    await expect(queued.transmission).resolves.toEqual({
       status: "succeeded"
     });
 
@@ -144,7 +365,8 @@ describe("Member Web Thread controller", () => {
       protocolVersion: 1,
       clientMessageId: "web:fixed-uuid",
       occurredAt: "2026-07-25T10:00:00.000Z",
-      content: { type: "text", text: "你好", language: "zh-CN" }
+      content: { type: "text", text: "你好", language: "zh-CN" },
+      attachmentRefs: []
     });
     expect(store.getState().outgoing).toEqual([]);
     expect(store.getState().drafts).toEqual({});
@@ -182,7 +404,16 @@ describe("Member Web Thread controller", () => {
       uuid: () => "fixed-uuid"
     });
 
-    await expect(controller.send("thread:chat-0001", "你好", "zh-CN")).resolves.toEqual({
+    const first = await controller.send(
+      "thread:chat-0001",
+      "你好",
+      "zh-CN"
+    );
+    expect(first).toMatchObject({
+      status: "queued",
+      transmission: expect.any(Promise)
+    });
+    await expect(first.transmission).resolves.toEqual({
       status: "failed",
       error: expect.objectContaining({ code: "PROVIDER_FAILED", retryable: true })
     });
@@ -191,7 +422,12 @@ describe("Member Web Thread controller", () => {
       status: "failed"
     });
 
-    await expect(controller.retry("web:fixed-uuid")).resolves.toEqual({ status: "succeeded" });
+    const retry = await controller.retry("web:fixed-uuid");
+    expect(retry).toMatchObject({
+      status: "queued",
+      transmission: expect.any(Promise)
+    });
+    await expect(retry.transmission).resolves.toEqual({ status: "succeeded" });
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
   });

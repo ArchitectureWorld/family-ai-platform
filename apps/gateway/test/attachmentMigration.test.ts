@@ -44,27 +44,37 @@ describe("attachment metadata migration", () => {
       timezone: "Asia/Shanghai",
       localDate: "2026-07-29"
     });
-    const original = chatDomain.appendThreadMessage({
-      personRef: onboarding.owner.personRef,
-      agentRef: "agent:personal-assistant",
-      threadRef: chat.chat.threadRef,
-      clientMessageId: "v7-attachment-migration-message",
-      actor: {
-        type: "person",
-        personRef: onboarding.owner.personRef
-      },
-      origin: {
-        deviceRef: onboarding.device.deviceRef,
-        connectionRef: "connection:v7-migration",
-        entryAudience: "personal"
-      },
-      content: {
-        type: "text",
-        text: "保留这条 V7 消息。",
-        language: "zh-CN"
-      },
-      occurredAt: "2026-07-29T08:00:00.000Z"
-    });
+    const originalMessageRef = "message:v7-attachment-migration";
+    db.prepare(
+      `INSERT INTO thread_messages
+       (message_ref, thread_ref, thread_sequence, client_message_id, actor_type,
+        actor_person_ref, actor_assignment_ref, actor_agent_ref,
+        actor_provider_profile_ref, actor_system_ref, origin_device_ref,
+        origin_connection_ref, entry_audience, content_type, content_text,
+        content_language, occurred_at, created_at)
+       VALUES(?, ?, 1, ?, 'person', ?, NULL, NULL, NULL, NULL, ?, ?, 'personal',
+              'text', ?, 'zh-CN', ?, ?)`
+    ).run(
+      originalMessageRef,
+      chat.chat.threadRef,
+      "v7-attachment-migration-message",
+      onboarding.owner.personRef,
+      onboarding.device.deviceRef,
+      "connection:v7-migration",
+      "保留这条 V7 消息。",
+      "2026-07-29T08:00:00.000Z",
+      "2026-07-29T08:00:00.000Z"
+    );
+    db.prepare(
+      `UPDATE interaction_threads
+       SET last_sequence = 1, last_active_at = ?
+       WHERE thread_ref = ?`
+    ).run("2026-07-29T08:00:00.000Z", chat.chat.threadRef);
+    db.prepare(
+      `UPDATE daily_episodes
+       SET last_message_sequence = 1
+       WHERE thread_ref = ?`
+    ).run(chat.chat.threadRef);
     expect(
       db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()
     ).toEqual({ version: 7 });
@@ -79,9 +89,9 @@ describe("attachment metadata migration", () => {
       db.prepare(
         `SELECT message_ref, thread_sequence, content_text
          FROM thread_messages WHERE message_ref = ?`
-      ).get(original.messageRef)
+      ).get(originalMessageRef)
     ).toEqual({
-      message_ref: original.messageRef,
+      message_ref: originalMessageRef,
       thread_sequence: 1,
       content_text: "保留这条 V7 消息。"
     });
@@ -167,7 +177,7 @@ describe("attachment metadata migration", () => {
     expect(() => db!.prepare(
       `INSERT INTO message_attachments
        (message_ref, attachment_ref, attachment_order) VALUES(?, ?, 1)`
-    ).run(original.messageRef, "attachment:v8-first")).toThrow();
+    ).run(originalMessageRef, "attachment:v8-first")).toThrow();
     expect(() => db!.prepare(
       `INSERT INTO message_attachments
        (message_ref, attachment_ref, attachment_order) VALUES(?, ?, 0)`

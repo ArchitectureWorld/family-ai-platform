@@ -6,6 +6,7 @@ import {
   applyEventTransaction,
   clearMemberCache,
   createMemoryCache,
+  enqueueOutgoingMessage,
   mergeThreadPage,
   openMemberCache,
   readBootstrapSnapshot,
@@ -243,6 +244,36 @@ describe("Member Web cache model", () => {
       agentRef: "agent:a",
       threadRef: "thread:chat-a"
     })).toEqual([]);
+  });
+
+  it("atomically enqueues outgoing content and removes its text and attachment drafts", async () => {
+    const cache = createMemoryCache();
+    await saveDraft(cache, "thread:chat-a", "queued text", "agent:a");
+    await saveAttachmentDraft(cache, {
+      attachmentRef: "attachment:queued-a",
+      agentRef: "agent:a",
+      threadRef: "thread:chat-a",
+      serverState: "ready"
+    });
+    const outgoing = {
+      clientMessageId: "web:queued-a",
+      agentRef: "agent:a",
+      threadRef: "thread:chat-a",
+      content: { type: "text", text: "queued text" },
+      attachmentRefs: ["attachment:queued-a"],
+      status: "sending"
+    };
+
+    await enqueueOutgoingMessage(cache, {
+      outgoing,
+      attachmentRefs: outgoing.attachmentRefs
+    });
+
+    expect(await readBootstrapSnapshot(cache)).toMatchObject({
+      drafts: [],
+      attachmentDrafts: [],
+      outgoing: [outgoing]
+    });
   });
 
   it("never persists Web Entry credentials in the browser cache module", () => {

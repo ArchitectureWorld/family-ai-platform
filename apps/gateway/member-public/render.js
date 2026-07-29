@@ -353,7 +353,7 @@ export function createRenderer(input) {
       if (!text.trim()) return;
       try {
         const result = await actions.send(target, text);
-        if (result?.status === "succeeded") textarea.value = "";
+        if (result?.status === "queued") textarea.value = "";
         else if (result?.status === "draft") {
           showToast("当前离线，内容已保存为草稿。", "error");
         } else if (result?.status === "failed") {

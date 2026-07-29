@@ -881,6 +881,28 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     return routeEntryFailure(error) !== null;
   }
 
+  function trackTransmission(result) {
+    if (result?.status !== "queued" || !result.transmission) return result;
+    const completion = Promise.resolve(result.transmission).then(
+      (outcome) => {
+        if (!runtimeInactive() && outcome?.status === "failed") {
+          handleEntryFailure(outcome.error);
+        }
+        return outcome;
+      },
+      (error) => {
+        if (!runtimeInactive()) handleEntryFailure(error);
+        throw error;
+      }
+    );
+    const tracked = trackActionPromise(completion);
+    void tracked.catch(() => undefined);
+    return {
+      ...result,
+      transmission: tracked
+    };
+  }
+
   async function awaitEntryRecovery(error) {
     const recovery = routeEntryFailure(error);
     if (!recovery) return false;
@@ -1033,9 +1055,19 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
         ? state.chat?.threadRef
         : selectedWork(state)?.threadRef;
       if (!threadRef) throw new Error("THREAD_NOT_SELECTED");
-      const result = await threadController.send(threadRef, text, "zh-CN");
-      if (result?.status === "failed") handleEntryFailure(result.error);
-      return result;
+      const attachments = (state.attachmentDrafts ?? []).filter(
+        (attachment) =>
+          attachment.agentRef === state.currentAgentRef &&
+          attachment.threadRef === threadRef &&
+          attachment.serverState === "ready"
+      );
+      const result = await threadController.enqueue(
+        threadRef,
+        text,
+        attachments,
+        "zh-CN"
+      );
+      return trackTransmission(result);
     },
     async saveDraft(target, text) {
       assertUsableAgent();
@@ -1071,8 +1103,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     async retry(clientMessageId) {
       assertUsableAgent();
       const result = await threadController.retry(clientMessageId);
-      if (result?.status === "failed") handleEntryFailure(result.error);
-      return result;
+      return trackTransmission(result);
     },
     toggleMessageSelection: (messageRef) => chatController.toggleMessageSelection(messageRef),
     async convertChatToWork(command) {

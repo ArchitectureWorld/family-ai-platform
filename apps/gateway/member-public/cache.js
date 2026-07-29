@@ -403,6 +403,22 @@ export async function saveOutgoing(cache, outgoing) {
   return cache.transaction(["outgoing"], (transaction) => transaction.put("outgoing", outgoing));
 }
 
+export async function enqueueOutgoingMessage(
+  cache,
+  { outgoing, attachmentRefs = [] }
+) {
+  return cache.transaction(
+    ["drafts", "attachmentDrafts", "outgoing"],
+    async (transaction) => {
+      await transaction.put("outgoing", clone(outgoing));
+      await transaction.delete("drafts", outgoing.threadRef);
+      for (const attachmentRef of attachmentRefs) {
+        await transaction.delete("attachmentDrafts", attachmentRef);
+      }
+    }
+  );
+}
+
 export async function removeOutgoing(cache, clientMessageId) {
   return cache.transaction(["outgoing"], (transaction) =>
     transaction.delete("outgoing", clientMessageId)
