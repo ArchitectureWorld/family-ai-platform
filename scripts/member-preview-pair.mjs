@@ -22,11 +22,10 @@ const MAX_JSON_BYTES = 64 * 1024;
 const LOCK_RETRIES = 400;
 const EXPECTED_USER = "youran";
 const EXPECTED_HOST = "Admin-YR";
-const EXPECTED_BRANCH = "fix/member-web-entry-hardening";
-const WORKTREE_RELATIVE = join(
+const EXPECTED_BRANCH = "main";
+const REPOSITORY_RELATIVE = join(
   "Development",
-  "family-ai-platform-worktrees",
-  "member-web-entry-hardening"
+  "family-ai-platform"
 );
 const SCRIPT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -124,7 +123,7 @@ async function resolveDefaultRuntime() {
   if (account.username !== EXPECTED_USER || shortHost !== EXPECTED_HOST) {
     fail("PREVIEW_BOUNDARY_INVALID");
   }
-  const approved = await realpath(join(account.homedir, WORKTREE_RELATIVE)).catch(() => null);
+  const approved = await realpath(join(account.homedir, REPOSITORY_RELATIVE)).catch(() => null);
   const root = await realpath(SCRIPT_ROOT).catch(() => null);
   if (!approved || !root || root !== approved) fail("PREVIEW_BOUNDARY_INVALID");
   if (

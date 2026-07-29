@@ -11,12 +11,12 @@ esac
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 REMOTE_USER_HOME="$(getent passwd "$(id -un)" | cut -d: -f6)"
-APPROVED_ROOT="$(cd "$REMOTE_USER_HOME/Development/family-ai-platform-worktrees/member-web-entry-hardening" && pwd -P)"
+APPROVED_ROOT="$(cd "$REMOTE_USER_HOME/Development/family-ai-platform" && pwd -P)"
 [[ "$(hostname -s)" == "Admin-YR" ]] || { printf 'PREVIEW_HOST_INVALID\n' >&2; exit 1; }
 [[ "$(id -un)" == "youran" ]] || { printf 'PREVIEW_USER_INVALID\n' >&2; exit 1; }
 [[ "$ROOT_DIR" == "$APPROVED_ROOT" ]] || { printf 'PREVIEW_ROOT_INVALID\n' >&2; exit 1; }
 [[ "$(git -C "$ROOT_DIR" rev-parse --show-toplevel)" == "$ROOT_DIR" ]] || { printf 'PREVIEW_REPOSITORY_INVALID\n' >&2; exit 1; }
-[[ "$(git -C "$ROOT_DIR" branch --show-current)" == "fix/member-web-entry-hardening" ]] || { printf 'PREVIEW_BRANCH_INVALID\n' >&2; exit 1; }
+[[ "$(git -C "$ROOT_DIR" branch --show-current)" == "main" ]] || { printf 'PREVIEW_BRANCH_INVALID\n' >&2; exit 1; }
 
 cd "$ROOT_DIR"
 umask 077

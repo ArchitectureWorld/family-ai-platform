@@ -717,7 +717,7 @@ async function main() {
   }
   const approvedRoot = realpathSync(join(
     userInfo().homedir,
-    "Development/family-ai-platform-worktrees/member-web-entry-hardening"
+    "Development/family-ai-platform"
   ));
   if (realpathSync(rootDirectory) !== approvedRoot) throw claimLossError("CLAIM_LOSS_BOUNDARY");
   const gitRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
@@ -730,7 +730,7 @@ async function main() {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"]
   }).trim();
-  if (realpathSync(gitRoot) !== approvedRoot || branch !== "fix/member-web-entry-hardening") {
+  if (realpathSync(gitRoot) !== approvedRoot || branch !== "main") {
     throw claimLossError("CLAIM_LOSS_BOUNDARY");
   }
   process.umask(0o077);

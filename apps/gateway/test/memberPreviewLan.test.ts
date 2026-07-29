@@ -129,7 +129,8 @@ describe("LAN Preview lifecycle scripts", () => {
     for (const required of [
       "hostname -s",
       "id -un",
-      "fix/member-web-entry-hardening",
+      "$REMOTE_USER_HOME/Development/family-ai-platform",
+      'branch --show-current)" == "main"',
       "member-preview-up.sh",
       "ip -json -4 route get",
       "192.168",
@@ -146,6 +147,7 @@ describe("LAN Preview lifecycle scripts", () => {
     ]) {
       expect(up, required).toContain(required);
     }
+    expect(up).not.toContain("family-ai-platform-worktrees");
     expect(up).not.toMatch(/systemctl|service\s+nginx|\/etc\/nginx|ufw|docker\s+compose/);
   });
 

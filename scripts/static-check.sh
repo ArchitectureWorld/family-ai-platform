@@ -329,7 +329,8 @@ for required in \
   'hostname -s' \
   'id -un' \
   'getent passwd' \
-  'fix/member-web-entry-hardening' \
+  '$REMOTE_USER_HOME/Development/family-ai-platform' \
+  'branch --show-current)" == "main"' \
   'umask 077' \
   '127.0.0.1:8791' \
   'memberPublicSha256' \
@@ -359,7 +360,8 @@ for required in \
   'hostname -s' \
   'id -un' \
   'getent passwd' \
-  'fix/member-web-entry-hardening' \
+  '$REMOTE_USER_HOME/Development/family-ai-platform' \
+  'branch --show-current)" == "main"' \
   'umask 077' \
   'member-preview-up.sh' \
   '9080' \

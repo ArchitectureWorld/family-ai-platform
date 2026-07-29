@@ -61,8 +61,7 @@ function lifecycleFixture(
   const approvedRoot = join(
     fakeHome,
     "Development",
-    "family-ai-platform-worktrees",
-    "member-web-entry-hardening"
+    "family-ai-platform"
   );
   const scriptsDirectory = join(approvedRoot, "scripts");
   const binDirectory = join(fixture, "bin");
@@ -84,7 +83,7 @@ function lifecycleFixture(
   executable(join(localBin, "codex"), "#!/usr/bin/env bash\nexit 0\n");
   const branch = spawnSync(
     "git",
-    ["init", "-q", "-b", "fix/member-web-entry-hardening"],
+    ["init", "-q", "-b", "main"],
     { cwd: approvedRoot, encoding: "utf8" }
   );
   if (branch.status !== 0) throw new Error("FIXTURE_GIT_INIT_FAILED");
@@ -267,7 +266,9 @@ describe("isolated Member Web Preview scripts", () => {
     expect(up).toContain('hostname -s');
     expect(up).toContain('id -un');
     expect(up).toContain('getent passwd');
-    expect(up).toContain('fix/member-web-entry-hardening');
+    expect(up).toContain('$REMOTE_USER_HOME/Development/family-ai-platform');
+    expect(up).toContain('branch --show-current)" == "main"');
+    expect(up).not.toContain('family-ai-platform-worktrees');
     expect(up).toContain('127.0.0.1');
     expect(up).toContain('8791');
     expect(up).toContain('8792');
