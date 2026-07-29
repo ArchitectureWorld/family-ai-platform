@@ -11,6 +11,7 @@ import {
   sameCacheIdentity
 } from "./cache-identity.js";
 import { chooseInitialAgent, isMountedAgent } from "./agent-selector.js";
+import { createAttachmentController } from "./attachments.js";
 import { createChatController } from "./chat.js";
 import { createRenderer } from "./render.js";
 import { createStore } from "./store.js";
@@ -89,6 +90,7 @@ function initialState(context, snapshot, selection) {
     paginationByThread: {},
     outgoing: snapshot.outgoing ?? [],
     drafts: draftMap(snapshot.drafts),
+    attachmentDrafts: snapshot.attachmentDrafts ?? [],
     selectedMessageRefs: [],
     progressByWork: mapBy(snapshot.progress, "workConversationRef"),
     network: { online: typeof navigator === "undefined" || navigator.onLine },
@@ -152,6 +154,7 @@ async function reloadCacheIntoStore(cache, store) {
         messages: [],
         outgoing: [],
         drafts: [],
+        attachmentDrafts: [],
         progress: [],
         chat: null,
         selectedWorkRef: null
@@ -177,6 +180,7 @@ async function reloadCacheIntoStore(cache, store) {
       messagesByThread: groupByThread(snapshot.messages),
       outgoing: snapshot.outgoing,
       drafts: draftMap(snapshot.drafts),
+      attachmentDrafts: snapshot.attachmentDrafts ?? [],
       progressByWork: mapBy(snapshot.progress, "workConversationRef"),
       sync: {
         ...current.sync,
@@ -512,6 +516,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
   let identity = null;
   let renderer = null;
   let syncController = null;
+  let attachmentController = null;
   let onlineAttached = false;
   let offlineAttached = false;
   let ownedWorkbench = null;
@@ -703,6 +708,11 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     } catch (error) {
       disposalErrors.push(error);
     }
+    try {
+      attachmentController?.stop?.();
+    } catch (error) {
+      disposalErrors.push(error);
+    }
 
     Promise.resolve().then(async () => {
       const settleStage = async (operation) => {
@@ -796,6 +806,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
           works: [],
           progress: [],
           drafts: [],
+          attachmentDrafts: [],
           outgoing: []
         };
     assertStartupOwnership();
@@ -818,6 +829,13 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     timeZone
   });
   const workController = createWorkController({ api, cache, store, threadController });
+  attachmentController = createAttachmentController({
+    api,
+    cache,
+    store,
+    cryptoImpl: options.cryptoImpl,
+    now: options.now
+  });
   let agentSwitchGeneration = 0;
   const applyEvent = createEventApplier({
     api,
@@ -889,6 +907,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       works: [],
       progress: [],
       drafts: [],
+      attachmentDrafts: [],
       outgoing: []
     };
   }
@@ -1026,6 +1045,19 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
         : selectedWork(state)?.threadRef;
       if (threadRef) await threadController.saveDraft(threadRef, text);
     },
+    async addAttachments(target, files) {
+      const agentRef = assertUsableAgent();
+      const state = store.getState();
+      const threadRef = target === "chat"
+        ? state.chat?.threadRef
+        : selectedWork(state)?.threadRef;
+      if (!threadRef) throw new Error("THREAD_NOT_SELECTED");
+      return attachmentController.addFiles({ agentRef, threadRef, files });
+    },
+    async cancelAttachment(attachmentRef) {
+      assertUsableAgent();
+      return attachmentController.cancelAttachment(attachmentRef);
+    },
     async loadEarlier(target) {
       assertUsableAgent();
       return guarded(async () => {
@@ -1079,6 +1111,12 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     ),
     saveDraft: (...args) => runTrackedAction(
       () => actionImplementations.saveDraft(...args)
+    ),
+    addAttachments: (...args) => runTrackedAction(
+      () => actionImplementations.addAttachments(...args)
+    ),
+    cancelAttachment: (...args) => runTrackedAction(
+      () => actionImplementations.cancelAttachment(...args)
     ),
     loadEarlier: (...args) => runTrackedAction(
       () => actionImplementations.loadEarlier(...args)

@@ -309,7 +309,7 @@ function createIdentityDatabaseRegistry() {
       };
       queueMicrotask(() => {
         try {
-          if (version !== 1) throw new Error("DATABASE_VERSION_INVALID");
+          if (version !== 2) throw new Error("DATABASE_VERSION_INVALID");
           let state = databases.get(name);
           const created = !state;
           if (!state) {

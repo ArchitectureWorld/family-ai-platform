@@ -5,11 +5,12 @@ export const MEMBER_CACHE_STORES = [
   "works",
   "progress",
   "drafts",
+  "attachmentDrafts",
   "outgoing"
 ];
 
 export const LEGACY_DATABASE_NAME = "family-ai-member-web";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const KEY_PATHS = {
   meta: "key",
   threads: "threadRef",
@@ -17,6 +18,7 @@ const KEY_PATHS = {
   works: "workConversationRef",
   progress: "workConversationRef",
   drafts: "threadRef",
+  attachmentDrafts: "attachmentRef",
   outgoing: "clientMessageId"
 };
 
@@ -170,6 +172,13 @@ export async function openMemberCache(
     if (!database.objectStoreNames.contains("drafts")) {
       database.createObjectStore("drafts", { keyPath: "threadRef" });
     }
+    if (!database.objectStoreNames.contains("attachmentDrafts")) {
+      const store = database.createObjectStore(
+        "attachmentDrafts",
+        { keyPath: "attachmentRef" }
+      );
+      store.createIndex("threadRef", "threadRef", { unique: false });
+    }
     if (!database.objectStoreNames.contains("outgoing")) {
       const store = database.createObjectStore("outgoing", { keyPath: "clientMessageId" });
       store.createIndex("threadRef", "threadRef", { unique: false });
@@ -221,6 +230,7 @@ export async function readBootstrapSnapshot(cache, agentRef = null) {
       works,
       progress,
       drafts,
+      attachmentDrafts,
       outgoing
     ] = await Promise.all([
       transaction.get("meta", "context"),
@@ -239,6 +249,7 @@ export async function readBootstrapSnapshot(cache, agentRef = null) {
       transaction.getAll("works"),
       transaction.getAll("progress"),
       transaction.getAll("drafts"),
+      transaction.getAll("attachmentDrafts"),
       transaction.getAll("outgoing")
     ]);
     const projectedWorks = agentRef
@@ -280,6 +291,7 @@ export async function readBootstrapSnapshot(cache, agentRef = null) {
         ? progress.filter((item) => projectedWorkRefs.has(item.workConversationRef))
         : progress,
       drafts: projectByThread(drafts),
+      attachmentDrafts: projectByThread(attachmentDrafts),
       outgoing: projectByThread(outgoing)
     };
   });
@@ -350,6 +362,40 @@ export async function saveDraft(cache, threadRef, text, agentRef = null) {
       text,
       updatedAt: new Date().toISOString()
     });
+  });
+}
+
+export async function saveAttachmentDraft(cache, draft) {
+  return cache.transaction(["attachmentDrafts"], (transaction) =>
+    transaction.put("attachmentDrafts", clone(draft))
+  );
+}
+
+export async function removeAttachmentDraft(cache, attachmentRef) {
+  return cache.transaction(["attachmentDrafts"], (transaction) =>
+    transaction.delete("attachmentDrafts", attachmentRef)
+  );
+}
+
+export async function readAttachmentDrafts(
+  cache,
+  { agentRef = null, threadRef = null } = {}
+) {
+  return cache.transaction(["attachmentDrafts"], async (transaction) => {
+    const values = threadRef
+      ? await transaction.getAllByIndex(
+          "attachmentDrafts",
+          "threadRef",
+          threadRef
+        )
+      : await transaction.getAll("attachmentDrafts");
+    return values
+      .filter((draft) => !agentRef || draft.agentRef === agentRef)
+      .sort((left, right) =>
+        String(left.createdAt ?? left.attachmentRef).localeCompare(
+          String(right.createdAt ?? right.attachmentRef)
+        )
+      );
   });
 }
 

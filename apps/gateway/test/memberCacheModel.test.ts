@@ -9,9 +9,12 @@ import {
   mergeThreadPage,
   openMemberCache,
   readBootstrapSnapshot,
+  readAttachmentDrafts,
+  removeAttachmentDraft,
   removeOutgoing,
   replaceThreadMessages,
   saveDraft,
+  saveAttachmentDraft,
   saveMeta,
   saveOutgoing,
   saveProgress,
@@ -44,6 +47,7 @@ describe("Member Web cache model", () => {
       "works",
       "progress",
       "drafts",
+      "attachmentDrafts",
       "outgoing"
     ]);
     expect(openMemberCache).toBeTypeOf("function");
@@ -59,7 +63,7 @@ describe("Member Web cache model", () => {
     request.result = database;
     const indexedDBImpl = { open: (name: string, version: number) => {
       expect(name).toBe("family-ai-member-web-v2:family:a:person:a:device:a");
-      expect(version).toBe(1);
+      expect(version).toBe(2);
       return request;
     } };
     const opening = openMemberCache("family-ai-member-web-v2:family:a:person:a:device:a", { indexedDBImpl });
@@ -196,6 +200,49 @@ describe("Member Web cache model", () => {
       drafts: [],
       outgoing: []
     });
+  });
+
+  it("persists and projects attachment drafts by immutable Agent and Thread", async () => {
+    const cache = createMemoryCache();
+    const chatDraft = {
+      attachmentRef: "attachment:chat-a",
+      agentRef: "agent:a",
+      threadRef: "thread:chat-a",
+      fileName: "chat.pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 100,
+      serverState: "ready"
+    };
+    const workDraft = {
+      ...chatDraft,
+      attachmentRef: "attachment:work-a",
+      threadRef: "thread:work-a",
+      fileName: "work.pdf"
+    };
+    const otherAgentDraft = {
+      ...chatDraft,
+      attachmentRef: "attachment:chat-b",
+      agentRef: "agent:b",
+      threadRef: "thread:chat-b"
+    };
+    await saveAttachmentDraft(cache, chatDraft);
+    await saveAttachmentDraft(cache, workDraft);
+    await saveAttachmentDraft(cache, otherAgentDraft);
+
+    expect(await readAttachmentDrafts(cache, {
+      agentRef: "agent:a",
+      threadRef: "thread:chat-a"
+    })).toEqual([chatDraft]);
+    expect((await readBootstrapSnapshot(cache, "agent:a")).attachmentDrafts)
+      .toEqual([chatDraft, workDraft]);
+    expect((await readBootstrapSnapshot(cache, "agent:b")).attachmentDrafts)
+      .toEqual([otherAgentDraft]);
+
+    await removeAttachmentDraft(cache, chatDraft.attachmentRef);
+    expect(await readAttachmentDrafts(cache, {
+      agentRef: "agent:a",
+      threadRef: "thread:chat-a"
+    })).toEqual([]);
   });
 
   it("never persists Web Entry credentials in the browser cache module", () => {

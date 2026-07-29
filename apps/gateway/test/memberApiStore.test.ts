@@ -67,6 +67,60 @@ describe("Member Web API client", () => {
     expect(headers.get("content-type")).toBe("application/json");
   });
 
+  it("passes attachment chunks as binary bodies and builds all upload endpoints", async () => {
+    const requests: Array<{ path: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (path: string, init: RequestInit) => {
+      requests.push({ path, init });
+      if (init.method === "DELETE") return new Response(null, { status: 204 });
+      return Response.json({ protocolVersion: 1 });
+    });
+    const api = createApiClient(fetchImpl as typeof fetch);
+    const chunk = new Blob([new Uint8Array([1, 2, 3])], {
+      type: "application/octet-stream"
+    });
+
+    await api.beginAttachmentUpload({
+      fileName: "report.pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 3
+    });
+    await api.putAttachmentChunk(
+      "attachment:unsafe/value",
+      2,
+      chunk,
+      "a".repeat(64)
+    );
+    await api.completeAttachmentUpload("attachment:unsafe/value", {
+      sha256: "b".repeat(64),
+      chunkCount: 3
+    });
+    await api.cancelAttachmentUpload("attachment:unsafe/value");
+
+    expect(requests.map((request) => request.path)).toEqual([
+      "/api/v1/attachments/uploads",
+      "/api/v1/attachments/uploads/attachment%3Aunsafe%2Fvalue/chunks/2",
+      "/api/v1/attachments/uploads/attachment%3Aunsafe%2Fvalue/complete",
+      "/api/v1/attachments/uploads/attachment%3Aunsafe%2Fvalue"
+    ]);
+    expect(requests[1]?.init.body).toBe(chunk);
+    const chunkHeaders = new Headers(requests[1]?.init.headers);
+    expect(chunkHeaders.get("content-type")).toBe("application/octet-stream");
+    expect(chunkHeaders.get("x-family-ai-chunk-sha256")).toBe("a".repeat(64));
+    expect(chunkHeaders.get("x-family-ai-web-request")).toBe("1");
+    expect(requests[1]?.init.credentials).toBe("same-origin");
+    expect(requests[0]?.init.body).toBe(JSON.stringify({
+      protocolVersion: 1,
+      fileName: "report.pdf",
+      mediaType: "application/pdf",
+      sizeBytes: 3
+    }));
+    expect(requests[2]?.init.body).toBe(JSON.stringify({
+      protocolVersion: 1,
+      sha256: "b".repeat(64),
+      chunkCount: 3
+    }));
+  });
+
   it("reports the raw fetch Promise synchronously before awaiting transport settlement", async () => {
     let resolveFetch!: (response: Response) => void;
     const rawFetchPromise = new Promise<Response>((resolve) => {

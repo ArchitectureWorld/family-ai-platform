@@ -36,6 +36,14 @@ function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isBinaryBody(value) {
+  return (
+    (typeof Blob === "function" && value instanceof Blob) ||
+    value instanceof ArrayBuffer ||
+    ArrayBuffer.isView(value)
+  );
+}
+
 function hasExactKeys(value, expected) {
   const keys = Object.keys(value).sort();
   const sortedExpected = [...expected].sort();
@@ -223,8 +231,12 @@ export function createApiClient(
     const headers = new Headers(options.headers ?? {});
     let body;
     if (options.body !== undefined) {
-      headers.set("content-type", "application/json");
-      body = JSON.stringify(options.body);
+      if (isBinaryBody(options.body)) {
+        body = options.body;
+      } else {
+        headers.set("content-type", "application/json");
+        body = JSON.stringify(options.body);
+      }
     }
     if (!SAFE_METHODS.has(method)) headers.set("x-family-ai-web-request", "1");
 
@@ -357,6 +369,49 @@ export function createApiClient(
     sendThreadMessage: (threadRef, request) => apiRequest(
       `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
       { method: "POST", body: request }
+    ),
+    beginAttachmentUpload: (metadata, { signal } = {}) => apiRequest(
+      "/api/v1/attachments/uploads",
+      {
+        method: "POST",
+        body: { protocolVersion: 1, ...metadata },
+        signal
+      }
+    ),
+    putAttachmentChunk: (
+      attachmentRef,
+      chunkIndex,
+      blob,
+      sha256,
+      { signal } = {}
+    ) => apiRequest(
+      `/api/v1/attachments/uploads/${encodeURIComponent(attachmentRef)}` +
+        `/chunks/${encodeURIComponent(String(chunkIndex))}`,
+      {
+        method: "PUT",
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-family-ai-chunk-sha256": sha256
+        },
+        body: blob,
+        signal
+      }
+    ),
+    completeAttachmentUpload: (
+      attachmentRef,
+      command,
+      { signal } = {}
+    ) => apiRequest(
+      `/api/v1/attachments/uploads/${encodeURIComponent(attachmentRef)}/complete`,
+      {
+        method: "POST",
+        body: { protocolVersion: 1, ...command },
+        signal
+      }
+    ),
+    cancelAttachmentUpload: (attachmentRef, { signal } = {}) => apiRequest(
+      `/api/v1/attachments/uploads/${encodeURIComponent(attachmentRef)}`,
+      { method: "DELETE", signal }
     ),
     listWorks: (agentRef) =>
       apiRequest(queryPath("/api/v1/work-conversations", { agentRef })),

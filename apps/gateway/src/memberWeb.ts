@@ -52,6 +52,7 @@ const productModules = [
   ["/member/assets/entry-lifecycle.js", "entry-lifecycle.js"],
   ["/member/assets/store.js", "store.js"],
   ["/member/assets/cache.js", "cache.js"],
+  ["/member/assets/attachments.js", "attachments.js"],
   ["/member/assets/thread.js", "thread.js"],
   ["/member/assets/sync.js", "sync.js"],
   ["/member/assets/agent-selector.js", "agent-selector.js"],

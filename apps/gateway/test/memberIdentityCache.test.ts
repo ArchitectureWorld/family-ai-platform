@@ -59,7 +59,8 @@ describe("Member cache identity namespace", () => {
     await populateA(openedA.cache);
     const openedB = await openIdentityMemberCache(contextB, { openCache });
     expect(await readBootstrapSnapshot(openedB.cache)).toEqual({
-      context: contextB, drafts: [], localAppliedSequence: 0, messages: [], outgoing: [], progress: [],
+      context: contextB, drafts: [], attachmentDrafts: [],
+      localAppliedSequence: 0, messages: [], outgoing: [], progress: [],
       selectedSection: "chat", selectedWorkRef: null, threads: [], works: []
     });
     const reopenedA = await openIdentityMemberCache(contextA, { openCache });
@@ -183,6 +184,6 @@ describe("Member cache IndexedDB lifecycle", () => {
     await opening;
     request.versionchange(); request.versionchange();
     expect(database.close).toHaveBeenCalledOnce();
-    expect(indexedDBImpl.open).toHaveBeenCalledWith("family-ai-member-web-v2:test", 1);
+    expect(indexedDBImpl.open).toHaveBeenCalledWith("family-ai-member-web-v2:test", 2);
   });
 });

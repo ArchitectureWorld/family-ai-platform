@@ -24,6 +24,7 @@ const modules = [
   "entry-lifecycle.js",
   "store.js",
   "cache.js",
+  "attachments.js",
   "thread.js",
   "sync.js",
   "chat.js",
