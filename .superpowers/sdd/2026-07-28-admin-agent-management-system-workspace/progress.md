@@ -1,0 +1,17 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-07-28-admin-agent-management-system-workspace.md
+Task 1: fix round 1/5 (3 addressed, 0 open; commits 02b7fa7..8464edf)
+Task 1: complete (commits 763fa32..8464edf, review clean)
+Task 2: minor (deferred): fresh-schema tests do not directly negative-test all new audience/assignment CHECKs or both new tables
+Task 2: fix round 1/5 (2 addressed, 2 open — duplicate/idempotent and trigger-recovery regressions; commits cf8b37b..6146075)
+Task 2: fix round 2/5 (2 addressed, 0 open; commits 6146075..5a5f93b)
+Task 2: complete (commits 8464edf..5a5f93b, review clean)
+Task 3: fix round 1/5 (3 addressed, 0 open; commits c519894..172eed3)
+Task 3: complete (commits 5a5f93b..172eed3, review clean)
+Task 4: fix round 1/5 (1 addressed, 0 open; commits c8b0ca9..5778451)
+Task 4: complete (commits 172eed3..5778451, review clean)
+Task 6: fix round 1/5 (2 addressed, 0 open; source commits 5da03fa..164cb82)
+Task 6: complete (integrated commits 3d8d53f..56c4830, review clean)
+Task 7: complete (Provider routing, bounded runtime failure, live status aggregation; 30 SDK + 74 Gateway tests green)
+Task 12: complete (explicit real runtime composition, protected Preview discovery, Admin image assets; gates green)
+Task 12: fix round 1/5 (P1 authoritative real boundary and P2 reserved Profile collision addressed; gates green)
+Task 12: fix round 2/5 (unique multi-Agent member projection addressed; gates green)
