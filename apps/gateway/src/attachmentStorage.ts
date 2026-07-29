@@ -6,13 +6,13 @@ import {
   createReadStream,
   createWriteStream,
   existsSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   realpathSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeSync
 } from "node:fs";
@@ -307,11 +307,32 @@ export class AttachmentStorage {
 
   requireRegularFile(storageKey: string): string {
     const path = this.resolveStorageKey(storageKey);
-    const information = statSync(path, { bigint: false });
-    if (!information.isFile() || lstatSync(path).isSymbolicLink()) {
+    const pathInformation = lstatSync(path);
+    if (!pathInformation.isFile() || pathInformation.isSymbolicLink()) {
       throw storageError("ATTACHMENT_STORAGE_UNSAFE", "附件文件不安全。");
     }
-    return realpathSync(path);
+    const canonicalPath = realpathSync(path);
+    const pathRelative = relative(this.root, canonicalPath);
+    if (
+      pathRelative === "" ||
+      pathRelative === ".." ||
+      pathRelative.startsWith(`..${sep}`) ||
+      isAbsolute(pathRelative)
+    ) {
+      throw storageError("ATTACHMENT_STORAGE_UNSAFE", "附件文件路径越界。");
+    }
+    const descriptor = openSync(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
+    );
+    try {
+      if (!fstatSync(descriptor).isFile()) {
+        throw storageError("ATTACHMENT_STORAGE_UNSAFE", "附件文件不安全。");
+      }
+    } finally {
+      closeSync(descriptor);
+    }
+    return canonicalPath;
   }
 
   createDownloadStream(storageKey: string) {

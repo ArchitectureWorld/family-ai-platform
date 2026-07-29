@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
-  symlinkSync
+  symlinkSync,
+  writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -119,5 +121,26 @@ describe("attachment streaming storage", () => {
     chmodSync(directory, 0o700);
     symlinkSync(outside, link);
     expect(() => new AttachmentStorage(link)).toThrow();
+  });
+
+  it("refuses Provider handoff through a final or parent symlink", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-attachment-handoff-"));
+    const storage = new AttachmentStorage(join(directory, "attachments"));
+    const outsideDirectory = join(directory, "outside");
+    const outsideFile = join(outsideDirectory, "secret.blob");
+    mkdirSync(outsideDirectory);
+    writeFileSync(outsideFile, "outside", { mode: 0o600 });
+
+    const leafDirectory = storage.resolveStorageKey("files/aa");
+    mkdirSync(leafDirectory);
+    const leafLink = storage.resolveStorageKey("files/aa/leaf.blob");
+    symlinkSync(outsideFile, leafLink);
+    expect(() => storage.requireRegularFile("files/aa/leaf.blob"))
+      .toThrowError(/不安全/);
+
+    rmSync(leafDirectory, { recursive: true, force: true });
+    symlinkSync(outsideDirectory, leafDirectory);
+    expect(() => storage.requireRegularFile("files/aa/secret.blob"))
+      .toThrowError(/越界/);
   });
 });

@@ -2,6 +2,7 @@ import {
   PROTOCOL_VERSION,
   providerInvocationRequestSchema,
   providerInvocationResultSchema,
+  type ProviderAttachment,
   type PublicError,
   type ThreadMessage,
   type ThreadMessageContent
@@ -10,6 +11,8 @@ import type {
   ProviderAdapter,
   ProviderAdapterResolver
 } from "@family-ai/provider-adapter-sdk";
+import type { AttachmentRepository } from "./attachmentRepository.js";
+import type { AttachmentStorage } from "./attachmentStorage.js";
 import type {
   ChatWorkDomainRepository,
   ThreadAccessContext
@@ -38,6 +41,11 @@ export interface SendChatWorkMessageResult {
   message: ThreadMessage;
   assistantMessageRef: string;
   replayedProviderTurn: boolean;
+}
+
+export interface AttachmentProviderHandoff {
+  repository: AttachmentRepository;
+  storage: AttachmentStorage;
 }
 
 class ThreadLane {
@@ -108,11 +116,48 @@ export class ChatWorkMessageService {
     private readonly domainRepository: ChatWorkDomainRepository,
     private readonly providerRepository: ChatWorkProviderRepository,
     providerResolver: ProviderAdapterResolver | ProviderAdapter,
-    private readonly now: () => Date = () => new Date()
+    private readonly now: () => Date = () => new Date(),
+    private readonly attachmentHandoff?: AttachmentProviderHandoff
   ) {
     this.providerResolver = "resolve" in providerResolver
       ? providerResolver
       : { resolve: () => providerResolver };
+  }
+
+  private providerAttachments(
+    input: SendChatWorkMessageInput,
+    accessContext: ThreadAccessContext,
+    message: ThreadMessage
+  ): ProviderAttachment[] {
+    if (message.attachments.length === 0) return [];
+    const familyRef = input.attachmentFamilyRef ?? accessContext.familyRef;
+    const handoff = this.attachmentHandoff;
+    if (!familyRef || !handoff) {
+      throw new Error("Attachment Provider handoff is unavailable");
+    }
+    return message.attachments.map((attachment) => {
+      const record = handoff.repository.requireDownload({
+        familyRef,
+        personRef: input.personRef,
+        attachmentRef: attachment.attachmentRef
+      });
+      if (
+        record.attachment.state !== "attached" ||
+        !record.attachment.storageKey
+      ) {
+        throw new Error("Provider attachment is not attached to a message");
+      }
+      return {
+        attachmentRef: record.metadata.attachmentRef,
+        fileName: record.metadata.fileName,
+        mediaType: record.metadata.mediaType,
+        sizeBytes: record.metadata.sizeBytes,
+        sha256: record.metadata.sha256,
+        localPath: handoff.storage.requireRegularFile(
+          record.attachment.storageKey
+        )
+      };
+    });
   }
 
   async sendPersonMessage(
@@ -201,6 +246,18 @@ export class ChatWorkMessageService {
             limit: 200
           }).messages
         : [message];
+      let attachments: ProviderAttachment[];
+      try {
+        attachments = this.providerAttachments(input, accessContext, message);
+      } catch {
+        const error = unavailableProvider();
+        this.providerRepository.markTurnFailed({
+          userMessageRef: message.messageRef,
+          error,
+          completedAt: this.now().toISOString()
+        });
+        return throwProviderError(error, 503);
+      }
       const request = providerInvocationRequestSchema.parse({
         protocolVersion: PROTOCOL_VERSION,
         invocationRef: turn.invocationRef,
@@ -218,6 +275,7 @@ export class ChatWorkMessageService {
           currentMessageRef: message.messageRef,
           externalSessionRef: turn.externalSessionRef
         }),
+        attachments,
         timeoutMs: 120000
       });
 

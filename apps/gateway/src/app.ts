@@ -344,7 +344,11 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     chatWorkRepository,
     chatWorkProviderRepository,
     providerRouter,
-    now
+    now,
+    {
+      repository: attachmentRepository,
+      storage: attachmentStorage
+    }
   );
   const adminWorkspaceRepository = new AdminWorkspaceRepository(db);
 

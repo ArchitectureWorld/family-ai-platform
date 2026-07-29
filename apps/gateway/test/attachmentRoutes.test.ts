@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type {
+  ProviderInvocationRequest,
+  ProviderInvocationResult
+} from "@family-ai/contracts";
+import { FakeProviderAdapter } from "@family-ai/provider-adapter-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
 
@@ -28,21 +33,52 @@ function sha256(value: Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+class MissingSessionOnceProvider extends FakeProviderAdapter {
+  override async invoke(
+    request: ProviderInvocationRequest
+  ): Promise<ProviderInvocationResult> {
+    if (this.calls.length === 1) {
+      this.calls.push(structuredClone(request));
+      const failed: ProviderInvocationResult = {
+        protocolVersion: "1.0",
+        invocationRef: request.invocationRef,
+        correlationRef: request.correlationRef,
+        status: "failed",
+        completedAt: "2026-07-29T08:01:31.000Z",
+        error: {
+          code: "PROVIDER_SESSION_NOT_FOUND",
+          category: "conflict",
+          message: "原个人助理会话已失效，请重新开始会话。",
+          retryable: false
+        }
+      };
+      this.results.push(failed);
+      return failed;
+    }
+    return super.invoke(request);
+  }
+}
+
 describe("attachment upload and download routes", () => {
   let directory = "";
+  let databasePath = "";
   let app: Awaited<ReturnType<typeof buildGatewayApp>>;
+  let provider: MissingSessionOnceProvider;
   let personal: EntryCredential;
   let admin: EntryCredential;
   let currentNow: Date;
 
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-attachment-routes-"));
+    databasePath = join(directory, "gateway.sqlite");
     currentNow = new Date("2026-07-29T08:00:00.000Z");
+    provider = new MissingSessionOnceProvider({ clock: () => currentNow });
     app = await buildGatewayApp({
-      databasePath: join(directory, "gateway.sqlite"),
+      databasePath,
       attachmentRoot: join(directory, "attachments"),
       attachmentQuotaBytes: 20000,
       deviceToken,
+      providerAdapter: provider,
       mode: "test",
       now: () => currentNow
     });
@@ -408,6 +444,23 @@ describe("attachment upload and download routes", () => {
         ]
       }
     });
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0]?.attachments).toEqual([
+      {
+        attachmentRef,
+        fileName: "report.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: bytes.length,
+        sha256: sha256(bytes),
+        localPath: join(
+          directory,
+          "attachments",
+          "files",
+          sha256(bytes).slice(0, 2),
+          `${sha256(bytes)}.blob`
+        )
+      }
+    ]);
 
     const replay = await app.inject({
       method: "POST",
@@ -451,6 +504,42 @@ describe("attachment upload and download routes", () => {
     expect(listed.statusCode).toBe(200);
     expect(listed.json().messages[0].attachments).toEqual(
       sent.json().message.attachments
+    );
+
+    const rebuildPayload = {
+      protocolVersion: 1,
+      clientMessageId: "attachment-history-message-0001",
+      occurredAt: "2026-07-29T08:01:30.000Z",
+      content: { type: "text", text: "根据刚才的附件继续" },
+      attachmentRefs: []
+    };
+    const missingSession = await app.inject({
+      method: "POST",
+      url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+      headers: entryHeaders(personal),
+      payload: rebuildPayload
+    });
+    expect(missingSession.statusCode).toBe(502);
+    expect(missingSession.json()).toMatchObject({
+      code: "PROVIDER_SESSION_NOT_FOUND"
+    });
+    const rebuilt = await app.inject({
+      method: "POST",
+      url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+      headers: entryHeaders(personal),
+      payload: rebuildPayload
+    });
+    expect(rebuilt.statusCode).toBe(201);
+    expect(provider.calls[2]?.attachments).toEqual([]);
+    expect(provider.calls[2]?.content[0]?.text).toContain(
+      `[附件:report.pdf | application/pdf | ${bytes.length} bytes]`
+    );
+    expect(provider.calls[2]?.content[0]?.text).not.toContain(
+      join(directory, "attachments")
+    );
+    expect(provider.calls[2]?.content[0]?.text).not.toContain(sha256(bytes));
+    expect(provider.calls[2]?.content[0]?.text).not.toContain(
+      `/api/v1/attachments/${encodeURIComponent(attachmentRef)}`
     );
 
     const reused = await app.inject({

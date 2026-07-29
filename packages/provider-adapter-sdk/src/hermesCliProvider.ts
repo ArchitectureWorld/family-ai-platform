@@ -10,6 +10,7 @@ import {
   ControlledProcessError,
   runControlledProcess
 } from "./processRunner.js";
+import { providerPromptFrom } from "./providerPrompt.js";
 
 const HERMES_SESSION_LINE = /^session_id:\s*([a-z0-9][a-z0-9_-]{1,126})$/gm;
 const HERMES_EXTERNAL_SESSION = /^external-session:hermes-([a-z0-9][a-z0-9_-]{1,119})$/;
@@ -95,18 +96,6 @@ function failure(
   };
 }
 
-function promptFrom(request: ProviderInvocationRequest): string | undefined {
-  const prompt = request.content.map((part) => part.text).join("\n\n");
-  if (
-    prompt.length === 0 ||
-    prompt.length > 240_000 ||
-    prompt.includes("\u0000")
-  ) {
-    return undefined;
-  }
-  return prompt;
-}
-
 function rawSessionId(externalSessionRef: string): string | undefined {
   return HERMES_EXTERNAL_SESSION.exec(externalSessionRef)?.[1];
 }
@@ -136,7 +125,7 @@ export class HermesCliProviderAdapter implements ProviderAdapter {
   }
 
   async invoke(request: ProviderInvocationRequest): Promise<ProviderInvocationResult> {
-    const prompt = promptFrom(request);
+    const prompt = providerPromptFrom(request);
     if (!prompt) {
       return failure(request, this.clock, "PROVIDER_RESPONSE_INVALID");
     }

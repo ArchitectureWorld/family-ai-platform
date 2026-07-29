@@ -15,6 +15,25 @@ const baseRequest = {
 };
 
 describe("FakeProviderAdapter", () => {
+  it("records attachment handoff facts without reading local files", async () => {
+    const adapter = new FakeProviderAdapter();
+    const attachments = [
+      {
+        attachmentRef: "attachment:fake-provider-001",
+        fileName: "report.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 123,
+        sha256: "b".repeat(64),
+        localPath: "/verified/root/report.blob"
+      }
+    ];
+
+    await adapter.invoke({ ...baseRequest, attachments });
+
+    expect(adapter.calls[0]?.attachments).toEqual(attachments);
+    expect(adapter.calls[0]?.attachments).not.toBe(attachments);
+  });
+
   it("continues the same logical session across turns and adapter restart", async () => {
     const firstAdapter = new FakeProviderAdapter();
     const first = await firstAdapter.invoke(baseRequest);
