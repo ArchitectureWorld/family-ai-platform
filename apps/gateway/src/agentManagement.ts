@@ -14,6 +14,10 @@ export interface RuntimeCatalogReconcileOptions {
   authoritative?: boolean;
 }
 
+export interface MemberAgentMutationOptions {
+  configurableOnly?: boolean;
+}
+
 export interface ActiveAgentMount {
   assignmentRef: string;
   agentRef: string;
@@ -285,9 +289,12 @@ export class AgentManagementRepository {
     };
   }
 
-  mountMemberAgent(input: { familyRef: string; personRef: string; agentRef: string }): MountedAgent {
+  mountMemberAgent(
+    input: { familyRef: string; personRef: string; agentRef: string },
+    options: MemberAgentMutationOptions = {}
+  ): MountedAgent {
     const mount = this.db.transaction(() => {
-      this.requireConfigurableMember(input.familyRef, input.personRef);
+      this.requireMutationMember(input.familyRef, input.personRef, options);
       const runtime = this.runtimeForAgent(input.agentRef);
       const existing = this.db.prepare(
         `SELECT aa.assignment_ref, aa.agent_ref, a.display_name, aa.provider_profile_ref, aa.is_default
@@ -323,9 +330,12 @@ export class AgentManagementRepository {
     return mount.immediate();
   }
 
-  unmountMemberAgent(input: { familyRef: string; personRef: string; agentRef: string }): void {
+  unmountMemberAgent(
+    input: { familyRef: string; personRef: string; agentRef: string },
+    options: MemberAgentMutationOptions = {}
+  ): void {
     this.db.transaction(() => {
-      this.requireConfigurableMember(input.familyRef, input.personRef);
+      this.requireMutationMember(input.familyRef, input.personRef, options);
       const runtime = this.runtimeForAgent(input.agentRef);
       this.requireActiveRuntimeMount(
         input.personRef,
@@ -347,9 +357,12 @@ export class AgentManagementRepository {
     })();
   }
 
-  setDefaultAgent(input: { familyRef: string; personRef: string; agentRef: string | null }): void {
+  setDefaultAgent(
+    input: { familyRef: string; personRef: string; agentRef: string | null },
+    options: MemberAgentMutationOptions = {}
+  ): void {
     this.db.transaction(() => {
-      this.requireConfigurableMember(input.familyRef, input.personRef);
+      this.requireMutationMember(input.familyRef, input.personRef, options);
       if (input.agentRef !== null) {
         const runtime = this.runtimeForAgent(input.agentRef);
         this.requireActiveRuntimeMount(
@@ -423,6 +436,18 @@ export class AgentManagementRepository {
          AND fm.status = ? AND p.status = ?`
     ).get(familyRef, personRef, active, active);
     if (!member) throw this.memberNotFound();
+  }
+
+  private requireMutationMember(
+    familyRef: string,
+    personRef: string,
+    options: MemberAgentMutationOptions
+  ): void {
+    if (options.configurableOnly) {
+      this.requireConfigurableMember(familyRef, personRef);
+      return;
+    }
+    this.requireActiveMember(familyRef, personRef);
   }
 
   private runtimeForAgent(agentRef: string): { providerProfileRef: string; displayName: string } {

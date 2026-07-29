@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { webEntryContextResponseSchema } from "@family-ai/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentManagementRepository } from "../src/agentManagement.js";
 import { buildGatewayApp } from "../src/app.js";
+import { openGatewayDatabase } from "../src/database.js";
 import { WebEntryRepository } from "../src/webEntry.js";
 
 const deviceToken = "web-entry-route-bootstrap-device-token-with-enough-length";
@@ -80,6 +82,7 @@ describe("Web Entry HTTP routes", () => {
   let app: Awaited<ReturnType<typeof buildGatewayApp>>;
   let admin: EntryCredential;
   let personRef = "";
+  let familyRef = "";
   let pairingRef = "";
   let code = "";
   let currentTime = new Date("2026-07-25T09:00:00.000Z");
@@ -105,9 +108,11 @@ describe("Web Entry HTTP routes", () => {
     });
     expect(onboarding.statusCode).toBe(201);
     const body = onboarding.json() as {
+      family: { familyRef: string };
       owner: { personRef: string };
       entries: { admin: EntryCredential };
     };
+    familyRef = body.family.familyRef;
     personRef = body.owner.personRef;
     admin = body.entries.admin;
 
@@ -366,12 +371,16 @@ describe("Web Entry HTTP routes", () => {
   it("returns a strict empty Web context when the authenticated member has no mount", async () => {
     const claimed = await claim();
     expect(claimed.statusCode).toBe(204);
-    const unmounted = await app.inject({
-      method: "DELETE",
-      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/${encodeURIComponent("agent:personal-assistant")}`,
-      headers: entryHeaders(admin)
-    });
-    expect(unmounted.statusCode).toBe(200);
+    const database = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    try {
+      new AgentManagementRepository(database, () => currentTime).unmountMemberAgent({
+        familyRef,
+        personRef,
+        agentRef: "agent:personal-assistant"
+      });
+    } finally {
+      database.close();
+    }
 
     const context = await app.inject({
       method: "GET",

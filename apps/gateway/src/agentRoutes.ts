@@ -77,11 +77,14 @@ export function registerAgentRoutes(
     const params = memberParamsSchema.safeParse(request.params);
     const body = mountMemberAgentRequestSchema.safeParse(request.body);
     if (!params.success || !body.success) throw invalidRequest();
-    input.repository.mountMemberAgent({
-      familyRef: context.family.familyRef,
-      personRef: params.data.personRef,
-      agentRef: body.data.agentRef
-    });
+    input.repository.mountMemberAgent(
+      {
+        familyRef: context.family.familyRef,
+        personRef: params.data.personRef,
+        agentRef: body.data.agentRef
+      },
+      { configurableOnly: true }
+    );
     return reply.code(201).send(
       await mountResponse(context.family.familyRef, params.data.personRef)
     );
@@ -91,11 +94,14 @@ export function registerAgentRoutes(
     const context = requireEntryRequest(request, input.entryAuthenticator, "family_admin");
     const parsed = mountParamsSchema.safeParse(request.params);
     if (!parsed.success) throw invalidRequest();
-    input.repository.unmountMemberAgent({
-      familyRef: context.family.familyRef,
-      personRef: parsed.data.personRef,
-      agentRef: parsed.data.agentRef
-    });
+    input.repository.unmountMemberAgent(
+      {
+        familyRef: context.family.familyRef,
+        personRef: parsed.data.personRef,
+        agentRef: parsed.data.agentRef
+      },
+      { configurableOnly: true }
+    );
     return mountResponse(context.family.familyRef, parsed.data.personRef);
   });
 
@@ -104,11 +110,14 @@ export function registerAgentRoutes(
     const params = memberParamsSchema.safeParse(request.params);
     const body = setDefaultAgentRequestSchema.safeParse(request.body);
     if (!params.success || !body.success) throw invalidRequest();
-    input.repository.setDefaultAgent({
-      familyRef: context.family.familyRef,
-      personRef: params.data.personRef,
-      agentRef: body.data.agentRef
-    });
+    input.repository.setDefaultAgent(
+      {
+        familyRef: context.family.familyRef,
+        personRef: params.data.personRef,
+        agentRef: body.data.agentRef
+      },
+      { configurableOnly: true }
+    );
     return mountResponse(context.family.familyRef, params.data.personRef);
   });
 }
