@@ -15,6 +15,8 @@ const HERMES_SESSION_LINE = /^session_id:\s*([a-z0-9][a-z0-9_-]{1,126})$/gm;
 const HERMES_EXTERNAL_SESSION = /^external-session:hermes-([a-z0-9][a-z0-9_-]{1,119})$/;
 const HERMES_SESSION_NOT_FOUND =
   /\bsession(?:\s+id)?\s+(?:was\s+)?not\s+found\b/i;
+const HERMES_FATAL_DIAGNOSTIC =
+  /(?:\b(?:authentication|credential|api\s+key)\b[^\n]{0,80}\b(?:failed|invalid|missing|required)\b|\b(?:failed|unable)\s+to\s+(?:initialize|start|resume)\b)/i;
 
 type ProviderFailureCode =
   | "PROVIDER_TIMEOUT"
@@ -165,24 +167,28 @@ export class HermesCliProviderAdapter implements ProviderAdapter {
       if (result.timedOut || result.aborted) {
         return failure(request, this.clock, "PROVIDER_TIMEOUT");
       }
-      if (result.exitCode !== 0) {
-        if (continuationSession && HERMES_SESSION_NOT_FOUND.test(result.stderr)) {
-          return failure(request, this.clock, "PROVIDER_SESSION_NOT_FOUND");
-        }
-        return failure(request, this.clock, "PROVIDER_UNAVAILABLE");
-      }
-
       const matches = [...result.stderr.matchAll(HERMES_SESSION_LINE)];
       const sessionId = matches.length === 1 ? matches[0]?.[1] : undefined;
       const safeExternalSessionRef = sessionId
         ? externalSessionRef(sessionId)
         : undefined;
+      const validResponse =
+        (continuationSession === undefined || sessionId === continuationSession) &&
+        safeExternalSessionRef !== undefined &&
+        result.stdout.trim().length > 0 &&
+        result.stdout.length <= 12_000 &&
+        !HERMES_FATAL_DIAGNOSTIC.test(result.stderr);
       if (
-        (continuationSession !== undefined && sessionId !== continuationSession) ||
-        !safeExternalSessionRef ||
-        result.stdout.length === 0 ||
-        result.stdout.length > 12_000
+        result.exitCode !== 0 &&
+        continuationSession &&
+        HERMES_SESSION_NOT_FOUND.test(result.stderr)
       ) {
+        return failure(request, this.clock, "PROVIDER_SESSION_NOT_FOUND");
+      }
+      if (result.exitCode !== 0 && (result.exitCode !== 1 || !validResponse)) {
+        return failure(request, this.clock, "PROVIDER_UNAVAILABLE");
+      }
+      if (!validResponse) {
         return failure(request, this.clock, "PROVIDER_RESPONSE_INVALID");
       }
       return {

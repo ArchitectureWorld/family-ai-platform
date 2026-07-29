@@ -68,6 +68,30 @@ beforeEach(async () => {
       process.stderr.write("private command and cookie\\n");
       process.exit(7);
     }
+    if (prompt === "partial-valid") {
+      process.stdout.write("Hermes 已完成回答。");
+      process.stderr.write("non-fatal finalize warning\\nsession_id: partial_session_51\\n");
+      process.exit(1);
+    }
+    if (prompt === "partial-empty") {
+      process.stderr.write("session_id: partial_session_52\\n");
+      process.exit(1);
+    }
+    if (prompt === "partial-duplicate-id") {
+      process.stdout.write("private ambiguous answer");
+      process.stderr.write("session_id: partial_session_53\\nsession_id: partial_session_54\\n");
+      process.exit(1);
+    }
+    if (prompt === "partial-fatal") {
+      process.stdout.write("private unsafe answer");
+      process.stderr.write("Authentication failed: invalid credential\\nsession_id: partial_session_55\\n");
+      process.exit(1);
+    }
+    if (prompt === "valid-exit-two") {
+      process.stdout.write("private wrong-exit answer");
+      process.stderr.write("session_id: partial_session_56\\n");
+      process.exit(2);
+    }
     if (prompt === "missing-id") {
       process.stdout.write("reply");
       process.stderr.write("private diagnostic\\n");
@@ -134,6 +158,39 @@ describe("HermesCliProviderAdapter", () => {
       (await readFile(join(cwd, "invocations.jsonl"), "utf8")).trim()
     ) as { args: string[] };
     expect(invocation.args).not.toContain("-p");
+  });
+
+  it("accepts an exit-1 Hermes result only when answer and session marker are valid", async () => {
+    const adapter = new HermesCliProviderAdapter(options());
+    const result = await adapter.invoke({
+      ...request,
+      content: [{ type: "text" as const, text: "partial-valid" }]
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: [{ type: "text", text: "Hermes 已完成回答。" }],
+      externalSessionRef: "external-session:hermes-partial_session_51"
+    });
+  });
+
+  it.each([
+    ["partial-empty", "PROVIDER_UNAVAILABLE"],
+    ["partial-duplicate-id", "PROVIDER_UNAVAILABLE"],
+    ["partial-fatal", "PROVIDER_UNAVAILABLE"],
+    ["valid-exit-two", "PROVIDER_UNAVAILABLE"]
+  ])("rejects unsafe non-zero Hermes result %s", async (prompt, code) => {
+    const adapter = new HermesCliProviderAdapter(options());
+    const result = await adapter.invoke({
+      ...request,
+      content: [{ type: "text" as const, text: prompt }]
+    });
+    const serialized = JSON.stringify(result);
+
+    expect(result).toMatchObject({ status: "failed", error: { code } });
+    expect(serialized).not.toMatch(
+      /private|ambiguous|unsafe|wrong-exit|credential|authentication|stderr/i
+    );
   });
 
   it.each([
