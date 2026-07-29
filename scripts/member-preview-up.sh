@@ -25,6 +25,7 @@ CONFIG_DIR="$RUNTIME_DIR/config"
 DATA_DIR="$RUNTIME_DIR/data"
 RUN_DIR="$RUNTIME_DIR/run"
 LOG_DIR="$RUNTIME_DIR/logs"
+ATTACHMENT_DIR="$RUNTIME_DIR/attachments"
 START_LOCK_DIR="$RUN_DIR/start.lock"
 GATEWAY_MANIFEST="$RUN_DIR/gateway.pid.json"
 PROXY_MANIFEST="$RUN_DIR/claim-loss-proxy.pid.json"
@@ -60,6 +61,24 @@ tighten_optional_file() {
 }
 
 fail() { printf '%s\n' "$1" >&2; exit 1; }
+
+tighten_attachment_tree() {
+  local path
+  ensure_directory "$ATTACHMENT_DIR"
+  ensure_directory "$ATTACHMENT_DIR/chunks"
+  ensure_directory "$ATTACHMENT_DIR/files"
+  ensure_directory "$ATTACHMENT_DIR/tmp"
+  while IFS= read -r -d '' path; do
+    [[ ! -L "$path" ]] || fail PREVIEW_RUNTIME_INVALID
+    if [[ -d "$path" ]]; then
+      chmod 0700 "$path"
+    elif [[ -f "$path" ]]; then
+      chmod 0600 "$path"
+    else
+      fail PREVIEW_RUNTIME_INVALID
+    fi
+  done < <(find "$ATTACHMENT_DIR" -mindepth 1 -print0)
+}
 
 capture_8790() {
   local health_hash docker_row listener_row
@@ -182,6 +201,7 @@ prepare_runtime() {
   ensure_directory "$DATA_DIR"
   ensure_directory "$RUN_DIR"
   ensure_directory "$LOG_DIR"
+  tighten_attachment_tree
   ensure_protected_file "$GATEWAY_LOG"
   ensure_protected_file "$PROXY_LOG"
   for path in \
@@ -274,6 +294,8 @@ prepare_config() {
       builtin printf 'FAMILY_AI_HERMES_PROFILES=%s\n' "$HERMES_PROFILES"
       builtin printf 'FAMILY_AI_CODEX_EXECUTABLE=%s\n' "$CODEX_EXECUTABLE"
       builtin printf 'FAMILY_AI_CODEX_WORKING_DIRECTORY=%s\n' "$CODEX_WORKING_DIRECTORY"
+      builtin printf 'FAMILY_AI_ATTACHMENT_ROOT=%s\n' "$ATTACHMENT_DIR"
+      builtin printf 'FAMILY_AI_ATTACHMENT_QUOTA_BYTES=21474836480\n'
     )"
     atomic_text_file "$env_file" "$env_text"$'\n'
   }
@@ -298,9 +320,10 @@ prepare_config() {
     fail PREVIEW_CONFIG_INVALID
   chmod 0600 "$env_file"
   node --input-type=module - "$token_file" "$env_file" "$DATA_DIR/gateway.sqlite" \
-    "$CONFIG_DIR/admin-entry.json" <<'NODE'
+    "$CONFIG_DIR/admin-entry.json" "$ATTACHMENT_DIR" <<'NODE'
 import { readFileSync } from "node:fs";
-const [tokenFile, envFile, databasePath, adminEntryPath] = process.argv.slice(2);
+const [tokenFile, envFile, databasePath, adminEntryPath, attachmentRoot] =
+  process.argv.slice(2);
 const tokenText = readFileSync(tokenFile, "utf8");
 const token = tokenText.endsWith("\n") ? tokenText.slice(0, -1) : tokenText;
 if (!/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(token) || tokenText !== `${token}\n`) process.exit(1);
@@ -312,7 +335,8 @@ const expected = [
   "GATEWAY_PREVIEW_ADMIN_ORIGIN", "FAMILY_AI_PROVIDER_MODE",
   "FAMILY_AI_HERMES_EXECUTABLE", "FAMILY_AI_HERMES_JARVIS_HOME",
   "FAMILY_AI_HERMES_PERSONAL_HOME", "FAMILY_AI_HERMES_PROFILES",
-  "FAMILY_AI_CODEX_EXECUTABLE", "FAMILY_AI_CODEX_WORKING_DIRECTORY"
+  "FAMILY_AI_CODEX_EXECUTABLE", "FAMILY_AI_CODEX_WORKING_DIRECTORY",
+  "FAMILY_AI_ATTACHMENT_ROOT", "FAMILY_AI_ATTACHMENT_QUOTA_BYTES"
 ];
 if (lines.length !== expected.length) process.exit(1);
 const values = new Map(lines.map(line => { const at = line.indexOf("="); return [line.slice(0, at), line.slice(at + 1)]; }));
@@ -327,6 +351,8 @@ if (
   values.get("GATEWAY_PREVIEW_ADMIN_ENTRY_PATH") !== adminEntryPath ||
   values.get("GATEWAY_PREVIEW_ADMIN_ORIGIN") !== "http://127.0.0.1:8791" ||
   values.get("FAMILY_AI_PROVIDER_MODE") !== "real" ||
+  values.get("FAMILY_AI_ATTACHMENT_ROOT") !== attachmentRoot ||
+  values.get("FAMILY_AI_ATTACHMENT_QUOTA_BYTES") !== "21474836480" ||
   !/^(?:[a-z0-9_-]+)(?:,[a-z0-9_-]+)*$/.test(
     values.get("FAMILY_AI_HERMES_PROFILES") ?? ""
   ) ||

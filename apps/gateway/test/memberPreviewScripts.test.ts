@@ -10,6 +10,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -446,9 +447,18 @@ describe("isolated Member Web Preview scripts", () => {
       ].join("\n")
     );
     const runtime = join(fixture.root, ".runtime-preview");
-    const directories = ["", "config", "data", "run", "logs"].map(path =>
-      join(runtime, path)
-    );
+    const directories = [
+      "",
+      "config",
+      "data",
+      "run",
+      "logs",
+      "attachments",
+      "attachments/chunks",
+      "attachments/chunks/upload-hash",
+      "attachments/files",
+      "attachments/tmp"
+    ].map(path => join(runtime, path));
     for (const directory of directories) {
       mkdirSync(directory, { recursive: true });
       chmodSync(directory, 0o777);
@@ -467,7 +477,10 @@ describe("isolated Member Web Preview scripts", () => {
       "logs/claim-loss-proxy.log",
       "data/gateway.sqlite",
       "data/gateway.sqlite-wal",
-      "data/gateway.sqlite-shm"
+      "data/gateway.sqlite-shm",
+      "attachments/chunks/upload-hash/0.part",
+      "attachments/files/content-hash.blob",
+      "attachments/tmp/content-hash.assembling"
     ].map(path => join(runtime, path));
     for (const path of reusedFiles) {
       writeFileSync(path, "fixture\n");
@@ -504,10 +517,18 @@ describe("isolated Member Web Preview scripts", () => {
       "FAMILY_AI_HERMES_PERSONAL_HOME",
       "FAMILY_AI_HERMES_PROFILES",
       "FAMILY_AI_CODEX_EXECUTABLE",
-      "FAMILY_AI_CODEX_WORKING_DIRECTORY"
+      "FAMILY_AI_CODEX_WORKING_DIRECTORY",
+      "FAMILY_AI_ATTACHMENT_ROOT",
+      "FAMILY_AI_ATTACHMENT_QUOTA_BYTES"
     ]);
     expect(gatewayEnvironment).toContain("FAMILY_AI_PROVIDER_MODE=real");
     expect(gatewayEnvironment).toContain("FAMILY_AI_HERMES_PROFILES=nsy,zzg,zzh");
+    expect(gatewayEnvironment).toContain(
+      `FAMILY_AI_ATTACHMENT_ROOT=${join(runtime, "attachments")}`
+    );
+    expect(gatewayEnvironment).toContain(
+      "FAMILY_AI_ATTACHMENT_QUOTA_BYTES=21474836480"
+    );
     expect(gatewayEnvironment.some(line =>
       line.startsWith("FAMILY_AI_HERMES_MODEL=")
     )).toBe(false);
@@ -569,9 +590,18 @@ describe("isolated Member Web Preview scripts", () => {
   it("tightens the full reused runtime before a no-manifest down", () => {
     const fixture = lifecycleFixture("member-preview-down.sh");
     const runtime = join(fixture.root, ".runtime-preview");
-    const directories = ["", "config", "data", "run", "logs"].map(path =>
-      join(runtime, path)
-    );
+    const directories = [
+      "",
+      "config",
+      "data",
+      "run",
+      "logs",
+      "attachments",
+      "attachments/chunks",
+      "attachments/chunks/upload-hash",
+      "attachments/files",
+      "attachments/tmp"
+    ].map(path => join(runtime, path));
     for (const directory of directories) {
       mkdirSync(directory, { recursive: true });
       chmodSync(directory, 0o777);
@@ -588,7 +618,9 @@ describe("isolated Member Web Preview scripts", () => {
       "logs/gateway.log",
       "logs/claim-loss-proxy.log",
       "data/gateway.sqlite",
-      "data/gateway.sqlite-wal"
+      "data/gateway.sqlite-wal",
+      "attachments/chunks/upload-hash/0.part",
+      "attachments/files/content-hash.blob"
     ].map(path => join(runtime, path));
     for (const path of protectedFiles) {
       writeFileSync(path, "fixture\n");
@@ -599,6 +631,55 @@ describe("isolated Member Web Preview scripts", () => {
     expect(result.stdout).toBe("Member Preview down: PASS\n");
     for (const directory of directories) expect(permissions(directory)).toBe(0o700);
     for (const path of protectedFiles) expect(permissions(path)).toBe(0o600);
+  });
+
+  it("removes only stale assembly temporaries and preserves completed Preview attachments", () => {
+    const fixture = lifecycleFixture("member-preview-down.sh");
+    const attachmentRoot = join(fixture.root, ".runtime-preview/attachments");
+    const chunks = join(attachmentRoot, "chunks/upload-hash");
+    const files = join(attachmentRoot, "files");
+    const temporary = join(attachmentRoot, "tmp");
+    for (const directory of [chunks, files, temporary]) {
+      mkdirSync(directory, { recursive: true });
+      chmodSync(directory, 0o777);
+    }
+    const completed = join(files, "content-hash.blob");
+    const chunk = join(chunks, "0.part");
+    const oldAssembly = join(temporary, "old.assembling");
+    const recentAssembly = join(temporary, "recent.assembling");
+    const unrelated = join(temporary, "keep.txt");
+    for (const path of [completed, chunk, oldAssembly, recentAssembly, unrelated]) {
+      writeFileSync(path, "fixture\n");
+      chmodSync(path, 0o666);
+    }
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    utimesSync(oldAssembly, old, old);
+
+    const result = runFixture(fixture);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("Member Preview down: PASS\n");
+    expect(existsSync(oldAssembly)).toBe(false);
+    for (const path of [completed, chunk, recentAssembly, unrelated]) {
+      expect(existsSync(path)).toBe(true);
+      expect(permissions(path)).toBe(0o600);
+    }
+    for (const directory of [attachmentRoot, chunks, files, temporary]) {
+      expect(permissions(directory)).toBe(0o700);
+    }
+  });
+
+  it("fails closed instead of following attachment-storage symlinks", () => {
+    const fixture = lifecycleFixture("member-preview-down.sh");
+    const runtime = join(fixture.root, ".runtime-preview");
+    mkdirSync(runtime, { recursive: true });
+    const victim = join(fixture.root, "attachment-victim");
+    writeFileSync(victim, "preserved\n");
+    symlinkSync(victim, join(runtime, "attachments"));
+
+    const result = runFixture(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("PREVIEW_RUNTIME_INVALID");
+    expect(readFileSync(victim, "utf8")).toBe("preserved\n");
   });
 
 

@@ -333,6 +333,8 @@ for required in \
   'branch --show-current)" == "main"' \
   'umask 077' \
   '127.0.0.1:8791' \
+  'FAMILY_AI_ATTACHMENT_ROOT' \
+  'FAMILY_AI_ATTACHMENT_QUOTA_BYTES=21474836480' \
   'memberPublicSha256' \
   'configSha256' \
   'start.lock' \
@@ -349,9 +351,12 @@ for required in \
   'os.pidfd_open' \
   'signal.pidfd_send_signal' \
   'select.poll' \
+  'ATTACHMENT_DIR/tmp' \
+  "-name '*.assembling'" \
+  '-mmin +1440' \
   'gateway.pid.json' \
   'claim-loss-proxy.pid.json'; do
-  grep -Fq "$required" scripts/member-preview-down.sh || {
+  grep -Fq -- "$required" scripts/member-preview-down.sh || {
     printf 'Preview down is missing required ownership contract: %s\n' "$required" >&2
     exit 1
   }

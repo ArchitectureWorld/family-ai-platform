@@ -16,6 +16,7 @@ CONFIG_DIR="$RUNTIME_DIR/config"
 DATA_DIR="$RUNTIME_DIR/data"
 LOG_DIR="$RUNTIME_DIR/logs"
 RUN_DIR="$RUNTIME_DIR/run"
+ATTACHMENT_DIR="$RUNTIME_DIR/attachments"
 START_LOCK_DIR="$RUN_DIR/start.lock"
 GATEWAY_MANIFEST="$RUN_DIR/gateway.pid.json"
 PROXY_MANIFEST="$RUN_DIR/claim-loss-proxy.pid.json"
@@ -255,6 +256,37 @@ ensure_directory() {
   chmod 0700 "$path"
 }
 
+tighten_attachment_tree() {
+  local path
+  [[ -e "$ATTACHMENT_DIR" || -L "$ATTACHMENT_DIR" ]] || return 0
+  ensure_directory "$ATTACHMENT_DIR"
+  ensure_directory "$ATTACHMENT_DIR/chunks"
+  ensure_directory "$ATTACHMENT_DIR/files"
+  ensure_directory "$ATTACHMENT_DIR/tmp"
+  while IFS= read -r -d '' path; do
+    [[ ! -L "$path" ]] || fail PREVIEW_RUNTIME_INVALID
+    if [[ -d "$path" ]]; then
+      chmod 0700 "$path"
+    elif [[ -f "$path" ]]; then
+      chmod 0600 "$path"
+    else
+      fail PREVIEW_RUNTIME_INVALID
+    fi
+  done < <(find "$ATTACHMENT_DIR" -mindepth 1 -print0)
+}
+
+cleanup_stale_attachment_temporaries() {
+  local path
+  [[ -d "$ATTACHMENT_DIR/tmp" ]] || return 0
+  while IFS= read -r -d '' path; do
+    [[ -f "$path" && ! -L "$path" ]] || fail PREVIEW_RUNTIME_INVALID
+    rm -- "$path"
+  done < <(
+    find "$ATTACHMENT_DIR/tmp" -mindepth 1 -maxdepth 1 \
+      -type f -name '*.assembling' -mmin +1440 -print0
+  )
+}
+
 write_lock_owner() {
   local path="$START_LOCK_DIR/owner.json" lock_id="$1" starttime
   starttime="$(awk '{print $22}' "/proc/$$/stat")"
@@ -387,5 +419,7 @@ if [[ "$gateway_state" == owned ]]; then
   terminate_owned_pid "$gateway_pid" "$GATEWAY_MANIFEST" gateway apps/gateway/dist/index.js 8791 || fail PREVIEW_PROCESS_STOP_FAILED
 fi
 
+tighten_attachment_tree
+cleanup_stale_attachment_temporaries
 release_lock
 printf 'Member Preview down: PASS\n'

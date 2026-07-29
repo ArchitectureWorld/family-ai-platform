@@ -113,6 +113,10 @@ Web Device + HttpOnly Personal Entry
 - 真实 Web Device、HttpOnly Cookie Personal Entry 和远程撤销；
 - Member Web Chat 消息时间线、分页、发送、失败重试和 Assistant 回复；
 - Work 列表、创建、详情、独立对话和进度展示；
+- ChatGPT 风格输入框、提交即清空、失败原消息重试和附件下载卡片；
+- 单文件 200 MB、每条消息最多 10 个文件的 8 MiB 分块断点上传；
+- 图片、PDF、Office、UTF-8 文本、Markdown 和常见源码附件；
+- 每个 Agent 独立的 Chat、Work、草稿、附件托盘和发送队列；
 - Chat 消息选择并转成 Work；
 - IndexedDB 本地投影、离线草稿、SSE 重连和 BroadcastChannel 多标签页通知；
 - 页面刷新与 Gateway 重启后的产品状态恢复。
@@ -125,7 +129,7 @@ Web Device + HttpOnly Personal Entry
 Push Notification 唤醒
 → iOS 接入统一 Chat / Work 与同步协议
 → HarmonyOS 个人入口
-→ 文件、图片、语音和复杂 Work 能力
+→ 语音和复杂 Work 能力
 → 正式 Admin Web
 ```
 
@@ -199,6 +203,18 @@ iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、i
 已初始化的 development Preview 会从该受保护入口直接恢复管理员会话。任何能访问
 该局域网 Preview Admin URL 的设备都获得管理员权限；production 不注册此入口。
 关闭成员配对弹窗会撤销仍有效且未使用的配对码。
+
+Preview 附件保存在 Git 忽略的 `.runtime-preview/attachments`，目录权限为 `0700`、
+文件权限为 `0600`，不会进入数据库 BLOB 或 Git。上传使用 8 MiB 分块，浏览器会
+持久化附件草稿和已成功分块索引以便续传；未完成上传 24 小时后过期。限制为
+单文件 200 MB、每条消息最多 10 个文件和 2 GiB、每个家庭 20 GiB。允许图片、
+PDF、Office、UTF-8 文本、
+Markdown 与常见源码；归档包、可执行文件及类型不一致的文件会被拒绝，服务端只把
+验证后的只读附件交给所选 Agent，绝不执行附件。每个 Agent 的 Chat、Work、草稿、
+附件托盘和发送队列互相隔离。
+
+管理员与成员的直接 Preview 入口保持不变。这一版仍使用 development 直接管理员
+入口和成员配对；正式邮箱/密码登录记录为后续迭代，不在本次变更中实现。
 
 只停止局域网代理、保留 Gateway 数据与证书：
 
