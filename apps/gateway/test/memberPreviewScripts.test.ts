@@ -21,7 +21,6 @@ import { afterEach, describe, expect, it } from "vitest";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const scripts = [
   "scripts/member-preview-up.sh",
-  "scripts/member-preview-admin-activate.mjs",
   "scripts/member-preview-admin.mjs",
   "scripts/member-preview-pair.mjs",
   "scripts/member-preview-revoke.mjs",
@@ -862,74 +861,6 @@ describe("isolated Member Web Preview scripts", () => {
         fetchImpl: initializedAdminFetch(admin)
       }), origin).rejects.toBeTruthy();
     }
-  });
-
-  it("creates a five-minute Admin activation record without persisting the plaintext code", async () => {
-    const { createAdminPreviewActivation } = await import(
-      `${new URL("../../../scripts/member-preview-admin-activate.mjs", import.meta.url).href}?activation=${Date.now()}`
-    );
-    const runtimeDir = temporaryDirectory();
-    const admin = installAdminFixture(runtimeDir);
-    const now = new Date("2030-01-01T00:00:00.000Z");
-    let fill = 7;
-
-    const first = await createAdminPreviewActivation({
-      runtimeDir,
-      now: () => now,
-      randomBytesImpl: (length: number) => Buffer.alloc(length, fill)
-    });
-
-    expect(first.code).toMatch(/^[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5}$/);
-    expect(first.expiresAt).toBe("2030-01-01T00:05:00.000Z");
-    expect(first.outputPath).toBe(join(runtimeDir, "config/admin-activation.json"));
-    expect(permissions(first.outputPath)).toBe(0o600);
-    const firstSerialized = readFileSync(first.outputPath, "utf8");
-    const firstRecord = JSON.parse(firstSerialized);
-    expect(firstRecord).toMatchObject({
-      version: 1,
-      createdAt: "2030-01-01T00:00:00.000Z",
-      expiresAt: "2030-01-01T00:05:00.000Z"
-    });
-    expect(firstRecord.salt).toMatch(/^[A-Za-z0-9_-]{22}$/);
-    expect(firstRecord.codeHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(firstSerialized).not.toContain(first.code);
-    expect(firstSerialized).not.toContain(admin.token);
-
-    fill = 8;
-    const second = await createAdminPreviewActivation({
-      runtimeDir,
-      now: () => now,
-      randomBytesImpl: (length: number) => Buffer.alloc(length, fill)
-    });
-    const secondSerialized = readFileSync(second.outputPath, "utf8");
-    const secondRecord = JSON.parse(secondSerialized);
-    expect(second.code).not.toBe(first.code);
-    expect(secondRecord.codeHash).not.toBe(firstRecord.codeHash);
-    expect(secondSerialized).not.toContain(second.code);
-    expect(readdirSync(join(runtimeDir, "config")).filter(
-      name => name.startsWith("admin-activation.json")
-    )).toEqual(["admin-activation.json"]);
-  });
-
-  it("refuses to generate an Admin activation from a symlinked Admin entry", async () => {
-    const { createAdminPreviewActivation } = await import(
-      `${new URL("../../../scripts/member-preview-admin-activate.mjs", import.meta.url).href}?activation-symlink=${Date.now()}`
-    );
-    const runtimeDir = temporaryDirectory();
-    installAdminFixture(runtimeDir);
-    const adminPath = join(runtimeDir, "config/admin-entry.json");
-    const victim = join(runtimeDir, "must-not-read");
-    writeFileSync(victim, "safe\n", { mode: 0o600 });
-    rmSync(adminPath);
-    symlinkSync(victim, adminPath);
-
-    await expect(createAdminPreviewActivation({
-      runtimeDir,
-      now: () => new Date("2030-01-01T00:00:00.000Z"),
-      randomBytesImpl: (length: number) => Buffer.alloc(length, 7)
-    })).rejects.toBeTruthy();
-    expect(readFileSync(victim, "utf8")).toBe("safe\n");
-    expect(existsSync(join(runtimeDir, "config/admin-activation.json"))).toBe(false);
   });
 
   it("writes only durable long-lived Pair material and rearms consumed 8792 state", async () => {

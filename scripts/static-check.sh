@@ -252,7 +252,6 @@ member_handoff_scan "$ROOT_DIR"
 
 preview_scripts=(
   scripts/member-preview-up.sh
-  scripts/member-preview-admin-activate.mjs
   scripts/member-preview-admin.mjs
   scripts/member-preview-pair.mjs
   scripts/member-preview-revoke.mjs
@@ -260,6 +259,10 @@ preview_scripts=(
   scripts/member-preview-down.sh
   scripts/member-preview-claim-loss-proxy.mjs
 )
+[[ ! -e scripts/member-preview-admin-activate.mjs ]] || {
+  printf 'Retired Admin activation entrypoint is still present.\n' >&2
+  exit 1
+}
 lan_preview_scripts=(
   scripts/member-preview-lan-lib.mjs
   scripts/member-preview-lan-up.sh

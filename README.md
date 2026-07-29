@@ -189,14 +189,16 @@ iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、i
 
 1. 从输出的 `http://<LAN-IP>:9080/family-ai-preview-ca.crt` 下载本地 CA；
 2. 核对命令输出的 SHA-256 指纹后，将 CA 设为该设备上的受信任根证书；
-3. 由授权操作员把 `.runtime-preview/config/admin-web-url-9443` 以不打印、不记录
-   URL 内容的方式交给管理员浏览器；
-4. 管理员添加家庭成员并生成五分钟有效的配对码或二维码；
-5. 成员设备打开 `https://<LAN-IP>:9443/member/`，扫码或输入配对码进入。
+3. 管理员直接打开 `https://<LAN-IP>:9443/admin/` 进入家庭管理；仅当 Preview
+   尚未创建家庭时，授权操作员才使用受保护的首次建家交接文件完成一次初始化；
+4. 管理员添加真实家庭成员并生成五分钟有效的成员配对码或二维码；
+5. 成员设备打开独立的 `https://<LAN-IP>:9443/member/`，扫码或输入配对码进入。
 
 管理员入口凭据只保存在权限 0600 的 runtime 文件与当前浏览器 `sessionStorage`；
 首次网页建家后会通过 development-only、管理员认证的端点原子保存恢复入口。
-关闭配对弹窗会撤销仍有效且未使用的配对码。
+已初始化的 development Preview 会从该受保护入口直接恢复管理员会话。任何能访问
+该局域网 Preview Admin URL 的设备都获得管理员权限；production 不注册此入口。
+关闭成员配对弹窗会撤销仍有效且未使用的配对码。
 
 只停止局域网代理、保留 Gateway 数据与证书：
 
