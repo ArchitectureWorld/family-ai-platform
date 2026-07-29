@@ -218,6 +218,18 @@ export class AgentManagementRepository {
 
   listMemberMounts(familyRef: string, personRef: string): MemberMounts {
     this.requireActiveMember(familyRef, personRef);
+    return this.memberMounts(personRef);
+  }
+
+  listConfigurableMemberMounts(
+    familyRef: string,
+    personRef: string
+  ): MemberMounts {
+    this.requireConfigurableMember(familyRef, personRef);
+    return this.memberMounts(personRef);
+  }
+
+  private memberMounts(personRef: string): MemberMounts {
     const rows = this.db.prepare(
       `SELECT aa.assignment_ref, aa.agent_ref, a.display_name, aa.provider_profile_ref, aa.is_default
        FROM assistant_assignments aa
@@ -275,7 +287,7 @@ export class AgentManagementRepository {
 
   mountMemberAgent(input: { familyRef: string; personRef: string; agentRef: string }): MountedAgent {
     const mount = this.db.transaction(() => {
-      this.requireActiveMember(input.familyRef, input.personRef);
+      this.requireConfigurableMember(input.familyRef, input.personRef);
       const runtime = this.runtimeForAgent(input.agentRef);
       const existing = this.db.prepare(
         `SELECT aa.assignment_ref, aa.agent_ref, a.display_name, aa.provider_profile_ref, aa.is_default
@@ -313,7 +325,7 @@ export class AgentManagementRepository {
 
   unmountMemberAgent(input: { familyRef: string; personRef: string; agentRef: string }): void {
     this.db.transaction(() => {
-      this.requireActiveMember(input.familyRef, input.personRef);
+      this.requireConfigurableMember(input.familyRef, input.personRef);
       const runtime = this.runtimeForAgent(input.agentRef);
       this.requireActiveRuntimeMount(
         input.personRef,
@@ -337,7 +349,7 @@ export class AgentManagementRepository {
 
   setDefaultAgent(input: { familyRef: string; personRef: string; agentRef: string | null }): void {
     this.db.transaction(() => {
-      this.requireActiveMember(input.familyRef, input.personRef);
+      this.requireConfigurableMember(input.familyRef, input.personRef);
       if (input.agentRef !== null) {
         const runtime = this.runtimeForAgent(input.agentRef);
         this.requireActiveRuntimeMount(
@@ -396,7 +408,19 @@ export class AgentManagementRepository {
     const member = this.db.prepare(
       `SELECT 1 FROM family_memberships fm
        JOIN persons p ON p.person_ref = fm.person_ref
-       WHERE fm.family_ref = ? AND fm.person_ref = ? AND fm.status = ? AND p.status = ?`
+       WHERE fm.family_ref = ? AND fm.person_ref = ?
+         AND fm.status = ? AND p.status = ?`
+    ).get(familyRef, personRef, active, active);
+    if (!member) throw this.memberNotFound();
+  }
+
+  private requireConfigurableMember(familyRef: string, personRef: string): void {
+    const member = this.db.prepare(
+      `SELECT 1 FROM family_memberships fm
+       JOIN persons p ON p.person_ref = fm.person_ref
+       WHERE fm.family_ref = ? AND fm.person_ref = ?
+         AND fm.family_role <> 'owner'
+         AND fm.status = ? AND p.status = ?`
     ).get(familyRef, personRef, active, active);
     if (!member) throw this.memberNotFound();
   }

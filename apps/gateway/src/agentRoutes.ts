@@ -41,7 +41,9 @@ export function registerAgentRoutes(
   }
 ): void {
   const mountResponse = async (familyRef: string, personRef: string) => {
-    const mounts = input.repository.listMemberMounts(familyRef, personRef);
+    const mounts = input.repository.listConfigurableMemberMounts(
+      familyRef, personRef
+    );
     return memberAgentMountsResponseSchema.parse({
       protocolVersion: 1,
       ...mounts,

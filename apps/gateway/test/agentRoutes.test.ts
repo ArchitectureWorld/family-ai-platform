@@ -53,6 +53,7 @@ describe("Admin Agent routes", () => {
   let admin: Entry;
   let personal: Entry;
   let personRef = "";
+  let ownerPersonRef = "";
 
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-agent-routes-"));
@@ -74,9 +75,17 @@ describe("Admin Agent routes", () => {
       entries: { admin: Entry; personal: Entry };
     };
     expect(initialized.statusCode).toBe(201);
-    personRef = body.owner.personRef;
+    ownerPersonRef = body.owner.personRef;
     admin = body.entries.admin;
     personal = body.entries.personal;
+    const member = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/members",
+      headers: entryHeaders(admin),
+      payload: { displayName: "可配置成员", familyRole: "adult" }
+    });
+    expect(member.statusCode).toBe(201);
+    personRef = member.json().member.personRef as string;
   });
 
   function setRuntimeStatus(status: "active" | "disabled") {
@@ -141,6 +150,42 @@ describe("Admin Agent routes", () => {
     });
     expect(denied.statusCode).toBe(403);
     expect(denied.body).not.toContain("content_text");
+  });
+
+  it("rejects the internal owner on every ordinary member-Agent surface", async () => {
+    const requests = [
+      app.inject({
+        method: "GET",
+        url: `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}/agent-mounts`,
+        headers: entryHeaders(admin)
+      }),
+      app.inject({
+        method: "POST",
+        url: `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}/agent-mounts`,
+        headers: entryHeaders(admin),
+        payload: { agentRef: "agent:codex-cli" }
+      }),
+      app.inject({
+        method: "DELETE",
+        url: `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}/agent-mounts/agent%3Acodex-cli`,
+        headers: entryHeaders(admin)
+      }),
+      app.inject({
+        method: "PUT",
+        url: `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}/default-agent`,
+        headers: entryHeaders(admin),
+        payload: { agentRef: null }
+      })
+    ];
+
+    for (const response of await Promise.all(requests)) {
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toMatchObject({
+        code: "PERSON_NOT_IN_FAMILY",
+        category: "permission",
+        retryable: false
+      });
+    }
   });
 
   it("mounts idempotently and allows a family_admin to clear a default", async () => {

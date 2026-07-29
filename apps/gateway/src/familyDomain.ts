@@ -444,7 +444,9 @@ export class FamilyDomainRepository {
            LIMIT 1
          )
        LEFT JOIN agents a ON a.agent_ref = aa.agent_ref
-       WHERE fm.family_ref = ? AND fm.status = 'active'
+       WHERE fm.family_ref = ?
+         AND fm.status = 'active'
+         AND fm.family_role <> 'owner'
        ORDER BY CASE fm.family_role WHEN 'owner' THEN 0 ELSE 1 END,
                 fm.joined_at, p.person_ref`
     ).all(familyRef) as Array<Record<string, unknown>>;

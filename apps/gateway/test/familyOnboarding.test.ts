@@ -264,10 +264,18 @@ describe("Family onboarding and dual-entry sessions", () => {
     expect(adminContext.body).not.toContain("provider-profile:fake-local");
     expect(personalContext.body).not.toContain("provider-profile:fake-local");
 
+    const configuredMember = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/members",
+      headers: entryHeaders(result.entries.admin),
+      payload: { displayName: "Configured Member", familyRole: "adult" }
+    });
+    expect(configuredMember.statusCode).toBe(201);
+    const configuredPersonRef = configuredMember.json().member.personRef as string;
     for (const agentRef of ["agent:hermes-jarvis", "agent:codex-cli"]) {
       const mounted = await app.inject({
         method: "POST",
-        url: `/api/v1/admin/members/${result.owner.personRef}/agent-mounts`,
+        url: `/api/v1/admin/members/${configuredPersonRef}/agent-mounts`,
         headers: entryHeaders(result.entries.admin),
         payload: { agentRef }
       });
@@ -275,7 +283,7 @@ describe("Family onboarding and dual-entry sessions", () => {
     }
     const selectedDefault = await app.inject({
       method: "PUT",
-      url: `/api/v1/admin/members/${result.owner.personRef}/default-agent`,
+      url: `/api/v1/admin/members/${configuredPersonRef}/default-agent`,
       headers: entryHeaders(result.entries.admin),
       payload: { agentRef: "agent:codex-cli" }
     });
@@ -288,7 +296,7 @@ describe("Family onboarding and dual-entry sessions", () => {
     expect(projectedMembers.statusCode).toBe(200);
     expect(projectedMembers.json().members).toHaveLength(1);
     expect(projectedMembers.json().members[0]).toMatchObject({
-      personRef: result.owner.personRef,
+      personRef: configuredPersonRef,
       personalAssistant: {
         agentRef: "agent:codex-cli",
         providerProfileRef: "provider-profile:codex-cli"
@@ -464,12 +472,7 @@ describe("Family onboarding and dual-entry sessions", () => {
       headers: entryHeaders(admin)
     });
     expect(initial.statusCode).toBe(200);
-    expect(initial.json().members).toHaveLength(1);
-    expect(initial.json().members[0]).toMatchObject({
-      personRef: result.owner.personRef,
-      displayName: "家庭创建者",
-      familyRole: "owner"
-    });
+    expect(initial.json().members).toEqual([]);
 
     for (const [displayName, familyRole] of [
       ["另一位成人", "adult"],
@@ -500,7 +503,10 @@ describe("Family onboarding and dual-entry sessions", () => {
       url: "/api/v1/admin/members",
       headers: entryHeaders(admin)
     });
-    expect(listed.json().members).toHaveLength(4);
+    expect(listed.json().members).toHaveLength(3);
+    expect(listed.json().members).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ familyRole: "owner" })])
+    );
 
     const forbidden = await app.inject({
       method: "GET",
