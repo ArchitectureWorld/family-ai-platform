@@ -47,7 +47,7 @@ import { FamilyDomainRepository } from "./familyDomain.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
 import { registerAgentRoutes, type AgentStatusLookup } from "./agentRoutes.js";
 import { registerAdminWeb } from "./adminWeb.js";
-import { registerAdminPreviewActivation } from "./adminPreviewActivation.js";
+import { registerAdminPreviewAccess } from "./adminPreviewAccess.js";
 import { registerAdminPreviewPersistence } from "./adminPreviewPersistence.js";
 import { registerMemberWeb } from "./memberWeb.js";
 import { MobileDeviceSummaryRepository } from "./mobileDeviceSummary.js";
@@ -363,10 +363,9 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
           origin: options.previewAdminOrigin!
         })
   });
-  registerAdminPreviewActivation(app, {
+  registerAdminPreviewAccess(app, {
     mode: options.mode,
     entryAuthenticator,
-    now,
     ...(options.previewAdminEntryPath === undefined
       ? {}
       : {
