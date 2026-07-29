@@ -50,11 +50,10 @@ describe("development Admin Web product entry", () => {
       expect(admin.body).toContain('data-state="create-family"');
       expect(admin.body).toContain('data-state="management"');
       expect(admin.body).toContain('data-state="recovery-required"');
-      expect(admin.body).toContain('id="admin-activation-form"');
-      expect(admin.body).toContain('id="admin-activation-code"');
-      expect(admin.body).toContain('autocomplete="one-time-code"');
-      expect(admin.body).toContain('placeholder="XXXXX-XXXXX"');
-      expect(admin.body).toContain("激活管理员设备");
+      expect(admin.body).toContain("管理员入口暂时不可用");
+      expect(admin.body).not.toContain('id="admin-activation-form"');
+      expect(admin.body).not.toContain('autocomplete="one-time-code"');
+      expect(admin.body).not.toContain("激活管理员设备");
       expect(admin.body).not.toContain(token);
       expect(admin.body).toContain('data-admin-page="members"');
       expect(admin.body).toContain('data-admin-page="workspace"');
@@ -70,6 +69,7 @@ describe("development Admin Web product entry", () => {
       for (const [path, contentType] of [
         ["/admin/assets/admin.css", "text/css"],
         ["/admin/assets/admin.js", "text/javascript"],
+        ["/admin/assets/admin-layout.js", "text/javascript"],
         ["/admin/assets/admin-entry.js", "text/javascript"],
         ["/admin/assets/admin-api.js", "text/javascript"],
         ["/admin/assets/admin-agents.js", "text/javascript"],
@@ -103,6 +103,7 @@ describe("development Admin Web product entry", () => {
           "/admin/",
           "/admin/assets/admin.css",
           "/admin/assets/admin.js",
+          "/admin/assets/admin-layout.js",
           "/admin/assets/admin-entry.js",
           "/admin/assets/admin-api.js",
           "/admin/assets/admin-agents.js",

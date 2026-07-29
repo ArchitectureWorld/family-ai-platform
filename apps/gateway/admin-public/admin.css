@@ -23,6 +23,10 @@ body {
   padding: 56px 0 80px;
 }
 
+.admin-shell.is-management {
+  width: min(1600px, calc(100% - 32px));
+}
+
 .brand {
   display: flex;
   gap: 14px;
@@ -86,29 +90,11 @@ h2 {
 }
 
 .form-grid,
-.activation-form,
 .member-form {
   display: grid;
   gap: 18px;
   max-width: 620px;
   margin-top: 32px;
-}
-
-.activation-form {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-}
-
-.activation-form .form-message {
-  grid-column: 1 / -1;
-}
-
-#admin-activation-code {
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: 1.05rem;
-  font-weight: 760;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .member-form {
@@ -840,14 +826,6 @@ button:disabled {
 
   .member-form {
     grid-template-columns: 1fr;
-  }
-
-  .activation-form {
-    grid-template-columns: 1fr;
-  }
-
-  .activation-form .form-message {
-    grid-column: auto;
   }
 
   .member-card-summary {

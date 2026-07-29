@@ -7,6 +7,7 @@ const adminPublic = fileURLToPath(new URL("../admin-public/", import.meta.url));
 const entryModuleUrl = pathToFileURL(join(adminPublic, "admin-entry.js")).href;
 const apiModuleUrl = pathToFileURL(join(adminPublic, "admin-api.js")).href;
 const pairingModuleUrl = pathToFileURL(join(adminPublic, "admin-pairing.js")).href;
+const layoutModuleUrl = pathToFileURL(join(adminPublic, "admin-layout.js")).href;
 const token = `${"A".repeat(42)}A`;
 
 async function entryModule() {
@@ -19,6 +20,10 @@ async function apiModule() {
 
 async function pairingModule() {
   return import(`${pairingModuleUrl}?test=${Date.now()}-${Math.random()}`);
+}
+
+async function layoutModule() {
+  return import(`${layoutModuleUrl}?test=${Date.now()}-${Math.random()}`);
 }
 
 function memoryStorage() {
@@ -97,6 +102,35 @@ describe("Admin Web entry boundary", () => {
     storage.setItem("family-ai.admin.credential", '{"kind":"entry","token":"bad"}');
     expect(readStoredAdminCredential(storage)).toBeNull();
     expect(storage.getItem("family-ai.admin.credential")).toBeNull();
+  });
+});
+
+describe("Admin Web responsive state", () => {
+  it("widens only the management state", async () => {
+    const { applyAdminShellState } = await layoutModule();
+    const classes = new Set<string>();
+    const shell = {
+      classList: {
+        toggle(name: string, force: boolean) {
+          if (force) classes.add(name);
+          else classes.delete(name);
+        }
+      }
+    };
+
+    applyAdminShellState(shell, "management");
+    expect([...classes]).toEqual(["is-management"]);
+
+    for (const state of [
+      "initializing",
+      "create-family",
+      "recovery-required"
+    ]) {
+      applyAdminShellState(shell, state);
+      expect([...classes], state).toEqual([]);
+    }
+    expect(() => applyAdminShellState(null, "management"))
+      .toThrow("ADMIN_SHELL_INVALID");
   });
 });
 
@@ -223,52 +257,53 @@ describe("Admin Web API client", () => {
     });
   });
 
-  it("exchanges a normalized short code publicly and strictly validates the credential", async () => {
-    const {
-      createAdminApi,
-      normalizeActivationCode
-    } = await apiModule();
+  it("discovers Preview auto mode and opens direct access without a code or credential", async () => {
+    const { createAdminApi } = await apiModule();
     const requests: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      requests.push({ url: String(input), init });
-      return Response.json({
-        adminCredential: {
-          kind: "entry",
-          entrySessionRef: "entry-session:preview-admin",
-          token
-        }
-      });
+      const url = String(input);
+      requests.push({ url, init });
+      return url === "/api/v1/admin/access-mode"
+        ? Response.json({ mode: "preview-auto" })
+        : Response.json({
+            adminCredential: {
+              kind: "entry",
+              entrySessionRef: "entry-session:preview-admin",
+              token
+            }
+          });
     });
 
-    expect(normalizeActivationCode(" abcde-fghjk ")).toBe("ABCDE-FGHJK");
-    for (const value of [
-      "ABCDE-FGHIJ",
-      "ABCDE-FGHJ",
-      "ABCDE_FGHJK",
-      "ABCDE-FGHJK-extra",
-      null
-    ]) {
-      expect(() => normalizeActivationCode(value), String(value))
-        .toThrow("ADMIN_ACTIVATION_CODE_INVALID");
-    }
-
-    const credential = await createAdminApi({ fetchImpl })
-      .exchangePreviewActivation(" abcde-fghjk ");
+    const api = createAdminApi({ fetchImpl });
+    await expect(api.adminAccessMode()).resolves.toEqual({ mode: "preview-auto" });
+    const credential = await api.openPreviewAccess();
     expect(credential).toEqual({
       kind: "entry",
       entrySessionRef: "entry-session:preview-admin",
       token
     });
-    expect(requests).toEqual([{
-      url: "/api/v1/admin/preview-activation",
-      init: {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: "ABCDE-FGHJK" })
+    expect(requests).toEqual([
+      {
+        url: "/api/v1/admin/access-mode",
+        init: { method: "GET" }
+      },
+      {
+        url: "/api/v1/admin/preview-access",
+        init: { method: "POST" }
       }
-    }]);
+    ]);
 
-    const malformedApi = createAdminApi({
+    const malformedModeApi = createAdminApi({
+      fetchImpl: async () => Response.json({ mode: "password" })
+    });
+    await expect(malformedModeApi.adminAccessMode())
+      .rejects.toMatchObject({
+        name: "AdminApiError",
+        code: "ADMIN_ACCESS_MODE_RESPONSE_INVALID",
+        status: 502
+      });
+
+    const malformedCredentialApi = createAdminApi({
       fetchImpl: async () => Response.json({
         adminCredential: {
           kind: "entry",
@@ -277,10 +312,10 @@ describe("Admin Web API client", () => {
         }
       })
     });
-    await expect(malformedApi.exchangePreviewActivation("ABCDE-FGHJK"))
+    await expect(malformedCredentialApi.openPreviewAccess())
       .rejects.toMatchObject({
         name: "AdminApiError",
-        code: "ADMIN_PREVIEW_ACTIVATION_RESPONSE_INVALID",
+        code: "ADMIN_PREVIEW_ACCESS_RESPONSE_INVALID",
         status: 502
       });
   });

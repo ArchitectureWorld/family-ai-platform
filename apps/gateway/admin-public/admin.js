@@ -6,6 +6,7 @@ import {
   writeStoredAdminCredential
 } from "./admin-entry.js";
 import { AdminApiError, createAdminApi } from "./admin-api.js";
+import { applyAdminShellState } from "./admin-layout.js";
 import { renderMemberAgentControls } from "./admin-agents.js";
 import { createAdminWorkspace } from "./admin-workspace.js";
 import {
@@ -20,16 +21,13 @@ const states = new Map(
   [...document.querySelectorAll("[data-state]")]
     .map(element => [element.dataset.state, element])
 );
+const adminShell = document.querySelector(".admin-shell");
 const setupRoot = document.querySelector("#family-setup-root");
 const summaryRoot = document.querySelector("#family-summary");
 const membersRoot = document.querySelector("#member-management-root");
 const adminPageButtons = [...document.querySelectorAll("[data-admin-page]")];
 const membersPage = document.querySelector("#admin-members-page");
 const workspacePage = document.querySelector("#admin-workspace-page");
-const activationForm = document.querySelector("#admin-activation-form");
-const activationInput = document.querySelector("#admin-activation-code");
-const activationSubmit = document.querySelector("#admin-activation-submit");
-const activationMessage = document.querySelector("#admin-activation-message");
 let activePairingDialog = null;
 let activePairingTimer = null;
 let activePairingDismissal = null;
@@ -44,6 +42,7 @@ function destroyAdminWorkspace() {
 export function showAdminState(name) {
   if (!states.has(name)) throw new Error("ADMIN_STATE_INVALID");
   if (name !== "management") destroyAdminWorkspace();
+  applyAdminShellState(adminShell, name);
   for (const [stateName, element] of states) {
     element.hidden = stateName !== name;
   }
@@ -107,24 +106,15 @@ function messageNode() {
 }
 
 function errorText(error) {
-  if (error instanceof Error && error.message === "ADMIN_ACTIVATION_CODE_INVALID") {
-    return "激活码不正确，请检查后重试。";
-  }
   if (error instanceof AdminApiError) {
-    if (error.code === "PREVIEW_ACTIVATION_INVALID") {
-      return "激活码不正确，请检查后重试。";
-    }
-    if (error.code === "PREVIEW_ACTIVATION_EXPIRED") {
-      return "激活码已过期，请生成新码。";
-    }
-    if (error.code === "PREVIEW_ACTIVATION_UNAVAILABLE") {
-      return "当前没有可用的激活码，请生成新码。";
-    }
     if (error.code === "PREVIEW_ADMIN_ENTRY_INVALID") {
       return "管理员入口已失效，请重新启动预览。";
     }
-    if (error.code === "ADMIN_PREVIEW_ACTIVATION_RESPONSE_INVALID") {
-      return "暂时无法激活，请检查连接后重试。";
+    if (
+      error.code === "ADMIN_ACCESS_MODE_RESPONSE_INVALID" ||
+      error.code === "ADMIN_PREVIEW_ACCESS_RESPONSE_INVALID"
+    ) {
+      return "管理员入口暂时不可用，请检查预览状态。";
     }
     if (["ENTRY_SESSION_INVALID", "ENTRY_SESSION_EXPIRED", "DEVICE_REVOKED"].includes(error.code)) {
       return "管理员入口已失效，请重新生成入口后再试。";
@@ -133,25 +123,6 @@ function errorText(error) {
   }
   return "暂时无法完成操作，请稍后重试。";
 }
-
-activationForm.addEventListener("submit", async event => {
-  event.preventDefault();
-  activationSubmit.disabled = true;
-  activationMessage.textContent = "正在验证激活码…";
-  try {
-    const credential = await createAdminApi().exchangePreviewActivation(
-      new FormData(activationForm).get("activationCode")
-    );
-    activationInput.value = "";
-    writeStoredAdminCredential(sessionStorage, credential);
-    activationMessage.textContent = "验证成功，正在进入家庭管理…";
-    await renderManagement(credential);
-  } catch (error) {
-    activationMessage.textContent = errorText(error);
-    activationSubmit.disabled = false;
-    activationInput.focus();
-  }
-});
 
 function renderFamilySetup(bootstrapCredential) {
   setupRoot.replaceChildren();
@@ -545,6 +516,13 @@ async function renderManagement(credential, persistenceWarning = "") {
   showAdminState("management");
 }
 
+async function openPreviewCredential() {
+  const api = createAdminApi();
+  const access = await api.adminAccessMode();
+  if (access.mode !== "preview-auto") throw new Error("ADMIN_ACCESS_MODE_INVALID");
+  return api.openPreviewAccess();
+}
+
 async function start() {
   showAdminState("initializing");
   const rawFragment = window.location.hash;
@@ -566,7 +544,16 @@ async function start() {
       renderFamilySetup(credential);
       return;
     }
-    if (credential?.kind !== "entry") throw new Error("ADMIN_ENTRY_REQUIRED");
+    if (credential?.kind === "entry") {
+      try {
+        writeStoredAdminCredential(sessionStorage, credential);
+        await renderManagement(credential);
+        return;
+      } catch {
+        clearStoredAdminCredential(sessionStorage);
+      }
+    }
+    credential = await openPreviewCredential();
     writeStoredAdminCredential(sessionStorage, credential);
     await renderManagement(credential);
   } catch {
