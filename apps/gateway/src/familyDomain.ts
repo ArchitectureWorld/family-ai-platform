@@ -317,8 +317,12 @@ export class FamilyDomainRepository {
     };
   }
 
-  authenticateEntrySession(entrySessionRef: string, token: string): EntryContext | null {
-    const now = new Date().toISOString();
+  authenticateEntrySession(
+    entrySessionRef: string,
+    token: string,
+    authenticatedAt: Date
+  ): EntryContext | null {
+    const authenticatedAtIso = authenticatedAt.toISOString();
     const row = this.db.prepare(
       `SELECT es.entry_session_ref, es.token_hash,
               eb.entry_binding_ref, eb.audience,
@@ -370,14 +374,14 @@ export class FamilyDomainRepository {
          AND es.status = 'active'
          AND es.expires_at > ?
          AND eb.status = 'active'`
-    ).get(entrySessionRef, now) as Record<string, unknown> | undefined;
+    ).get(entrySessionRef, authenticatedAtIso) as Record<string, unknown> | undefined;
 
     if (!row || typeof row.token_hash !== "string") return null;
     if (!secureHashEqual(sha256(token), row.token_hash)) return null;
 
     this.db.prepare(
       "UPDATE entry_bindings SET last_used_at = ? WHERE entry_binding_ref = ?"
-    ).run(now, String(row.entry_binding_ref));
+    ).run(authenticatedAtIso, String(row.entry_binding_ref));
 
     const audience = row.audience as EntryAudience;
     const agent = row.assignment_ref === null

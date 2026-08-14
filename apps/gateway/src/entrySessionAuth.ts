@@ -61,7 +61,8 @@ export class EntrySessionAuthenticator {
     if (row.device_status === "revoked") {
       return { status: "device_revoked" };
     }
-    if (row.session_status === "active" && Date.parse(row.expires_at) <= this.now().getTime()) {
+    const authenticatedAt = this.now();
+    if (row.session_status === "active" && Date.parse(row.expires_at) <= authenticatedAt.getTime()) {
       this.db.prepare(
         `UPDATE entry_sessions
          SET status = 'expired'
@@ -76,7 +77,11 @@ export class EntrySessionAuthenticator {
       return { status: "invalid" };
     }
 
-    const context = this.familyRepository.authenticateEntrySession(entrySessionRefValue, token);
+    const context = this.familyRepository.authenticateEntrySession(
+      entrySessionRefValue,
+      token,
+      authenticatedAt
+    );
     return context ? { status: "authenticated", context } : { status: "invalid" };
   }
 }

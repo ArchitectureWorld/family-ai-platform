@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FamilyDomainRepository } from "../src/familyDomain.js";
 import { openGatewayDatabase, sha256, type GatewayDatabase } from "../src/database.js";
 import { MobilePairingRepository } from "../src/mobilePairing.js";
@@ -110,6 +110,67 @@ describe("Web Entry repository", () => {
         }
       }
     });
+  });
+
+  it("uses one decision instant across Session status and context lookup", () => {
+    const result = web.claimPairing({ ...claim, pairingRef });
+    db.prepare(
+      "UPDATE entry_sessions SET expires_at = ? WHERE entry_session_ref = ?"
+    ).run("2030-01-01T00:00:00.000Z", result.entrySessionRef);
+    const instants = [
+      new Date("2029-12-31T23:59:59.999Z"),
+      new Date("2030-01-01T00:00:00.000Z")
+    ];
+    let clockCalls = 0;
+    const bindingBeforeAuthentication = db.prepare(
+      "SELECT last_used_at FROM entry_bindings WHERE entry_binding_ref = ?"
+    ).get(result.entryBindingRef);
+
+    expect(db.prepare(
+      "SELECT token_hash FROM entry_sessions WHERE entry_session_ref = ?"
+    ).get(result.entrySessionRef)).toEqual({ token_hash: sha256(result.entryToken) });
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2031-01-01T00:00:00.000Z"));
+      const authenticator = new EntrySessionAuthenticator(db, family, () => {
+        const instant = instants[Math.min(clockCalls, instants.length - 1)]!;
+        clockCalls += 1;
+        return instant;
+      });
+
+      expect(authenticator.authenticate(result.entrySessionRef, WRONG_CREDENTIAL))
+        .toEqual({ status: "invalid" });
+      expect(clockCalls).toBe(0);
+      expect(db.prepare(
+        "SELECT last_used_at FROM entry_bindings WHERE entry_binding_ref = ?"
+      ).get(result.entryBindingRef)).toEqual(bindingBeforeAuthentication);
+
+      const authenticated = authenticator.authenticate(result.entrySessionRef, result.entryToken);
+
+      expect(authenticated).toMatchObject({ status: "authenticated" });
+      expect(clockCalls).toBe(1);
+      expect(db.prepare(
+        "SELECT last_used_at FROM entry_bindings WHERE entry_binding_ref = ?"
+      ).get(result.entryBindingRef)).toEqual({
+        last_used_at: "2029-12-31T23:59:59.999Z"
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats the exact expiry instant as expired", () => {
+    const result = web.claimPairing({ ...claim, pairingRef });
+    db.prepare(
+      "UPDATE entry_sessions SET expires_at = ? WHERE entry_session_ref = ?"
+    ).run(currentNow.toISOString(), result.entrySessionRef);
+
+    expect(new EntrySessionAuthenticator(db, family, () => currentNow)
+      .authenticate(result.entrySessionRef, result.entryToken)).toEqual({ status: "expired" });
+    expect(db.prepare(
+      "SELECT status FROM entry_sessions WHERE entry_session_ref = ?"
+    ).get(result.entrySessionRef)).toEqual({ status: "expired" });
   });
 
   it("replays the same consumed Claim without rotating its Session", () => {
