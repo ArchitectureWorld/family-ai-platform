@@ -273,19 +273,19 @@ npm exec --workspace @family-ai/gateway -- vitest run \
 
 **Step 1：先写冲突 RED**
 
-- [ ] `test-remediation-authority.sh` 证明现有“暂不开发设备配对和附件/真实 Provider”等表述，与仓库已经存在的实现及维护者批准的 A2–F1 整改范围冲突。
-- [ ] 静态检查要求 `AGENTS.md` 同时出现三类明确边界：现有能力可做安全/可靠性整改；新增产品能力仍需单独批准；正式 `8790` 发布仍受 R1/R2/R3 三段控制。
-- [ ] 运行脚本，预期只因旧阶段授权不一致而失败，不能因搜索路径或 Markdown 解析错误失败。
+- [x] `test-remediation-authority.sh` 证明现有“暂不开发设备配对和附件/真实 Provider”等表述，与仓库已经存在的实现及维护者批准的 A2–F1 整改范围冲突。
+- [x] 静态检查要求 `AGENTS.md` 同时出现三类明确边界：现有能力可做安全/可靠性整改；新增产品能力仍需单独批准；正式 `8790` 发布仍受 R1/R2/R3 三段控制。
+- [x] 运行脚本，RED 只因旧阶段授权不一致而失败；路径与章节解析正常。
 
 **Step 2：最小规则校正**
 
-- [ ] 保留“一个产品、单 Gateway、空库起步、禁止旧平台迁移”、全部 14 条安全不变量、Git 规则和 TDD/验收门禁。
-- [ ] 把“当前阶段限制”改为事实化清单：本整改计划只允许加固仓库里已经存在的 Session、配对、附件、Provider Adapter、浏览器客户端和发布工具；每个 Task 仍要逐项满足依赖、设计批准与用户 Gate。
-- [ ] 明确 A2–A6 是修复发布基线，B/C/D 是已存在能力的安全/恢复加固，E0–E4 是运行定义/门禁/无行为拆分；不得借此新增公网、OAuth/SSO、第二后端、正式 Admin/Member Web、语音终端、多 Agent 语义编排或旧数据迁移。
-- [ ] 明确任何正式 runtime/端口/Provider 架构变化仍只能由 F1 的 R1/R2/R3 分段批准；B4 在第一阶段固定禁用LAN Preview，未来开放必须另立治理任务并明确修改安全不变量。
-- [ ] 保留 Ready 前五项门禁，但批准 A2 为 `dev-up.sh`/`acceptance.sh` 增加显式隔离 runtime/project/随机 loopback port；A2 合入后，运行级两项必须走隔离模式并证明正式 8790 不变。
-- [ ] 预告 A4 合入后的构建门禁迁移：A4 的不可变 wrapper 成为唯一可交付构建入口；裸 `docker compose build` 只保留为不被 dev-up/E1/E2/F1 消费的 Dockerfile smoke。A1D 不引用尚不存在脚本为当前 PASS，而是要求 A4 同 PR 再更新 AGENTS 的精确命令。
-- [ ] 不修改业务源码、Schema、Compose、端口或运行服务。
+- [x] 保留“一个产品、单 Gateway、空库起步、禁止旧平台迁移”、全部 14 条安全不变量、Git 规则和 TDD/验收门禁。
+- [x] 把“当前阶段限制”改为事实化清单：本整改计划只允许加固仓库里已经存在的 Session、配对、附件、Provider Adapter、浏览器客户端和发布工具；每个 Task 仍要逐项满足依赖、设计批准与用户 Gate。
+- [x] 明确 A2–A6 是修复发布基线，B/C/D 是已存在能力的安全/恢复加固，E0–E4 是运行定义/门禁/无行为拆分；不得借此新增公网、OAuth/SSO、第二后端、正式 Admin/Member Web、语音终端、多 Agent 语义编排或旧数据迁移。
+- [x] 明确任何正式 runtime/端口/Provider 架构变化仍只能由 F1 的 R1/R2/R3 分段批准；B4 在第一阶段固定禁用LAN Preview，未来开放必须另立治理任务并明确修改安全不变量。
+- [x] 保留 Ready 前五项门禁，但批准 A2 为 `dev-up.sh`/`acceptance.sh` 增加显式隔离 runtime/project/随机 loopback port；A2 合入后，运行级两项必须走隔离模式并证明正式 8790 不变。
+- [x] 预告 A4 合入后的构建门禁迁移：A4 的不可变 wrapper 成为唯一可交付构建入口；裸 `docker compose build` 只保留为不被 dev-up/E1/E2/F1 消费的 Dockerfile smoke。A1D 不引用尚不存在脚本为当前 PASS，而是要求 A4 同 PR 再更新 AGENTS 的精确命令。
+- [x] 未修改业务源码、Schema、Compose、端口或运行服务。
 
 **Step 3：验证与文档**
 
@@ -295,9 +295,9 @@ npm exec --workspace @family-ai/gateway -- vitest run \
     npm run check
     git diff --check
 
-- [ ] 开发记录列出“保留、放开、仍禁止”三张清单，并链接维护者批准。
-- [ ] 完成报告把 npm ci/check 记为 PASS/FAIL；本任务不改 Dockerfile、Compose、runtime、浏览器或 Provider，因此 Docker build、dev-up、acceptance、浏览器和真实 Provider 均记 `SKIP（文档/静态门禁任务，无运行行为变化）`，不得直接省略。
-- [ ] 维护者确认措辞后才合入；A2 只能从含该提交的最新 `main` 开始。
+- [x] 开发记录列出“保留、放开、仍禁止”三张清单，并记录维护者在当前任务中要求继续执行已编制计划的授权来源。
+- [x] `npm ci`、授权脚本、静态检查、`npm run check` 和 `git diff --check` 已通过；Docker build、dev-up、acceptance、浏览器和真实 Provider 均按文档/静态门禁任务记为 `SKIP`。
+- [ ] A1D 仍须通过独立 PR 的维护者措辞确认与 CI 后才可合入；A2 只能从含该提交的最新 `main` 开始。
 
 **回滚：** 若措辞有误，回滚本任务并保持 A2+ 阻断；不能在恢复旧禁令后继续开发下游任务。
 
@@ -1063,8 +1063,8 @@ git diff --check
 
 | Task | 状态 | 证据/阻断 |
 |---|---|---|
-| A1 单一认证时钟 | 已实现并完成代码级验证 | RED→GREEN；`npm run check` 94 文件/914 测试全绿，类型/构建/静态/secret 检查通过；独立代码审查 Ready。因已知正式 Compose 隔离前置尚未完成，本轮未跑 Docker build、dev-up、acceptance 或浏览器，不得称 Foundation 五门禁全绿；尚未提交/推送/建 PR |
-| A1D 阶段授权规则对齐 | 待维护者批准 | A1 后首个任务；合入前 A2+ 全部阻断 |
+| A1 单一认证时钟 | 已合入 | PR #30；合并提交 `29baa8f`；本地与 CI 门禁通过 |
+| A1D 阶段授权规则对齐 | 已实现，待独立 PR | RED→GREEN；`npm ci`、94 文件/914 测试、typecheck/build/static 全绿；合入前 A2+ 继续阻断 |
 | A2 Compose 附件持久化 | 待开始 | 依赖 A1D |
 | A3 生产依赖安全升级 | 待开始 | 依赖 A2；执行时重新查询官方版本/漏洞 |
 | A4 CI 发布阻断门禁 | 待开始 | 依赖 A2/A3 |
@@ -1089,7 +1089,7 @@ git diff --check
 
 ## 10. 本计划明确不授权的动作
 
-- 推送远程分支、创建/合并 PR 或删除远程分支；
+- 直接推送或改写 `main`、force push、未经任务授权创建/合并 PR，或未经批准删除远程分支；
 - 清空 `.runtime`、`.runtime-preview` 或正式数据；
 - 自动部署/重启正式 `8790`；
 - 修改用户原 `main` 工作区中未提交的 `member-public/render.js`、`config.ts` 及对应测试，或把它们混入本分支；

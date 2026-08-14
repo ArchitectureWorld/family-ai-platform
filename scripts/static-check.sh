@@ -506,6 +506,7 @@ grep -Fq 'RUN npm run check' Dockerfile || {
 }
 
 bash scripts/test-verify-foundation-preflight.sh
+bash scripts/test-remediation-authority.sh
 
 if grep -Eq 'command -v (node|npm)' scripts/verify-foundation.sh; then
   printf 'One-command verification must not require Node or npm on the host.\n' >&2
