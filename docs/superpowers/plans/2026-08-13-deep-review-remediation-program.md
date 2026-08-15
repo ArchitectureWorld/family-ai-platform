@@ -392,20 +392,20 @@ git diff --check
 
 - `apps/gateway/package.json`
 - `package-lock.json`
-- 如上游修复要求才调整兼容性测试
+- 如上游修复要求才调整兼容性测试或最小生命周期适配
 - 本计划和对应开发记录
 
 **Step 1：重新取证**
 
-- [ ] 因漏洞和版本会变化，执行时重新查询 npm 官方 registry/advisory 和 Fastify 官方 release，不复制本计划中的旧版本号。
-- [ ] 保存 `npm audit --omit=dev --json` 摘要，确认漏洞路径是否仍为 `find-my-way` / `fast-uri`。
-- [ ] 用 `npm ls fastify find-my-way fast-uri` 记录直接和传递依赖。
+- [x] 已在 2026-08-15 重新查询 npm 官方 registry、GitHub Advisory 与 Fastify 官方 release：stable 为 Fastify 5.12.0，未复制计划旧版本号。
+- [x] `0600` baseline production audit 确认为 2 High、0 Critical，漏洞路径仍为 `find-my-way` / `fast-uri`。
+- [x] `npm ls fastify find-my-way fast-uri` 已记录升级前后的直接和传递依赖。
 
 **Step 2：最小升级**
 
-- [ ] 优先选择 Fastify 当前兼容修复版本；只更新解除 High/Critical 所需的直接依赖和 lockfile。
-- [ ] 禁止无审查运行 `npm audit fix --force`，禁止顺带升级所有开发依赖。
-- [ ] 若必须跨 Fastify major，先新增协议兼容测试并拆成独立设计/任务，不在本 PR 偷渡。
+- [x] 将 Fastify 从 5.10.0 最小升级到同 major 的 5.12.0，并只刷新漏洞链要求的 `find-my-way`、`fast-uri` 和 Fastify 自身 `process-warning` 锁项。
+- [x] 未运行 `npm audit fix --force`，未顺带升级开发依赖；全依赖 audit 剩余 nanoid High 与 postcss Moderate 均为开发链路，已如实记录。
+- [x] 未跨 Fastify major；官方 5.11 shutdown 修复暴露既有 SSE `onClose` 等待环后，复用原失败测试并按官方生命周期把 SSE 关闭移到 `preClose`，数据库仍留在 `onClose`。
 
 **Step 3：验证**
 
@@ -426,6 +426,8 @@ git diff --check
 JSON 报告只留在 Git ignored 路径；命令前设置 `umask 077`，输出必须是当前 owner 的 regular `0600` 新文件。解析断言 High/Critical 为0，low/moderate只如实列出；`--audit-level=high`确保允许保留的低等级不会因命令退出码误阻断，禁止为了让裸audit零退出而越界升级无关依赖。
 
 **完成判据：** production audit 为 0 High、0 Critical；锁文件可由 `npm ci` 复现；Gateway 行为与 Docker build 全绿；重新运行 A2 附件容器 smoke，证明依赖升级没有破坏已经合入的持久化边界。
+
+**本地证据（提交前工作树）：** production audit 0 High/0 Critical，报告为 owner `0600` regular file；Fastify 5.12.0、find-my-way 9.8.0、fast-uri 3.1.5/4.1.2；SSE shutdown RED 连续复现后 GREEN 连续 3 次；`npm run check` 94 文件/918 项通过，static/typecheck/build 全绿。Docker、隔离附件/acceptance 与真实浏览器仍须在最终提交 SHA 上复验。
 
 **回滚：** 恢复 package manifest 与 lockfile 为同一提交前版本，不单独回滚其中一个。
 
@@ -1067,8 +1069,8 @@ git diff --check
 |---|---|---|
 | A1 单一认证时钟 | 已合入 | PR #30；合并提交 `29baa8f`；本地与 CI 门禁通过 |
 | A1D 阶段授权规则对齐 | 已合入 | PR #31；合并提交 `5d38293`；授权措辞与 CI 已确认 |
-| A2 Compose 附件持久化 | 已实现，待独立 PR | RED→GREEN；提交前 npm/Docker/隔离附件/真实浏览器门禁全绿；须在最终提交 SHA 复验 |
-| A3 生产依赖安全升级 | 待开始 | 依赖 A2；执行时重新查询官方版本/漏洞 |
+| A2 Compose 附件持久化 | 已合入 | PR #32；合并提交 `8d3c027`；npm/Docker/隔离附件/真实浏览器与 CI 全绿 |
+| A3 生产依赖安全升级 | 已实现，待独立 PR | production audit 0 High/0 Critical；SSE shutdown 兼容性 RED→GREEN；最终提交 SHA 仍须完整复验 |
 | A4 CI 发布阻断门禁 | 待开始 | 依赖 A2/A3 |
 | A5 整体备份与恢复基础 | 待开始 | 依赖 A4；所有 V10+ migration 的前置门 |
 | A6 文档事实校正 | 待开始 | 依赖 A1–A5 的最新证据 |
