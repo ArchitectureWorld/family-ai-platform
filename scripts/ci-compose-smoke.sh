@@ -23,7 +23,6 @@ ARTIFACT_DIR="$(dirname "$MANIFEST")"
 [[ "$(find "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" == \
   "gateway-image-manifest.json gateway-image.tar gateway-image.tar.sha256 " ]] || fail ARTIFACT_FILE_SET_INVALID
 
-command -v docker >/dev/null 2>&1 || fail DOCKER_UNAVAILABLE
 command -v node >/dev/null 2>&1 || fail NODE_UNAVAILABLE
 command -v sha256sum >/dev/null 2>&1 || fail SHA256SUM_UNAVAILABLE
 
@@ -93,6 +92,7 @@ node "$ROOT_DIR/scripts/release-build-inputs.mjs" validate \
 [[ "$(json_field "$VERIFY_ROOT/build-inputs.json" buildInputTreeHash)" == "$BUILD_INPUT_TREE_HASH" ]] \
   || fail BUILD_INPUT_TREE_MISMATCH
 
+command -v docker >/dev/null 2>&1 || fail DOCKER_UNAVAILABLE
 docker load --input "$ARTIFACT_DIR/gateway-image.tar" >/dev/null
 [[ "$(docker image inspect --format '{{.Id}}' "$IMAGE_ID" 2>/dev/null || true)" == "$IMAGE_ID" ]] \
   || fail LOADED_IMAGE_ID_MISMATCH

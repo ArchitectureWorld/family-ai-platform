@@ -45,6 +45,10 @@ MISMATCH_LINE="$(grep -n 'SOURCE_COMMIT_MISMATCH' "$ROOT_DIR/scripts/build-gatew
 DOCKER_LINE="$(grep -n 'command -v docker' "$ROOT_DIR/scripts/build-gateway-image.sh" | head -n1 | cut -d: -f1)"
 [[ "$MISMATCH_LINE" -lt "$DOCKER_LINE" ]] \
   || fail 'source/expected identity must fail before Docker availability is consulted'
+ARCHIVE_CHECK_LINE="$(grep -n 'sha256sum --check' "$ROOT_DIR/scripts/ci-compose-smoke.sh" | head -n1 | cut -d: -f1)"
+SMOKE_DOCKER_LINE="$(grep -n 'command -v docker' "$ROOT_DIR/scripts/ci-compose-smoke.sh" | head -n1 | cut -d: -f1)"
+[[ "$ARCHIVE_CHECK_LINE" -lt "$SMOKE_DOCKER_LINE" ]] \
+  || fail 'archive tampering must fail before Docker availability is consulted'
 
 CAPABILITY_DIR="$FIXTURE_ROOT/capability"
 mkdir -m 700 "$CAPABILITY_DIR"
