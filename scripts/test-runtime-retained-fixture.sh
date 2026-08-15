@@ -105,4 +105,43 @@ bash "$ROOT_DIR/scripts/runtime-restore.sh" \
 cmp "$TEST_ROOT/runtime/data/attachments/example.txt" "$TEST_ROOT/original-attachment"
 node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync(process.argv[1])); const c=JSON.parse(fs.readFileSync(process.argv[2])); const r=JSON.parse(fs.readFileSync(process.argv[3])); if(m.schemaVersion!==9||c.beforeSchema!==9||c.afterSchema!==9||r.manifestKind!=="runtime-restore-receipt-v1")process.exit(1)' \
   "$SNAPSHOT/manifest.json" "$TEST_ROOT/evidence/candidate.json" "$TEST_ROOT/evidence/restore.json"
-printf 'runtime retained V9 snapshot/candidate/restore fixture: PASS\n'
+
+mkdir -m 700 "$TEST_ROOT/runtime-v3" "$TEST_ROOT/runtime-v3/data" "$TEST_ROOT/snapshot-v3-output"
+node --input-type=module -e 'import { openGatewayDatabase } from "./apps/gateway/dist/database.js"; const db=openGatewayDatabase(process.argv[1],{migrationLimit:3}); db.close();' "$TEST_ROOT/runtime-v3/data/gateway.sqlite"
+chmod 600 "$TEST_ROOT/runtime-v3/data/gateway.sqlite"
+node "$ROOT_DIR/scripts/runtime-backup-preflight.mjs" \
+  --scope fixture-rehearsal --phase fixture-source-snapshot --release-id fixture-a5-v3 \
+  --runtime-root "$TEST_ROOT/runtime-v3" --controller-definition "$TEST_ROOT/evidence/controller.json" \
+  --capability-receipt "$TEST_ROOT/evidence/capability.json" \
+  --expected-capability-receipt-sha256 "$CAPABILITY_SHA" --legacy-attachments absent-if-schema-before-v8 \
+  --source-image-role fixture-baseline --source-image-id "$IMAGE_ID" \
+  --output "$TEST_ROOT/evidence/preflight-v3.json" > "$TEST_ROOT/preflight-v3-sha"
+PREFLIGHT_V3_SHA="$(<"$TEST_ROOT/preflight-v3-sha")"
+node "$ROOT_DIR/scripts/runtime-stop-evidence.mjs" capture \
+  --scope fixture-rehearsal --phase fixture-source-snapshot --release-id fixture-a5-v3 \
+  --expected-preflight-sha256 "$PREFLIGHT_V3_SHA" --controller docker-compose \
+  --project-name "$PROJECT" --service gateway --expected-bind none \
+  --output "$TEST_ROOT/evidence/stop-v3.json" >/dev/null
+bash "$ROOT_DIR/scripts/runtime-backup.sh" \
+  --scope fixture-rehearsal --phase fixture-source-snapshot --release-id fixture-a5-v3 \
+  --preflight "$TEST_ROOT/evidence/preflight-v3.json" --expected-preflight-sha256 "$PREFLIGHT_V3_SHA" \
+  --stop-evidence "$TEST_ROOT/evidence/stop-v3.json" --runtime-root "$TEST_ROOT/runtime-v3" \
+  --output-root "$TEST_ROOT/snapshot-v3-output" --backup-tool-manifest "$TEST_ROOT/evidence/tools.json" \
+  --expected-backup-tool-manifest-sha256 "$TOOL_SHA" > "$TEST_ROOT/snapshot-v3-path"
+SNAPSHOT_V3="$(<"$TEST_ROOT/snapshot-v3-path")"
+printf 'broken-sqlite\n' > "$TEST_ROOT/runtime-v3/data/gateway.sqlite"
+node "$ROOT_DIR/scripts/runtime-stop-evidence.mjs" capture \
+  --scope fixture-rehearsal --phase restore-previous --release-id fixture-a5-v3 \
+  --expected-preflight-sha256 "$PREFLIGHT_V3_SHA" --controller docker-compose \
+  --project-name "$PROJECT" --service gateway --expected-bind none \
+  --output "$TEST_ROOT/evidence/restore-stop-v3.json" >/dev/null
+bash "$ROOT_DIR/scripts/runtime-restore.sh" \
+  --scope fixture-rehearsal --phase restore-previous --release-id fixture-a5-v3 \
+  --preflight "$TEST_ROOT/evidence/preflight-v3.json" --expected-preflight-sha256 "$PREFLIGHT_V3_SHA" \
+  --stop-evidence "$TEST_ROOT/evidence/restore-stop-v3.json" --exchange-capability "$TEST_ROOT/evidence/exchange.json" \
+  --snapshot "$SNAPSHOT_V3" --target-runtime-root "$TEST_ROOT/runtime-v3" --client-rollback-mode previous-native \
+  --receipt "$TEST_ROOT/evidence/restore-v3.json" >/dev/null
+node --input-type=module -e 'import Database from "better-sqlite3"; const db=new Database(process.argv[1],{readonly:true}); const version=db.prepare("SELECT MAX(version) version FROM schema_migrations").get().version; db.close(); if(version!==3)process.exit(1);' "$TEST_ROOT/runtime-v3/data/gateway.sqlite"
+[[ ! -e "$TEST_ROOT/runtime-v3/data/attachments" ]]
+
+printf 'runtime retained V3/V9 snapshot/candidate/restore fixtures: PASS\n'
