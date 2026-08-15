@@ -107,7 +107,21 @@ node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync(process
   "$SNAPSHOT/manifest.json" "$TEST_ROOT/evidence/candidate.json" "$TEST_ROOT/evidence/restore.json"
 
 mkdir -m 700 "$TEST_ROOT/runtime-v3" "$TEST_ROOT/runtime-v3/data" "$TEST_ROOT/snapshot-v3-output"
-node --input-type=module -e 'import { openGatewayDatabase } from "./apps/gateway/dist/database.js"; const db=openGatewayDatabase(process.argv[1],{migrationLimit:3}); db.close();' "$TEST_ROOT/runtime-v3/data/gateway.sqlite"
+node --input-type=module -e '
+  import { readFileSync } from "node:fs";
+  import Database from "better-sqlite3";
+  const [sourcePath, databasePath] = process.argv.slice(1);
+  const source = readFileSync(sourcePath, "utf8");
+  const db = new Database(databasePath);
+  try {
+    for (let version = 1; version <= 3; version += 1) {
+      const match = source.match(new RegExp("const MIGRATION_V" + version + " = `([\\s\\S]*?)`;"));
+      if (!match) process.exit(1);
+      db.exec(match[1]);
+      db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)").run(version, new Date().toISOString());
+    }
+  } finally { db.close(); }
+' "$ROOT_DIR/apps/gateway/src/database.ts" "$TEST_ROOT/runtime-v3/data/gateway.sqlite"
 chmod 600 "$TEST_ROOT/runtime-v3/data/gateway.sqlite"
 node "$ROOT_DIR/scripts/runtime-backup-preflight.mjs" \
   --scope fixture-rehearsal --phase fixture-source-snapshot --release-id fixture-a5-v3 \
