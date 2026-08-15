@@ -47,8 +47,14 @@ grep -Fq '/app/node_modules/@family-ai/contracts/package.json' "$ROOT_DIR/Docker
   || fail 'runtime image does not materialize the contracts workspace package'
 grep -Fq '/app/node_modules/@family-ai/provider-adapter-sdk/package.json' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image does not materialize the provider SDK workspace package'
+grep -Fq 'RUN chmod -R a+rX /app' "$ROOT_DIR/Dockerfile" \
+  || fail 'runtime image does not normalize exact-worktree file modes'
 grep -Fq 'await import("@family-ai/contracts")' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image does not verify internal package resolution'
+UNPRIVILEGED_LINE="$(grep -n 'USER 65532:65532' "$ROOT_DIR/Dockerfile" | head -n1 | cut -d: -f1)"
+IMPORT_CHECK_LINE="$(grep -n 'await import("@family-ai/contracts")' "$ROOT_DIR/Dockerfile" | head -n1 | cut -d: -f1)"
+[[ -n "$UNPRIVILEGED_LINE" && "$UNPRIVILEGED_LINE" -lt "$IMPORT_CHECK_LINE" ]] \
+  || fail 'runtime package self-check must run as an unrelated unprivileged UID'
 MISMATCH_LINE="$(grep -n 'SOURCE_COMMIT_MISMATCH' "$ROOT_DIR/scripts/build-gateway-image.sh" | head -n1 | cut -d: -f1)"
 DOCKER_LINE="$(grep -n 'command -v docker' "$ROOT_DIR/scripts/build-gateway-image.sh" | head -n1 | cut -d: -f1)"
 [[ "$MISMATCH_LINE" -lt "$DOCKER_LINE" ]] \

@@ -111,11 +111,13 @@ COPY --from=build --chown=node:node /app/packages/contracts/package.json /app/no
 COPY --from=build --chown=node:node /app/packages/contracts/dist /app/node_modules/@family-ai/contracts/dist
 COPY --from=build --chown=node:node /app/packages/provider-adapter-sdk/package.json /app/node_modules/@family-ai/provider-adapter-sdk/package.json
 COPY --from=build --chown=node:node /app/packages/provider-adapter-sdk/dist /app/node_modules/@family-ai/provider-adapter-sdk/dist
-RUN node --input-type=module -e 'await import("@family-ai/contracts"); await import("@family-ai/provider-adapter-sdk");'
 COPY --from=build --chown=node:node /app/apps/gateway/package.json /app/apps/gateway/package.json
 COPY --from=build --chown=node:node /app/apps/gateway/dist /app/apps/gateway/dist
 COPY --from=build --chown=node:node /app/apps/gateway/member-public /app/apps/gateway/member-public
 COPY --from=build --chown=node:node /app/apps/gateway/admin-public /app/apps/gateway/admin-public
+RUN chmod -R a+rX /app
+USER 65532:65532
+RUN node --input-type=module -e 'await import("@family-ai/contracts"); await import("@family-ai/provider-adapter-sdk"); await import("./apps/gateway/dist/app.js"); const { access } = await import("node:fs/promises"); await access("./apps/gateway/member-public/index.html");'
 
 USER node
 EXPOSE 8790
