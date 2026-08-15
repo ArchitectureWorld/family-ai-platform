@@ -33,3 +33,8 @@ node -e '
 ' "$TEST_ROOT/exchange.json"
 
 printf 'runtime backup/restore focused tests: PASS\n'
+
+if [[ "${1:-}" == "--real-image-manifest" && -n "${2:-}" ]]; then
+  exec bash "$ROOT_DIR/scripts/test-runtime-retained-fixture.sh" "$2"
+fi
+[[ $# -eq 0 ]] || { printf 'test-runtime-backup-restore: invalid arguments\n' >&2; exit 1; }

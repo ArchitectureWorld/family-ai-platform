@@ -89,7 +89,7 @@ async function main() {
   chmodSync(staging, 0o700);
   const databasePath = join(staging, "data", "gateway.sqlite");
   const beforeSchema = schema(databasePath);
-  execFileSync("docker", ["run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--mount", `type=bind,src=${staging},dst=${definition.runtimeMount}`, "--entrypoint", "node", image.imageId, ...definition.entrypoint.slice(1), "--database", definition.databasePath], { stdio: ["ignore", "pipe", "pipe"] });
+  execFileSync("docker", ["run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", `${statSync(staging).uid}:${statSync(staging).gid}`, "--mount", `type=bind,src=${staging},dst=${definition.runtimeMount}`, "--entrypoint", "node", image.imageId, ...definition.entrypoint.slice(1), "--database", definition.databasePath], { stdio: ["ignore", "pipe", "pipe"] });
   const afterSchema = schema(databasePath);
   if (afterSchema !== receipt.release.schemaHead) throw new Error("CANDIDATE_MIGRATION_HEAD_MISMATCH");
   const inventory = inventoryTree(staging);
