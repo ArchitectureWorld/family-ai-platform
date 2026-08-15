@@ -126,12 +126,14 @@ Web Device + HttpOnly Personal Entry
 当前开发顺序：
 
 ```text
-Push Notification 唤醒
-→ iOS 接入统一 Chat / Work 与同步协议
-→ HarmonyOS 个人入口
-→ 语音和复杂 Work 能力
-→ 正式 Admin Web
+A2 Compose 附件持久化
+→ A3 生产依赖安全升级
+→ A4 CI 发布阻断门禁
+→ A5 整体备份与恢复基础
+→ A6 文档事实校正
 ```
+
+在上述发布基线整改完成前，不继续 Push Notification、iOS/HarmonyOS、语音或正式 Admin Web 等产品扩展。
 
 iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、iPhone 与部署 Gateway 的真机验收。Member Web 和 iOS 共享服务端对象与协议，但保持独立交互实现。
 
@@ -235,7 +237,30 @@ bash ./scripts/acceptance-onboarding.sh
 ./scripts/dev-reset.sh
 ```
 
-运行数据库和本机开发凭证只保存在 Git 忽略的 `.runtime/`。自动验证日志和报告保存在 Git 忽略的 `docs/acceptance/runtime/`。
+SQLite 数据库位于 Git 忽略的 `.runtime/data/gateway.sqlite`，附件位于
+`.runtime/data/attachments`；二者共享 Compose 的持久化 `data` 挂载。
+`dev-down.sh` 只停止容器并保留数据，`dev-reset.sh` 会删除整个 `.runtime`，因此也会删除数据库、附件和本机开发凭证。
+自动验证日志和报告保存在 Git 忽略的 `docs/acceptance/runtime/`。
+
+需要避开正式 `127.0.0.1:8790` 时，先构建并取得不可变 image ID，再使用独立 runtime、唯一 Compose project 和随机 loopback 端口：
+
+```bash
+FAMILY_AI_RUNTIME_ROOT=<absolute-empty-dir> \
+COMPOSE_PROJECT_NAME=<safe-unique> \
+FAMILY_AI_HOST_PORT=0 \
+FAMILY_AI_IMAGE_REF=<sha256:image-id> \
+./scripts/dev-up.sh
+
+FAMILY_AI_RUNTIME_ROOT=<same-dir> \
+COMPOSE_PROJECT_NAME=<same> \
+./scripts/acceptance.sh
+
+FAMILY_AI_RUNTIME_ROOT=<same-dir> \
+COMPOSE_PROJECT_NAME=<same> \
+./scripts/acceptance-container-attachments.sh
+```
+
+隔离启动会写入权限为 `0600` 的 manifest，后续验收只接受与该 manifest 完全匹配的 runtime、project、容器、网络、image ID 和随机端口，并在前后确认正式 `8790` identity 未改变。
 
 ## 网络和安全边界
 

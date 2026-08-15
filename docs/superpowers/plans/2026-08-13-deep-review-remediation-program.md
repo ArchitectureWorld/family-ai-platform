@@ -297,7 +297,7 @@ npm exec --workspace @family-ai/gateway -- vitest run \
 
 - [x] 开发记录列出“保留、放开、仍禁止”三张清单，并记录维护者在当前任务中要求继续执行已编制计划的授权来源。
 - [x] `npm ci`、授权脚本、静态检查、`npm run check` 和 `git diff --check` 已通过；Docker build、dev-up、acceptance、浏览器和真实 Provider 均按文档/静态门禁任务记为 `SKIP`。
-- [ ] A1D 仍须通过独立 PR 的维护者措辞确认与 CI 后才可合入；A2 只能从含该提交的最新 `main` 开始。
+- [x] A1D 已通过独立 PR #31 的维护者措辞确认与 CI，并以合并提交 `5d38293` 进入 `main`；A2 从该提交开始。
 
 **回滚：** 若措辞有误，回滚本任务并保持 A2+ 阻断；不能在恢复旧禁令后继续开发下游任务。
 
@@ -323,39 +323,39 @@ npm exec --workspace @family-ai/gateway -- vitest run \
 
 **Step 1：写静态 RED**
 
-- [ ] 在 `memberWebOneClick.test.ts` 断言 Compose 显式设置 `FAMILY_AI_ATTACHMENT_ROOT=/app/.runtime/data/attachments`。
-- [ ] 断言 `dev-up.sh` 创建 `.runtime/data/attachments` 并把权限收紧到 `0700`。
-- [ ] 扩展 `static-check.sh`，保持根 `read_only: true`，禁止附件根落到 `/app/.runtime/attachments`。
-- [ ] 运行两个聚焦检查并观察失败。
+- [x] 在 `memberWebOneClick.test.ts` 断言 Compose 显式设置 `FAMILY_AI_ATTACHMENT_ROOT=/app/.runtime/data/attachments`。
+- [x] 断言 `dev-up.sh` 创建 `.runtime/data/attachments` 并把权限收紧到 `0700`。
+- [x] 扩展 `static-check.sh`，保持根 `read_only: true`，禁止附件根落到 `/app/.runtime/attachments`。
+- [x] 运行两个聚焦检查并观察失败。
 
 **Step 2：最小修复**
 
-- [ ] 在 Compose 的 Gateway environment 加入：
+- [x] 在 Compose 的 Gateway environment 加入：
 
 ```yaml
 FAMILY_AI_ATTACHMENT_ROOT: /app/.runtime/data/attachments
 ```
 
-- [ ] `dev-up.sh` 在生成配置前创建 `$DATA_DIR/attachments`，与 runtime/data 一样使用当前宿主 UID/GID 和 `0700`。
-- [ ] 不新增卷、不扩大端口、不关闭只读根文件系统；附件复用现有 `.runtime/data:/app/.runtime/data` 可写挂载。
+- [x] `dev-up.sh` 在生成配置前创建 `$DATA_DIR/attachments`，与 runtime/data 一样使用当前宿主 UID/GID 和 `0700`。
+- [x] 不新增卷、不扩大端口、不关闭只读根文件系统；附件复用现有 `.runtime/data:/app/.runtime/data` 可写挂载。
 
 **Step 3：容器级验收脚本**
 
-- [ ] 使用独立临时目录和独立容器名/网络，不复用正式 `.runtime`，不发布宿主端口。
-- [ ] 构建当前 SHA 镜像，以 `--read-only`、非 root 用户、临时 `/tmp` 和临时数据 bind mount 启动。
-- [ ] 在容器网络内部创建家庭/设备/会话，上传至少两分片附件并下载校验 SHA-256。
-- [ ] 停止并重新创建容器，复用同一临时数据目录，再次下载并校验相同 SHA-256。
-- [ ] 断言容器根目录不可写、附件目录可写且没有 world/group 权限。
-- [ ] `trap` 只清理本脚本创建的容器、网络和临时目录。
+- [x] 使用独立临时目录、独立容器/网络和随机 loopback 端口，不复用正式 `.runtime` 或宿主 `8790`。
+- [x] 消费调用方按当前 SHA 构建的不可变 image ID，以只读根、非 root 用户、临时 `/tmp` 和隔离数据 bind mount 启动。
+- [x] 在随机隔离 endpoint 创建家庭/设备/会话，上传至少两分片附件并下载校验 SHA-256。
+- [x] 停止并重新创建容器，复用同一临时数据目录，重新解析随机端口后再次下载并校验相同 SHA-256。
+- [x] 断言容器根目录不可写、附件目录可写且没有 world/group 权限。
+- [x] 临时敏感材料由脚本退出 trap 精确清理；容器与网络由受 manifest 约束的 Compose project 单独清理。
 
 **Step 3.5：让 AGENTS 的一键门禁可安全隔离执行**
 
-- [ ] 为 `dev-up.sh` 和 `acceptance.sh` 增加同一组显式参数/环境：`FAMILY_AI_RUNTIME_ROOT=<absolute-dir>`、`COMPOSE_PROJECT_NAME=<safe-unique>`、`FAMILY_AI_HOST_PORT=0`、`FAMILY_AI_IMAGE_REF=<immutable-id>`。隔离模式不得只叠加普通 Compose list merge：必须生成一份完整隔离 Compose，或使用受测试的 Compose `!override`/`!reset` 明确清空 base 的 `ports`、`env_file`、`volumes`、`build`、mutable `image`，再只注入 manifest 校验过的 immutable image、隔离 env/data 与随机 loopback。启动强制 `--no-build`。`0` 是脚本层 sentinel，禁止直接渲染成 `127.0.0.1:0:8790`；使用 `127.0.0.1::8790` 后以 `docker compose port gateway 8790` 严格解析唯一 `127.0.0.1:<ephemeral>`。
-- [ ] `dev-up.sh` 的隔离入口只接受“未存在或已存在但为空”的宿主 `0700` runtime root；它创建资源后原子写入 `0600` manifest，记录 project、container、network、image ID、实际随机端口、runtime device/inode 与正式 8790 before identity hash。
-- [ ] `acceptance.sh` 的隔离入口只接受 dev-up 已创建的非空 runtime；它必须验证该目录仍为 `0700`、本轮 `0600` manifest 存在且 project/image/device/inode/container 全部匹配，拒绝其他非空目录，不自行猜 container/port。
-- [ ] 两个入口都拒绝仓库 `.runtime`、正式 runtime、8790、相对路径、符号链接和非本轮 project；失败 trap/cleanup 只删除 manifest 逐项证明属于本轮的资源，结束再验证正式 8790 identity hash 未变。
-- [ ] `scripts/acceptance-container-attachments.sh` 复用同一个隔离 wrapper，避免出现第二套启动语义。
-- [ ] A1D 在 `AGENTS.md` 把五条 Ready 命令写成“同样五项、运行级两项必须带上述隔离变量”；这不是删减门禁，而是使门禁在正式 8790 已占用时仍可执行。A2 合入后、A4 合入前的行为 PR Ready 前都必须运行 `npm ci`、`npm run check`、`docker compose build`、隔离 `dev-up.sh`、隔离 `acceptance.sh` 并报告统计；A4 合入后按 A4 的不可变 wrapper 契约替换可交付 build。
+- [x] 为 `dev-up.sh` 和 `acceptance.sh` 增加同一组显式参数/环境：`FAMILY_AI_RUNTIME_ROOT=<absolute-dir>`、`COMPOSE_PROJECT_NAME=<safe-unique>`、`FAMILY_AI_HOST_PORT=0`、`FAMILY_AI_IMAGE_REF=<immutable-id>`。隔离模式生成完整 Compose，清除 base 的 `ports`、`env_file`、`volumes`、`build` 和 mutable `image`，只注入 manifest 校验过的不可变 image、隔离 env/data 与随机 loopback；启动强制 `--no-build`，并用 `docker compose port gateway 8790` 严格解析唯一 `127.0.0.1:<ephemeral>`。
+- [x] `dev-up.sh` 的隔离入口只接受“未存在或已存在但为空”的宿主 `0700` runtime root；它创建资源后原子写入 `0600` manifest，记录 project、container、network、image ID、实际随机端口、runtime device/inode 与正式 8790 before identity hash。
+- [x] `acceptance.sh` 的隔离入口只接受 dev-up 已创建的非空 runtime；它验证目录权限、manifest、project、image、device/inode、container 和随机端口，拒绝其他非空目录。
+- [x] 两个入口都拒绝仓库 `.runtime`、正式 runtime、8790、相对路径、符号链接和非本轮 project；前后验证正式 8790 identity hash 未变。
+- [x] `scripts/acceptance-container-attachments.sh` 复用同一个隔离 wrapper，避免出现第二套启动语义。
+- [x] A1D 已在 `AGENTS.md` 保留五项 Ready 门禁，并要求 A2 合入后的运行级门禁使用上述隔离变量；A4 合入后再按 A4 不可变 wrapper 契约迁移可交付 build。
 
 **Step 4：验证**
 
@@ -371,14 +371,16 @@ FAMILY_AI_RUNTIME_ROOT=<same-dir> COMPOSE_PROJECT_NAME=<same> ./scripts/acceptan
 git diff --check
 ```
 
-- [ ] 为 `FAMILY_AI_HOST_PORT=0` 增加 fixture RED/GREEN：无效 `127.0.0.1:0:8790` 被拒绝、生成定义使用空 host port、`docker compose port` 的零个/多个/非回环结果均 fail-closed。资源创建前先解析最终 `docker compose config --format json`，断言没有仓库 `.runtime`、宿主8790、`build`、mutable tag、base env_file/data mount或任何额外挂载；fixture逐项证明遗漏reset会RED。
-- [ ] A2 Ready 时在同一隔离 endpoint 完成 AGENTS 要求的人工浏览器两轮消息、刷新恢复、容器重启恢复和第三轮；若当时产品入口确实无法执行某项，报告必须记 FAIL/阻断，不能写 N/A。真实 Provider 仍为 SKIP，容器旅程使用 Fake Provider。
+- [x] 为 `FAMILY_AI_HOST_PORT=0` 增加 fixture RED/GREEN：无效 `127.0.0.1:0:8790` 被拒绝、生成定义使用空 host port、`docker compose port` 的零个/多个/非回环结果均 fail-closed；启动前的 Compose JSON 断言会拒绝仓库 `.runtime`、宿主 8790、build、mutable tag、base env/data mount 和额外挂载。
+- [x] 在同一隔离 endpoint 完成真实浏览器两轮消息、刷新恢复、容器重启恢复和第三轮；容器旅程使用 Fake Provider，真实 Provider 保持 SKIP。
 
 **文档同步：** README 明确 SQLite 与附件都位于 `.runtime/data` 的持久化边界，`dev-reset.sh` 会删除二者；因为默认监听仍是 `127.0.0.1:8790` 且没有持久服务变化，不更新 service-ports。
 
 **回滚：** 停止新容器后恢复旧 Compose/env；保留 `.runtime/data/attachments` 以防回滚丢附件，不自动删除数据。
 
 **完成判据：** 默认 Compose 的 SQLite 与附件共用持久 `data` mount，根文件系统仍只读；隔离 dev-up→acceptance 只凭同一 `0600` manifest 复用本轮非空 runtime，容器重建后附件 hash 不变；正式 8790/runtime identity 在前后未变。
+
+**本地证据（提交前工作树）：** 聚焦测试 1 文件/25 项通过；`npm run check` 共 94 文件/918 项通过；Docker build 内 94 文件/917 项通过、1 项跳过；隔离自动验收、两分片附件重启后 SHA-256、真实 Chromium 两轮消息→刷新→容器重启→第三轮、390×844 无横向溢出均通过。最终提交 SHA 仍须重建镜像并复跑门禁后才可提交 PR。
 
 ### Task A3：受控升级生产依赖并清零 High/Critical
 
@@ -1064,8 +1066,8 @@ git diff --check
 | Task | 状态 | 证据/阻断 |
 |---|---|---|
 | A1 单一认证时钟 | 已合入 | PR #30；合并提交 `29baa8f`；本地与 CI 门禁通过 |
-| A1D 阶段授权规则对齐 | 已实现，待独立 PR | RED→GREEN；`npm ci`、94 文件/914 测试、typecheck/build/static 全绿；合入前 A2+ 继续阻断 |
-| A2 Compose 附件持久化 | 待开始 | 依赖 A1D |
+| A1D 阶段授权规则对齐 | 已合入 | PR #31；合并提交 `5d38293`；授权措辞与 CI 已确认 |
+| A2 Compose 附件持久化 | 已实现，待独立 PR | RED→GREEN；提交前 npm/Docker/隔离附件/真实浏览器门禁全绿；须在最终提交 SHA 复验 |
 | A3 生产依赖安全升级 | 待开始 | 依赖 A2；执行时重新查询官方版本/漏洞 |
 | A4 CI 发布阻断门禁 | 待开始 | 依赖 A2/A3 |
 | A5 整体备份与恢复基础 | 待开始 | 依赖 A4；所有 V10+ migration 的前置门 |

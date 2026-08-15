@@ -35,6 +35,76 @@ afterEach(() => {
 });
 
 describe("one-click Member Web experience", () => {
+  it("persists attachments inside the existing writable data mount", () => {
+    const compose = read("compose.yaml");
+    const devUp = read("scripts/dev-up.sh");
+
+    expect(compose).toContain(
+      "FAMILY_AI_ATTACHMENT_ROOT: /app/.runtime/data/attachments"
+    );
+    expect(compose).toContain("./.runtime/data:/app/.runtime/data");
+    expect(compose).toContain("read_only: true");
+    expect(compose).not.toContain("FAMILY_AI_ATTACHMENT_ROOT: /app/.runtime/attachments");
+
+    expect(devUp).toContain('ATTACHMENT_DIR="$DATA_DIR/attachments"');
+    expect(devUp).toContain('mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$ATTACHMENT_DIR"');
+    expect(devUp).toContain(
+      'chmod 700 "$RUNTIME_DIR" "$CONFIG_DIR" "$DATA_DIR" "$ATTACHMENT_DIR"'
+    );
+  });
+
+  it("builds isolated acceptance from a fail-closed runtime manifest", () => {
+    const devUp = read("scripts/dev-up.sh");
+    const acceptance = read("scripts/acceptance.sh");
+    const isolation = read("scripts/runtime-isolation-lib.sh");
+
+    for (const required of [
+      "FAMILY_AI_RUNTIME_ROOT",
+      "COMPOSE_PROJECT_NAME",
+      "FAMILY_AI_HOST_PORT",
+      "FAMILY_AI_IMAGE_REF",
+      "127.0.0.1::8790",
+      "--no-build",
+      "isolated-runtime-manifest.json",
+      "capture_formal_8790_identity",
+      "validate_isolated_compose_json"
+    ]) {
+      expect(`${devUp}\n${isolation}`).toContain(required);
+    }
+    expect(devUp).not.toContain("127.0.0.1:0:8790");
+    expect(acceptance).toContain("read_manifest_field");
+    expect(acceptance).toContain("MANIFEST_DEVICE");
+    expect(acceptance).toContain("MANIFEST_INODE");
+    expect(acceptance).toContain("MANIFEST_FORMAL_8790");
+    expect(acceptance).toContain("refresh_isolated_port_after_restart");
+  });
+
+  it("copies every static quality input into the Docker build stage", () => {
+    const dockerfile = read("Dockerfile");
+
+    expect(dockerfile).toContain("COPY AGENTS.md ./");
+    expect(dockerfile).toContain(
+      "COPY docs/development/2026-07-25-member-web-product-workbench.md docs/development/2026-07-25-member-web-product-workbench.md"
+    );
+  });
+
+  it("keeps container attachment acceptance on the isolated manifest", () => {
+    const acceptance = read("scripts/acceptance-container-attachments.sh");
+
+    for (const required of [
+      "isolated-runtime-manifest.json",
+      "X-Family-AI-Chunk-Sha256",
+      "chunkCount",
+      "compose restart gateway",
+      "sha256sum",
+      "FAMILY_AI_ATTACHMENT_ROOT",
+      "FORMAL_8790"
+    ]) {
+      expect(acceptance).toContain(required);
+    }
+    expect(acceptance).not.toContain("127.0.0.1:0:8790");
+  });
+
   it("hands the verified real Family state to the normal product workbench", () => {
     const onboarding = read("scripts/acceptance-onboarding.sh");
     const devUp = read("scripts/dev-up.sh");
