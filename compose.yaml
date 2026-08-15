@@ -5,12 +5,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: family-ai-platform-foundation/gateway:foundation
+      args:
+        SOURCE_COMMIT: local-unverified
+        CLIENT_DATABASE_VERSION: "2"
+        RELEASE_CAPABILITY_RECEIPT_SHA256: local-unverified
+        RELEASE_BUILD_INPUTS_SHA256: local-unverified
+        BUILD_INPUT_TREE_HASH: local-unverified
+        TOOLCHAIN_MATERIAL: local-unverified
+    image: family-ai-platform-foundation/gateway:local-unverified
     init: true
     restart: unless-stopped
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     env_file:
-      - ./.runtime/config/gateway.env
+      - ${FAMILY_AI_GATEWAY_ENV_FILE:-./.runtime/config/gateway.env}
     environment:
       GATEWAY_HOST: 0.0.0.0
       GATEWAY_CONTAINERIZED: "true"

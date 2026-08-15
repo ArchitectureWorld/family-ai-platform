@@ -242,13 +242,19 @@ SQLite 数据库位于 Git 忽略的 `.runtime/data/gateway.sqlite`，附件位�
 `dev-down.sh` 只停止容器并保留数据，`dev-reset.sh` 会删除整个 `.runtime`，因此也会删除数据库、附件和本机开发凭证。
 自动验证日志和报告保存在 Git 忽略的 `docs/acceptance/runtime/`。
 
-需要避开正式 `127.0.0.1:8790` 时，先构建并取得不可变 image ID，再使用独立 runtime、唯一 Compose project 和随机 loopback 端口：
+需要避开正式 `127.0.0.1:8790` 时，必须先从精确提交生成三文件镜像产物。裸 `docker compose build` 只生成 `local-unverified` 开发镜像，不能作为验收或发布证据：
 
 ```bash
+bash scripts/build-gateway-image.sh \
+  --source-commit "$(git rev-parse HEAD)" \
+  --expected-source-commit "$(git rev-parse HEAD)" \
+  --output-dir <absolute-new-artifact-dir>
+
 FAMILY_AI_RUNTIME_ROOT=<absolute-empty-dir> \
 COMPOSE_PROJECT_NAME=<safe-unique> \
 FAMILY_AI_HOST_PORT=0 \
 FAMILY_AI_IMAGE_REF=<sha256:image-id> \
+FAMILY_AI_IMAGE_MANIFEST=<absolute-new-artifact-dir>/gateway-image-manifest.json \
 ./scripts/dev-up.sh
 
 FAMILY_AI_RUNTIME_ROOT=<same-dir> \
@@ -260,7 +266,7 @@ COMPOSE_PROJECT_NAME=<same> \
 ./scripts/acceptance-container-attachments.sh
 ```
 
-隔离启动会写入权限为 `0600` 的 manifest，后续验收只接受与该 manifest 完全匹配的 runtime、project、容器、网络、image ID 和随机端口，并在前后确认正式 `8790` identity 未改变。
+隔离启动会写入权限为 `0600` 的 runtime manifest，后续验收只接受与其完全匹配的 source commit、Gateway image manifest hash、runtime、project、容器、网络、image ID 和随机端口，并在前后确认正式 `8790` identity 未改变。可交付构建、CI artifact 和回滚边界见 `docs/operations/release-and-rollback.md`。
 
 ## 网络和安全边界
 

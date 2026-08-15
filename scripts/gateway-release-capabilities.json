@@ -1,0 +1,10 @@
+{
+  "formatVersion": 1,
+  "capabilitySetId": "foundation-v9",
+  "schemaHead": 9,
+  "clientDatabaseVersion": 2,
+  "databaseNameScheme": "identity-scoped-v2",
+  "rollbackClientRequired": false,
+  "rollbackClientBundleFormat": "none",
+  "rollbackGuardFormat": "none"
+}

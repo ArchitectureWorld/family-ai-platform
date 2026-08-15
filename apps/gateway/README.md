@@ -97,20 +97,26 @@ npm run check
 ./scripts/acceptance.sh
 ```
 
-隔离验收（不接触正式 `127.0.0.1:8790`）：
+隔离验收（不接触正式 `127.0.0.1:8790`）必须消费 wrapper 的 image ID 与 manifest：
 
 ```bash
+bash scripts/build-gateway-image.sh \
+  --source-commit "$(git rev-parse HEAD)" \
+  --expected-source-commit "$(git rev-parse HEAD)" \
+  --output-dir <absolute-new-artifact-dir>
+
 FAMILY_AI_RUNTIME_ROOT=<absolute-empty-dir> \
 COMPOSE_PROJECT_NAME=<safe-unique> \
 FAMILY_AI_HOST_PORT=0 \
 FAMILY_AI_IMAGE_REF=<sha256:image-id> \
+FAMILY_AI_IMAGE_MANIFEST=<absolute-new-artifact-dir>/gateway-image-manifest.json \
 ./scripts/dev-up.sh
 
 FAMILY_AI_RUNTIME_ROOT=<same-dir> COMPOSE_PROJECT_NAME=<same> ./scripts/acceptance.sh
 FAMILY_AI_RUNTIME_ROOT=<same-dir> COMPOSE_PROJECT_NAME=<same> ./scripts/acceptance-container-attachments.sh
 ```
 
-隔离入口只消费调用方已构建的不可变 image ID，并以 `0600` manifest 绑定 runtime、project、容器、网络和实际随机 loopback 端口；重启后会重新解析端口，任何 identity 不匹配都 fail-closed。
+隔离入口只消费 wrapper 生成的不可变 image ID 与三文件 artifact manifest，并以 `0600` runtime manifest 绑定 source commit、artifact hash、runtime、project、容器、网络和实际随机 loopback 端口；重启后会重新解析端口，任何 identity 不匹配都 fail-closed。`docker compose build` 的 `local-unverified` 镜像不得进入该路径。
 
 停止与重置：
 

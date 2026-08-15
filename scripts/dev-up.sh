@@ -14,8 +14,8 @@ fail() {
 source "$ROOT_DIR/scripts/runtime-isolation-lib.sh"
 
 ISOLATED_MODE=false
-if [[ -n "${FAMILY_AI_RUNTIME_ROOT:-}${COMPOSE_PROJECT_NAME:-}${FAMILY_AI_HOST_PORT:-}${FAMILY_AI_IMAGE_REF:-}" ]]; then
-  for required in FAMILY_AI_RUNTIME_ROOT COMPOSE_PROJECT_NAME FAMILY_AI_HOST_PORT FAMILY_AI_IMAGE_REF; do
+if [[ -n "${FAMILY_AI_RUNTIME_ROOT:-}${COMPOSE_PROJECT_NAME:-}${FAMILY_AI_HOST_PORT:-}${FAMILY_AI_IMAGE_REF:-}${FAMILY_AI_IMAGE_MANIFEST:-}" ]]; then
+  for required in FAMILY_AI_RUNTIME_ROOT COMPOSE_PROJECT_NAME FAMILY_AI_HOST_PORT FAMILY_AI_IMAGE_REF FAMILY_AI_IMAGE_MANIFEST; do
     [[ -n "${!required:-}" ]] || fail "隔离模式缺少 $required。"
   done
   ISOLATED_MODE=true
@@ -70,6 +70,24 @@ command -v ss >/dev/null 2>&1 || fail "未找到 ss，无法保护正式 8790。
 
 umask 077
 if [[ "$ISOLATED_MODE" == true ]]; then
+  [[ "$FAMILY_AI_IMAGE_MANIFEST" == /* && -f "$FAMILY_AI_IMAGE_MANIFEST" && ! -L "$FAMILY_AI_IMAGE_MANIFEST" ]] \
+    || fail "FAMILY_AI_IMAGE_MANIFEST 必须是绝对普通文件。"
+  IMAGE_MANIFEST_SHA256="$(sha256sum "$FAMILY_AI_IMAGE_MANIFEST" | awk '{print $1}')"
+  IMAGE_SOURCE_COMMIT="$(node --input-type=module - "$FAMILY_AI_IMAGE_MANIFEST" "$FAMILY_AI_IMAGE_REF" <<'NODE'
+import { readFileSync } from "node:fs";
+const [path, expectedImage] = process.argv.slice(2);
+const manifest = JSON.parse(readFileSync(path, "utf8"));
+const fail = () => process.exit(2);
+if (
+  manifest.manifestKind !== "gateway-image-v1" ||
+  manifest.imageId !== expectedImage ||
+  !/^[0-9a-f]{40}$/.test(manifest.sourceCommit ?? "") ||
+  manifest.labels?.["org.opencontainers.image.revision"] !== manifest.sourceCommit ||
+  manifest.labels?.["org.architectureworld.family-ai.client-database-version"] !== String(manifest.clientDatabaseVersion)
+) fail();
+process.stdout.write(manifest.sourceCommit);
+NODE
+)" || fail "Gateway image manifest 与 image ID/labels 不匹配。"
   FORMAL_8790_BEFORE="$(capture_formal_8790_identity)"
   if [[ -e "$RUNTIME_DIR" ]]; then
     [[ -d "$RUNTIME_DIR" && ! -L "$RUNTIME_DIR" ]] || fail "隔离 runtime 必须是普通目录。"
@@ -190,10 +208,10 @@ if [[ "$ISOLATED_MODE" == true ]]; then
   [[ "$FORMAL_8790_AFTER" == "$FORMAL_8790_BEFORE" ]] || fail "正式 8790 身份在隔离启动期间发生变化。"
   RUNTIME_DEVICE="$(stat -c '%d' "$RUNTIME_DIR")"
   RUNTIME_INODE="$(stat -c '%i' "$RUNTIME_DIR")"
-  node --input-type=module - "$ISOLATED_MANIFEST" "$ISOLATED_PROJECT" "$CONTAINER_ID" "$NETWORK_NAME" "$FAMILY_AI_IMAGE_REF" "$ACTUAL_PORT" "$RUNTIME_DEVICE" "$RUNTIME_INODE" "$FORMAL_8790_BEFORE" <<'NODE'
+  node --input-type=module - "$ISOLATED_MANIFEST" "$ISOLATED_PROJECT" "$CONTAINER_ID" "$NETWORK_NAME" "$FAMILY_AI_IMAGE_REF" "$ACTUAL_PORT" "$RUNTIME_DEVICE" "$RUNTIME_INODE" "$FORMAL_8790_BEFORE" "$IMAGE_MANIFEST_SHA256" "$IMAGE_SOURCE_COMMIT" <<'NODE'
 import { writeFileSync } from "node:fs";
-const [path, project, containerId, network, imageId, port, runtimeDevice, runtimeInode, formal8790] = process.argv.slice(2);
-writeFileSync(path, `${JSON.stringify({ project, containerId, network, imageId, port, runtimeDevice, runtimeInode, formal8790 }, null, 2)}\n`, { mode: 0o600 });
+const [path, project, containerId, network, imageId, port, runtimeDevice, runtimeInode, formal8790, gatewayImageManifestSha256, sourceCommit] = process.argv.slice(2);
+writeFileSync(path, `${JSON.stringify({ project, containerId, network, imageId, port, runtimeDevice, runtimeInode, formal8790, gatewayImageManifestSha256, sourceCommit }, null, 2)}\n`, { mode: 0o600 });
 NODE
   chmod 600 "$ISOLATED_MANIFEST"
 fi

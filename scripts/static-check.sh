@@ -510,8 +510,13 @@ if grep -Fq '0.0.0.0:8790:8790' compose.yaml; then
   exit 1
 fi
 
-grep -Fq 'FROM node:22.16.0-bookworm-slim AS build' Dockerfile || {
-  printf 'Dockerfile must use the verified Node 22.16.0 build image.\n' >&2
+grep -Fq 'FROM --platform=linux/amd64 node:22.16.0-bookworm-slim@sha256:1471ea646673136b8308550ac14b36d847ffb21c24bc31828279e443c924e488 AS build' Dockerfile || {
+  printf 'Dockerfile build stage must use the verified Node platform digest.\n' >&2
+  exit 1
+}
+
+grep -Fq 'FROM --platform=linux/amd64 node:22.16.0-bookworm-slim@sha256:1471ea646673136b8308550ac14b36d847ffb21c24bc31828279e443c924e488 AS runtime' Dockerfile || {
+  printf 'Dockerfile runtime stage must use the verified Node platform digest.\n' >&2
   exit 1
 }
 
@@ -522,6 +527,8 @@ grep -Fq 'RUN npm run check' Dockerfile || {
 
 bash scripts/test-verify-foundation-preflight.sh
 bash scripts/test-remediation-authority.sh
+bash scripts/test-ci-compose-smoke.sh
+bash scripts/test-build-gateway-image.sh
 
 if grep -Eq 'command -v (node|npm)' scripts/verify-foundation.sh; then
   printf 'One-command verification must not require Node or npm on the host.\n' >&2

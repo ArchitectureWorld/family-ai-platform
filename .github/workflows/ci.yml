@@ -10,18 +10,20 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  quality:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Check out repository
+      - name: Check out exact event revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.16.0
           cache: npm
-      - name: Install dependencies
+      - name: Install locked dependencies
         run: |
           set -euo pipefail
           test -f package-lock.json
@@ -30,3 +32,74 @@ jobs:
         run: |
           set -euo pipefail
           npm run check
+          install -m 600 /dev/null "$RUNNER_TEMP/gateway-config-check.env"
+          FAMILY_AI_GATEWAY_ENV_FILE="$RUNNER_TEMP/gateway-config-check.env" \
+            docker compose config --quiet
+
+  production-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact event revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - name: Audit locked production dependency graph
+        run: |
+          set -euo pipefail
+          npm ci
+          npm audit --omit=dev --audit-level=high
+
+  docker-build:
+    needs:
+      - quality
+      - production-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out exact event revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Build sealed Gateway image artifact
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/gateway-artifacts"
+          bash scripts/build-gateway-image.sh \
+            --source-commit "$GITHUB_SHA" \
+            --expected-source-commit "$GITHUB_SHA" \
+            --output-dir "$RUNNER_TEMP/gateway-artifacts/gateway-image-$GITHUB_SHA"
+      - name: Upload exact three-file image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gateway-image-${{ github.sha }}
+          path: ${{ runner.temp }}/gateway-artifacts/gateway-image-${{ github.sha }}
+          if-no-files-found: error
+          compression-level: 0
+
+  container-smoke:
+    needs: docker-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact event revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Download sealed Gateway image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: gateway-image-${{ github.sha }}
+          path: ${{ runner.temp }}/gateway-image-${{ github.sha }}
+      - name: Run isolated container and attachment restart smoke
+        run: |
+          set -euo pipefail
+          bash scripts/ci-compose-smoke.sh \
+            --image-manifest "$RUNNER_TEMP/gateway-image-$GITHUB_SHA/gateway-image-manifest.json"

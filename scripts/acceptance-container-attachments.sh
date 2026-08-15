@@ -19,6 +19,10 @@ MANIFEST="$RUN_DIR/isolated-runtime-manifest.json"
 [[ -f "$MANIFEST" && ! -L "$MANIFEST" && "$(stat -c '%a' "$MANIFEST")" == 600 ]] \
   || fail "isolated-runtime-manifest.json 无效。"
 FORMAL_8790="$(read_manifest_field "$MANIFEST" formal8790)"
+GATEWAY_IMAGE_MANIFEST_SHA256="$(read_manifest_field "$MANIFEST" gatewayImageManifestSha256)"
+SOURCE_COMMIT="$(read_manifest_field "$MANIFEST" sourceCommit)"
+[[ "$GATEWAY_IMAGE_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ && "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+  || fail "隔离 runtime 未绑定有效的 Gateway image manifest。"
 CONTAINER_ID="$(read_manifest_field "$MANIFEST" containerId)"
 PORT="$(read_manifest_field "$MANIFEST" port)"
 BASE_URL="http://127.0.0.1:$PORT"

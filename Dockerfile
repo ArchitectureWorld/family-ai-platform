@@ -1,7 +1,24 @@
-FROM node:22.16.0-bookworm-slim AS build
+# syntax=docker/dockerfile:1.7
+FROM --platform=linux/amd64 node:22.16.0-bookworm-slim@sha256:1471ea646673136b8308550ac14b36d847ffb21c24bc31828279e443c924e488 AS build
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ git \
+ARG DEBIAN_SNAPSHOT=http://snapshot.debian.org/archive/debian/20250611T000000Z
+ARG DEBIAN_SECURITY_SNAPSHOT=http://snapshot.debian.org/archive/debian-security/20250611T000000Z
+ARG PYTHON3_VERSION=3.11.2-1+b1
+ARG MAKE_VERSION=4.3-4.1
+ARG GXX_VERSION=4:12.2.0-3
+ARG GIT_VERSION=1:2.39.5-0+deb12u2
+
+RUN printf '%s\n' \
+      "deb [check-valid-until=no] ${DEBIAN_SNAPSHOT} bookworm main" \
+      "deb [check-valid-until=no] ${DEBIAN_SECURITY_SNAPSHOT} bookworm-security main" \
+      > /etc/apt/sources.list \
+  && rm -f /etc/apt/sources.list.d/debian.sources \
+  && apt-get -o Acquire::Check-Valid-Until=false update \
+  && apt-get install -y --no-install-recommends \
+      "python3=${PYTHON3_VERSION}" \
+      "make=${MAKE_VERSION}" \
+      "g++=${GXX_VERSION}" \
+      "git=${GIT_VERSION}" \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -61,7 +78,27 @@ ENV FAMILY_AI_CONTAINER_BUILD=1
 RUN npm run check \
   && npm prune --omit=dev
 
-FROM node:22.16.0-bookworm-slim AS runtime
+FROM --platform=linux/amd64 node:22.16.0-bookworm-slim@sha256:1471ea646673136b8308550ac14b36d847ffb21c24bc31828279e443c924e488 AS runtime
+
+ARG SOURCE_COMMIT=local-unverified
+ARG CLIENT_DATABASE_VERSION=2
+ARG RELEASE_CAPABILITY_RECEIPT_SHA256=local-unverified
+ARG RELEASE_BUILD_INPUTS_SHA256=local-unverified
+ARG BUILD_INPUT_TREE_HASH=local-unverified
+ARG BASE_IMAGE_DIGEST=sha256:1471ea646673136b8308550ac14b36d847ffb21c24bc31828279e443c924e488
+ARG TARGET_PLATFORM=linux/amd64
+ARG DEBIAN_SNAPSHOT=http://snapshot.debian.org/archive/debian/20250611T000000Z
+ARG TOOLCHAIN_MATERIAL=local-unverified
+
+LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+      org.architectureworld.family-ai.client-database-version="${CLIENT_DATABASE_VERSION}" \
+      org.architectureworld.family-ai.release-capability-receipt-sha256="${RELEASE_CAPABILITY_RECEIPT_SHA256}" \
+      org.architectureworld.family-ai.release-build-inputs-sha256="${RELEASE_BUILD_INPUTS_SHA256}" \
+      org.architectureworld.family-ai.build-input-tree-hash="${BUILD_INPUT_TREE_HASH}" \
+      org.architectureworld.family-ai.base-image-digest="${BASE_IMAGE_DIGEST}" \
+      org.architectureworld.family-ai.target-platform="${TARGET_PLATFORM}" \
+      org.architectureworld.family-ai.debian-snapshot="${DEBIAN_SNAPSHOT}" \
+      org.architectureworld.family-ai.toolchain-material="${TOOLCHAIN_MATERIAL}"
 
 ENV NODE_ENV=production
 WORKDIR /app
