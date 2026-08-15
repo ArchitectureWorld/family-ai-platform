@@ -270,23 +270,26 @@ expect_failure SUBMODULE_NOT_ALLOWED:vendor/submodule \
     --manifest "$INPUT_REPO/scripts/release-build-inputs.json" \
     --output "$INPUT_REPO/receipt-submodule.json"
 
-SOURCE_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD)"
-EXPECTED_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD~1)"
+mkdir -p "$INPUT_REPO/scripts"
+cp "$ROOT_DIR/scripts/build-gateway-image.sh" "$INPUT_REPO/scripts/build-gateway-image.sh"
+chmod 755 "$INPUT_REPO/scripts/build-gateway-image.sh"
+SOURCE_COMMIT="$MODE_COMMIT"
+EXPECTED_COMMIT="$DOCS_COMMIT"
 expect_failure SOURCE_COMMIT_MISMATCH \
-  bash "$ROOT_DIR/scripts/build-gateway-image.sh" \
+  bash "$INPUT_REPO/scripts/build-gateway-image.sh" \
     --source-commit "$SOURCE_COMMIT" --expected-source-commit "$EXPECTED_COMMIT" \
     --output-dir "$FIXTURE_ROOT/mismatch-output"
 expect_failure SOURCE_COMMIT_INVALID \
-  bash "$ROOT_DIR/scripts/build-gateway-image.sh" \
+  bash "$INPUT_REPO/scripts/build-gateway-image.sh" \
     --source-commit deadbeef --expected-source-commit "$EXPECTED_COMMIT" \
     --output-dir "$FIXTURE_ROOT/missing-output"
-BLOB_OBJECT="$(git -C "$ROOT_DIR" rev-parse HEAD:README.md)"
+BLOB_OBJECT="$(git -C "$INPUT_REPO" rev-parse "$MODE_COMMIT:runtime.txt")"
 expect_failure SOURCE_COMMIT_INVALID \
-  bash "$ROOT_DIR/scripts/build-gateway-image.sh" \
+  bash "$INPUT_REPO/scripts/build-gateway-image.sh" \
     --source-commit "$BLOB_OBJECT" --expected-source-commit "$EXPECTED_COMMIT" \
     --output-dir "$FIXTURE_ROOT/noncommit-output"
 expect_failure INVALID_ARGUMENTS \
-  bash "$ROOT_DIR/scripts/build-gateway-image.sh" \
+  bash "$INPUT_REPO/scripts/build-gateway-image.sh" \
     --source-commit "$SOURCE_COMMIT" --expected-source-commit "$SOURCE_COMMIT" \
     --client-database-version 999 --output-dir "$FIXTURE_ROOT/forged-version-output"
 
