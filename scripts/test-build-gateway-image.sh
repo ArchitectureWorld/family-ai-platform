@@ -41,6 +41,14 @@ grep -Fq 'manifestKind: "gateway-image-v1"' "$ROOT_DIR/scripts/build-gateway-ima
   || fail 'build wrapper does not write the gateway-image-v1 manifest'
 grep -Fq 'buildInputTreeHash' "$ROOT_DIR/scripts/build-gateway-image.sh" \
   || fail 'build wrapper does not bind the canonical build input tree'
+grep -Fq 'RUN rm /app/node_modules/@family-ai/contracts /app/node_modules/@family-ai/provider-adapter-sdk' "$ROOT_DIR/Dockerfile" \
+  || fail 'runtime image still depends on npm workspace symlinks'
+grep -Fq '/app/node_modules/@family-ai/contracts/package.json' "$ROOT_DIR/Dockerfile" \
+  || fail 'runtime image does not materialize the contracts workspace package'
+grep -Fq '/app/node_modules/@family-ai/provider-adapter-sdk/package.json' "$ROOT_DIR/Dockerfile" \
+  || fail 'runtime image does not materialize the provider SDK workspace package'
+grep -Fq 'await import("@family-ai/contracts")' "$ROOT_DIR/Dockerfile" \
+  || fail 'runtime image does not verify internal package resolution'
 MISMATCH_LINE="$(grep -n 'SOURCE_COMMIT_MISMATCH' "$ROOT_DIR/scripts/build-gateway-image.sh" | head -n1 | cut -d: -f1)"
 DOCKER_LINE="$(grep -n 'command -v docker' "$ROOT_DIR/scripts/build-gateway-image.sh" | head -n1 | cut -d: -f1)"
 [[ "$MISMATCH_LINE" -lt "$DOCKER_LINE" ]] \

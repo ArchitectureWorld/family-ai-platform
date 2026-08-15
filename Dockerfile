@@ -106,10 +106,12 @@ WORKDIR /app
 
 COPY --from=build --chown=node:node /app/package.json /app/package.json
 COPY --from=build --chown=node:node /app/node_modules /app/node_modules
-COPY --from=build --chown=node:node /app/packages/contracts/package.json /app/packages/contracts/package.json
-COPY --from=build --chown=node:node /app/packages/contracts/dist /app/packages/contracts/dist
-COPY --from=build --chown=node:node /app/packages/provider-adapter-sdk/package.json /app/packages/provider-adapter-sdk/package.json
-COPY --from=build --chown=node:node /app/packages/provider-adapter-sdk/dist /app/packages/provider-adapter-sdk/dist
+RUN rm /app/node_modules/@family-ai/contracts /app/node_modules/@family-ai/provider-adapter-sdk
+COPY --from=build --chown=node:node /app/packages/contracts/package.json /app/node_modules/@family-ai/contracts/package.json
+COPY --from=build --chown=node:node /app/packages/contracts/dist /app/node_modules/@family-ai/contracts/dist
+COPY --from=build --chown=node:node /app/packages/provider-adapter-sdk/package.json /app/node_modules/@family-ai/provider-adapter-sdk/package.json
+COPY --from=build --chown=node:node /app/packages/provider-adapter-sdk/dist /app/node_modules/@family-ai/provider-adapter-sdk/dist
+RUN node --input-type=module -e 'await import("@family-ai/contracts"); await import("@family-ai/provider-adapter-sdk");'
 COPY --from=build --chown=node:node /app/apps/gateway/package.json /app/apps/gateway/package.json
 COPY --from=build --chown=node:node /app/apps/gateway/dist /app/apps/gateway/dist
 COPY --from=build --chown=node:node /app/apps/gateway/member-public /app/apps/gateway/member-public
