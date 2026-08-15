@@ -126,3 +126,9 @@ FAMILY_AI_RUNTIME_ROOT=<same-dir> COMPOSE_PROJECT_NAME=<same> ./scripts/acceptan
 ```
 
 行为 PR 转为 Ready 前必须在 Linux/Docker 实机完成 npm、Docker、隔离脚本和真实浏览器验收。
+
+## Migration-only 与 retained runtime
+
+`node apps/gateway/dist/migrate.js --database <absolute-sqlite>` 是唯一 migration-only 进程入口：它只打开指定 SQLite、迁移到当前 head，并执行 `quick_check`/`foreign_key_check`；不会启动 HTTP、Provider、worker 或 release controller。生产候选只能由 `scripts/runtime-candidate-stage.sh` 在 `network=none`、worker-disabled 的 sealed definition 下调用该入口。
+
+Gateway 不负责自行判断何时停止、交换或恢复正式 runtime。`scripts/runtime-backup-preflight.mjs`、phase-scoped stop evidence、sealed snapshot 和 `runtime-restore.sh` 由外层发布流程串联；`verify-foundation.sh` 仍是会重置仓库 `.runtime` 的 disposable 开发命令，不能用于 retained 数据。
