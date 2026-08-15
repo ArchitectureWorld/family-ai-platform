@@ -352,9 +352,12 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   );
   const adminWorkspaceRepository = new AdminWorkspaceRepository(db);
 
+  app.addHook("preClose", async () => {
+    await eventStreamHub.close();
+  });
+
   app.addHook("onClose", async () => {
     clearInterval(attachmentCleanupTimer);
-    await eventStreamHub.close();
     db.close();
   });
 
