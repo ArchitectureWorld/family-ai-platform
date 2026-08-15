@@ -32,6 +32,7 @@ RUN npm ci
 
 COPY .gitignore Dockerfile compose.yaml ./
 COPY AGENTS.md ./
+COPY .github/workflows/ci.yml .github/workflows/ci.yml
 COPY docs/development/2026-07-25-member-web-product-workbench.md docs/development/2026-07-25-member-web-product-workbench.md
 RUN printf '%s\n' \
     '.git' \

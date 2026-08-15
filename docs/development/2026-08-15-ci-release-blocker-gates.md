@@ -28,7 +28,7 @@
 - 聚焦 RED：PASS；缺少 export、四 job、wrapper/validator 均以预期断言失败。
 - 聚焦 GREEN：PASS；client cache 14 项、CI 静态契约、capability/build-input fixture 全绿。
 - `npm ci`：PASS；从 `package-lock.json` 安装 142 个 package。
-- `npm run check`：PASS；94 个测试文件、919 项通过，0 失败、0 跳过；脚本静态门禁、类型检查和构建通过。
+- `npm run check`：PASS；宿主环境 94 个测试文件、919 项通过，0 失败、0 跳过；容器环境预期为 918 项通过、1 项环境条件性 skip。脚本静态门禁、类型检查和构建通过。
 - `npm audit --omit=dev --audit-level=high`：PASS；production graph 为 0 vulnerability。
 - `docker compose config --quiet`：PASS；使用临时空 env file，不读取仓库正式 runtime。
 - 不可变 Docker build / container smoke：在最终提交 SHA 上执行并作为 PR 证据；本文不预写尚未产生的 image ID/archive hash。
