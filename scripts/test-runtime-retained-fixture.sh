@@ -31,6 +31,15 @@ node "$ROOT_DIR/scripts/gateway-schema-capabilities.mjs" validate \
   --client-cache-source "$ROOT_DIR/apps/gateway/member-public/cache.js" \
   --output "$TEST_ROOT/evidence/capability.json" > "$TEST_ROOT/capability-sha"
 CAPABILITY_SHA="$(<"$TEST_ROOT/capability-sha")"
+node --input-type=module -e '
+  import { readFileSync } from "node:fs";
+  import { sealJson } from "./scripts/runtime-release-lib.mjs";
+  const [source, output] = process.argv.slice(1);
+  const value = JSON.parse(readFileSync(source, "utf8"));
+  value.release = { ...value.release, capabilitySetId: "fixture-required-v9", rollbackClientRequired: true, rollbackClientBundleFormat: "sealed-static-v1", rollbackGuardFormat: "static-guard-v1" };
+  process.stdout.write(sealJson(output, value));
+' "$TEST_ROOT/evidence/capability.json" "$TEST_ROOT/evidence/capability-required.json" > "$TEST_ROOT/capability-required-sha"
+CAPABILITY_REQUIRED_SHA="$(<"$TEST_ROOT/capability-required-sha")"
 printf '{"fixture":"controller-source-v1"}\n' > "$TEST_ROOT/evidence/controller-source.json"
 chmod 600 "$TEST_ROOT/evidence/controller-source.json"
 node -e 'const fs=require("node:fs"); const [path,image,project,source]=process.argv.slice(1); fs.writeFileSync(path, JSON.stringify({kind:"docker-compose",imageId:image,projectName:project,service:"gateway",sourceFiles:[source]},null,2)+"\n",{mode:0o600,flag:"wx"});' \
@@ -42,6 +51,18 @@ docker create --name "$CONTAINER" \
   "$IMAGE_ID" node -e 'setInterval(()=>{},1000)' >/dev/null
 docker start "$CONTAINER" >/dev/null
 docker stop -t 1 "$CONTAINER" >/dev/null
+
+if node "$ROOT_DIR/scripts/runtime-backup-preflight.mjs" \
+  --scope fixture-rehearsal --phase fixture-source-snapshot --release-id fixture-required-a5 \
+  --runtime-root "$TEST_ROOT/runtime" --controller-definition "$TEST_ROOT/evidence/controller.json" \
+  --capability-receipt "$TEST_ROOT/evidence/capability-required.json" \
+  --expected-capability-receipt-sha256 "$CAPABILITY_REQUIRED_SHA" \
+  --source-image-role fixture-baseline --source-image-id "$IMAGE_ID" \
+  --output "$TEST_ROOT/evidence/required-must-fail.json" >/dev/null 2>&1; then
+  printf 'required rollback capability accepted a missing asset set\n' >&2
+  exit 1
+fi
+[[ ! -e "$TEST_ROOT/evidence/required-must-fail.json" ]]
 
 HEAD_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 node "$ROOT_DIR/scripts/runtime-tool-manifest.mjs" create \
