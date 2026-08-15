@@ -91,14 +91,14 @@ docs/
 失败测试 → 最小实现 → 测试通过 → 重构 → 完整验证 → 提交
 ```
 
-Foundation PR 转为 Ready 前必须取得以下最新证据：
+行为 PR 转为 Ready 前必须取得以下最新证据：
 
 ```bash
 npm ci
 npm run check
-docker compose build
-./scripts/dev-up.sh
-./scripts/acceptance.sh
+bash scripts/build-gateway-image.sh --source-commit "$(git rev-parse HEAD)" --expected-source-commit "$(git rev-parse HEAD)" --output-dir <absolute-new-dir>
+FAMILY_AI_RUNTIME_ROOT=<absolute-empty-dir> COMPOSE_PROJECT_NAME=<safe-unique> FAMILY_AI_HOST_PORT=0 FAMILY_AI_IMAGE_REF=<immutable-id> FAMILY_AI_IMAGE_MANIFEST=<absolute-manifest> ./scripts/dev-up.sh
+FAMILY_AI_RUNTIME_ROOT=<same-dir> COMPOSE_PROJECT_NAME=<same> ./scripts/acceptance.sh
 ```
 
 并人工完成浏览器两轮消息、刷新恢复、容器重启恢复和重启后继续第三轮。
@@ -118,10 +118,12 @@ docker compose build
 第一阶段仍是本机最小安全闭环，正式默认发布地址仍为 `127.0.0.1:8790`。当前整改的权威实施计划是
 `docs/superpowers/plans/2026-08-13-deep-review-remediation-program.md`；这份授权只解除旧阶段清单与仓库现状之间的矛盾，不放宽产品边界、安全不变量或正式发布审批。
 
+A1–A5 已合入 `main`：源码、CI、隔离 Preview 和正式 `8790` 必须分层描述。当前源码已包含 Session、配对、Member Web、development-only Admin Web、附件、Hermes/Codex Adapter 和 retained runtime 发布原语；这不等于它们都已部署到正式 `8790`。2026-08-16 只读现场证据显示正式 `8790` 仍是旧 Compose/V3/Fake-only 运行物，候选尚未部署。
+
 ### 允许加固的既有能力
 
 - 本整改计划只允许加固仓库已经存在的 Session、设备配对、附件、Provider Adapter、浏览器客户端和发布工具，不授权建立新的产品线或业务权威；
-- A2–A6 只修复发布基线，B/C/D 只加固已经存在的身份、Provider、持久恢复和客户端续作能力，E0–E4 只定义运行门禁、候选证据或进行无行为拆分；
+- A2–A5 已完成发布基线实现，A6 只校正文档与现场事实；B/C/D 只加固已经存在的身份、Provider、持久恢复和客户端续作能力，E0–E4 只定义运行门禁、候选证据或进行无行为拆分；
 - 每个 Task 仍必须逐项满足计划依赖、单独设计批准、测试门禁和用户审批；总计划存在不等于下游 Task 已获执行或发布授权；
 - A2 可为 `dev-up.sh` 和 `acceptance.sh` 实现隔离门禁所需的 `FAMILY_AI_RUNTIME_ROOT=<absolute-dir>`、`COMPOSE_PROJECT_NAME=<safe-unique>`、`FAMILY_AI_HOST_PORT=0`、`FAMILY_AI_IMAGE_REF=<immutable-id>`；A4 起还必须提供 `FAMILY_AI_IMAGE_MANIFEST=<gateway-image-manifest.json>`。运行级门禁必须使用同一份隔离 manifest，并证明正式 8790 的 runtime 和监听身份未变化。
 
@@ -140,6 +142,5 @@ docker compose build
 
 - 任何正式 runtime、正式端口或 Provider 架构变化只能由 F1 按 R1（短停、备份与副本演练）、R2（maintenance 与 worker-disabled 可逆切换）、R3（限定 subject/budget 的真实 Provider 验收与开放写入）逐段取得用户批准后执行；此前不得部署、重启或改写正式 `127.0.0.1:8790`；
 - B4 固定为 disabled-verified；第一阶段不得开放 LAN Preview，未来若要开放必须另立治理任务，并明确审查因此需要变化的安全不变量；
-- A4 合入前，Ready 前五项门禁保持为 `npm ci`、`npm run check`、`docker compose build`、隔离 `dev-up.sh`、隔离 `acceptance.sh`；其中隔离运行能力由 A2 实现，A2 合入前不得用尚不存在的参数冒充门禁通过；
-- A4 合入后，`bash scripts/build-gateway-image.sh --source-commit "$(git rev-parse HEAD)" --expected-source-commit "$(git rev-parse HEAD)" --output-dir <absolute-new-dir>` 是唯一可交付构建入口；隔离 `dev-up.sh` 必须同时消费产物的 image ID 与 `gateway-image-manifest.json`。裸 `docker compose build` 只允许生成标记为 `local-unverified`、且不得被隔离验收、E1、E2 或 F1 消费的 Dockerfile smoke；
+- `bash scripts/build-gateway-image.sh --source-commit "$(git rev-parse HEAD)" --expected-source-commit "$(git rev-parse HEAD)" --output-dir <absolute-new-dir>` 是唯一可交付构建入口；隔离 `dev-up.sh` 必须同时消费产物的 image ID 与 `gateway-image-manifest.json`。裸 `docker compose build` 只允许生成标记为 `local-unverified`、且不得被隔离验收、E1、E2 或 F1 消费的 Dockerfile smoke；
 - 文档/静态门禁任务必须明确报告 Docker build、dev-up、acceptance、浏览器和真实 Provider 为 `SKIP` 及原因，不能把未执行写成 PASS。

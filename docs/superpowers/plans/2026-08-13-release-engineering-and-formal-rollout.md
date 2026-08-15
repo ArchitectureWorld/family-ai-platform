@@ -403,12 +403,12 @@ RED 必须指向缺失功能；测试只能操作 mktemp 目录和测试子进�
 
 ### A6.2 文档 RED 与修改
 
-- [ ] 先用 rg/static-check 建立冲突清单：AGENTS 仍写“暂不开发”，README 却写“已完成/一键进入真实产品”，Gateway README 仍只描述 Fake Provider。
-- [ ] AGENTS 保留全部安全不变量，改写“当前阶段限制”为真实代码阶段、仍禁止范围和正式部署 Gate。
-- [ ] 根 README 分开描述“代码具备、CI 通过、Preview 验收、正式部署”，不再用一个“完成”覆盖四种事实。
-- [ ] Gateway README 更新真实模块职责、Session/配对/附件/Provider 和 retained/disposable 区别。
-- [ ] verify-foundation.sh 明确会重置 disposable runtime；正式数据升级只链接 release-and-rollback.md。
-- [ ] 任何旧设计只加 supersede 链接，不把历史文档改写成当时已有的新方案。
+- [x] 先用 rg/static-check 建立冲突清单：README 用单一“完成”覆盖四层事实，Gateway README 仍只描述旧 Foundation/Fake Provider，运维台账误写 systemd owner。
+- [x] AGENTS 保留全部安全不变量，改写当前代码阶段、仍禁止范围和正式部署 Gate。
+- [x] 根 README 分开描述“代码具备、CI 通过、Preview 验收、正式部署”，不再用一个“完成”覆盖四种事实。
+- [x] Gateway README 更新真实模块职责、Session/配对/附件/Provider 和 retained/disposable 区别。
+- [x] verify-foundation.sh 明确会重置 disposable runtime；正式数据升级只链接 release-and-rollback.md。
+- [x] 旧设计只增加接续链接，不把历史文档改写成当时已有的新方案。
 
 验证命令：
 

@@ -82,7 +82,7 @@ Foundation 从 0 开发，不复制旧 Gateway 业务实现、不整体合并旧
 ArchitectureWorld/family-ai-platform-legacy
 ```
 
-## 当前开发阶段
+## 当前开发阶段与事实分层
 
 Family / Person、双入口、正式 Chat / Work 实时后端和 Member Web 产品工作台已经形成完整闭环：
 
@@ -99,7 +99,7 @@ Web Device + HttpOnly Personal Entry
 → SSE 实时通知与断线恢复
 ```
 
-已经完成：
+以下能力存在于当前 `main` 源码，并由自动化测试覆盖；不能据此推断正式 `8790` 已部署：
 
 - Family、Person、Device、EntryBinding 和双 Entry Session；
 - Chat / Work Contracts v1；
@@ -123,19 +123,27 @@ Web Device + HttpOnly Personal Entry
 - 仅 development 模式开放的 Admin Web 家庭、成员与配对管理预览；
 - 同一局域网可访问的独立 HTTPS 体验入口（不改变 8790 正式服务）。
 
-当前开发顺序：
+发布基线 A1–A5 已合入；A6 只校正文档与现场事实。A5 已提供 retained runtime 的 sealed snapshot、无网络 migration-only candidate staging、原子目录交换与 previous restore 原语；它们不会自行发布或重启正式 `8790`。正式升级仍需后续 F1 的逐 Gate 审批编排，操作边界见 [`docs/operations/release-and-rollback.md`](docs/operations/release-and-rollback.md)。
 
-```text
-A2 Compose 附件持久化
-→ A3 生产依赖安全升级
-→ A4 CI 发布阻断门禁
-→ A5 整体备份与恢复基础
-→ A6 文档事实校正
-```
+### 事实矩阵（2026-08-16）
 
-A5 已提供 retained runtime 的 sealed snapshot、无网络 migration-only candidate staging、原子目录交换与 previous restore 原语；它们不会自行发布或重启正式 `8790`。正式升级仍需后续 F1 的逐 Gate 审批编排，操作边界见 [`docs/operations/release-and-rollback.md`](docs/operations/release-and-rollback.md)。
+源码/自动化基线为 A5 merge `be6a52c`；隔离证据来自 A2/A4/A5 的独立 runtime、随机 loopback 和 sealed artifact。正式列来自对 `127.0.0.1:8790` 的只读现场检查，不从源码反推。
 
-在上述发布基线整改完成前，不继续 Push Notification、iOS/HarmonyOS、语音或正式 Admin Web 等产品扩展。
+| 能力 | 源码存在 | 自动化通过 | 隔离 Preview 验收 | 正式 `8790` 已部署 |
+|---|---|---|---|---|
+| Browser Entry Session | 是 | 是 | A4 浏览器两轮、刷新与容器重启后第三轮通过 | 仅旧 V3 设备/入口 API；当前新版 Cookie bridge 未部署 |
+| 设备配对/撤销 | 是 | 是 | A4 Member 入口链路通过 | 旧配对 API 存在；未执行会改变正式数据的现场配对 |
+| Member Web | `apps/gateway/member-public` | 是 | A4 真实浏览器通过 | 否；`/member/` HTTP 404，根页面是旧“初始化与入口验收台” |
+| Admin Web | development-only | 是 | 本轮未验证 | 否；`/admin/` HTTP 404 |
+| 附件 | 是，V8+ | 是 | A2 持久化及 A4 container smoke 通过 | 否；正式 Schema V3 且无附件目录 |
+| Provider | Fake/Hermes/Codex Adapter 均存在 | Fake 与进程边界自动化通过 | 只验证 Fake；真实 Provider 未验证 | 旧镜像静态检查仅发现 Fake，Hermes/Codex 未部署 |
+| 重启恢复 | 是 | 是 | A4 刷新、容器重启与继续第三轮通过 | 当前容器健康且 `RestartCount=0`；正式重启旅程未验证 |
+| development LAN Preview | 是，非正式信任模型 | 是 | 当前监听 `8791/9080/9443`，本轮 HTTPS 旅程未复验 | 不适用；不属于正式 `8790` |
+| 正式 `8790` | 候选发布工具存在 | CI 六项检查通过 | 不等于正式发布 | 旧 Compose 容器、Schema V3、Fake-only；A2–A5 候选未部署 |
+
+正式容器当前为 `family-ai-platform-foundation-gateway-1`，image ID `sha256:00d6a37f…7ce7`，创建于 2026-07-22，loopback health 正常；system/user `family-ai-gateway.service` 均 inactive。完整现场证据见 [`docs/development/2026-08-16-current-platform-truth.md`](docs/development/2026-08-16-current-platform-truth.md)。
+
+在后续安全与正式发布 Gate 完成前，不继续 Push Notification、iOS/HarmonyOS、语音或正式 Admin Web 等产品扩展。
 
 iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、iPhone 与部署 Gateway 的真机验收。Member Web 和 iOS 共享服务端对象与协议，但保持独立交互实现。
 
@@ -144,7 +152,7 @@ iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、i
 - [`docs/development/2026-07-24-chat-work-realtime-foundation.md`](docs/development/2026-07-24-chat-work-realtime-foundation.md)
 - [`docs/development/2026-07-25-member-web-product-workbench.md`](docs/development/2026-07-25-member-web-product-workbench.md)
 
-## 一条命令进入真实产品状态
+## 一条命令建立 disposable 产品验收状态
 
 ### 环境要求
 
@@ -170,7 +178,7 @@ iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、i
 5. 保留已经通过验证的真实 Family 状态并继续运行 Gateway；
 6. 输出正常 `/member/` 产品工作台的一次性配对链接。
 
-打开脚本输出的链接后，直接在正式产品工作台中体验：
+打开脚本输出的链接后，在本轮 disposable Member Web 工作台中体验：
 
 ```text
 发送一条 Chat 消息并看到个人助理回复
