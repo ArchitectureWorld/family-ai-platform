@@ -32,7 +32,6 @@ OUTPUT_PARENT="$(dirname "$OUTPUT_DIR")"
 [[ "$(realpath "$OUTPUT_PARENT")/$(basename "$OUTPUT_DIR")" == "$OUTPUT_DIR" ]] || fail OUTPUT_PATH_NOT_CANONICAL
 
 command -v git >/dev/null 2>&1 || fail GIT_UNAVAILABLE
-command -v docker >/dev/null 2>&1 || fail DOCKER_UNAVAILABLE
 command -v node >/dev/null 2>&1 || fail NODE_UNAVAILABLE
 command -v sha256sum >/dev/null 2>&1 || fail SHA256SUM_UNAVAILABLE
 
@@ -41,6 +40,7 @@ EXPECTED_COMMIT="$(git -C "$ROOT_DIR" rev-parse --verify "$EXPECTED_INPUT^{commi
 [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail SOURCE_COMMIT_INVALID
 [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail EXPECTED_SOURCE_COMMIT_INVALID
 [[ "$SOURCE_COMMIT" == "$EXPECTED_COMMIT" ]] || fail SOURCE_COMMIT_MISMATCH
+command -v docker >/dev/null 2>&1 || fail DOCKER_UNAVAILABLE
 
 TEMP_ROOT="$(mktemp -d /tmp/family-ai-gateway-build.XXXXXXXX)"
 chmod 700 "$TEMP_ROOT"

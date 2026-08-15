@@ -41,6 +41,10 @@ grep -Fq 'manifestKind: "gateway-image-v1"' "$ROOT_DIR/scripts/build-gateway-ima
   || fail 'build wrapper does not write the gateway-image-v1 manifest'
 grep -Fq 'buildInputTreeHash' "$ROOT_DIR/scripts/build-gateway-image.sh" \
   || fail 'build wrapper does not bind the canonical build input tree'
+MISMATCH_LINE="$(grep -n 'SOURCE_COMMIT_MISMATCH' "$ROOT_DIR/scripts/build-gateway-image.sh" | head -n1 | cut -d: -f1)"
+DOCKER_LINE="$(grep -n 'command -v docker' "$ROOT_DIR/scripts/build-gateway-image.sh" | head -n1 | cut -d: -f1)"
+[[ "$MISMATCH_LINE" -lt "$DOCKER_LINE" ]] \
+  || fail 'source/expected identity must fail before Docker availability is consulted'
 
 CAPABILITY_DIR="$FIXTURE_ROOT/capability"
 mkdir -m 700 "$CAPABILITY_DIR"
