@@ -565,16 +565,16 @@ git diff --check
 
 **Step 1：建立事实矩阵**
 
-- [ ] 对每项能力分别记录：源码已实现、自动测试通过、Preview 验证、正式 `8790` 已部署。
-- [ ] 核对当前正式容器 image ID/digest、创建时间、Schema、监听、systemd 单元真实状态；全程只读。
-- [ ] 不能用当前源码版本推断正式容器版本，不能用 Preview v9 推断正式数据库 Schema。
+- [x] 对每项能力分别记录：源码已实现、自动测试通过、Preview 验证、正式 `8790` 已部署。
+- [x] 核对当前正式容器 image ID/digest、创建时间、Schema、监听、systemd 单元真实状态；全程只读。
+- [x] 不能用当前源码版本推断正式容器版本，不能用 Preview v9 推断正式数据库 Schema。
 
 **Step 2：改文档**
 
-- [ ] `AGENTS.md` 将“暂不开发”改为当前真实阶段与仍禁止的范围，保留全部安全不变量。
-- [ ] 根 README 区分“代码已具备”“Preview 已验收”“正式已部署”。
-- [ ] Gateway README 更新真实模块、Provider 类型、Session、配对、附件和当前限制。
-- [ ] 明确 `verify-foundation.sh` 会清空 disposable runtime，不得用于保留数据升级。
+- [x] `AGENTS.md` 将旧门禁改为当前真实阶段与仍禁止的范围，保留全部安全不变量。
+- [x] 根 README 区分“代码已具备”“Preview 已验收”“正式已部署”。
+- [x] Gateway README 更新真实模块、Provider 类型、Session、配对、附件和当前限制。
+- [x] 明确 `verify-foundation.sh` 会清空 disposable runtime，不得用于保留数据升级。
 
 **Step 3：验证**
 

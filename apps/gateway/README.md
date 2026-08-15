@@ -1,6 +1,6 @@
 # Family AI Gateway Foundation
 
-`apps/gateway` 是 Family AI Platform 的唯一业务后端和数据权威。当前本机产品闭环已经包含浏览器 Entry Session、设备配对、Chat / Work 与附件；自动验收仍使用 Fake Provider，正式 Provider、正式部署和正式 Member/Admin Web 继续受发布 Gate 约束。
+`apps/gateway` 是 Family AI Platform 的唯一业务后端和数据权威。当前 `main` 源码包含 Browser Entry Session、移动/网页设备配对、Chat / Work、同步、附件、Member Web、development-only Admin Web，以及 Fake/Hermes/Codex Provider Adapter。源码存在、自动化通过、隔离 Preview 通过和正式 `8790` 已部署是四种不同事实；正式运行物仍是旧 Compose/V3/Fake-only 版本。
 
 ## 运行边界
 
@@ -11,62 +11,49 @@
 - 开发 Token：`.runtime/config/device-token`；
 - 数据库只保存 Token 的 SHA-256 Hash；
 - 容器根文件系统保持只读，只有显式 runtime 数据目录和临时目录可写；
-- 自动测试和体验只使用 Fake Provider。
+- 自动测试与 A2–A5 隔离验收只使用 Fake Provider；真实 Provider 调用未纳入自动化或本轮 Preview 证据。
 
 ## 分层
 
 ```text
 Fastify Route
-→ Message / Conversation Service
-→ member + agent policy
-→ GatewayRepository
-→ gateway.sqlite
+→ Entry Session / member + agent policy
+→ Family / Chat Work / Sync / Attachment Service
+→ Gateway Repository + Attachment Storage
+→ gateway.sqlite + attachments/
 
-MessageService
-→ ProviderAdapter
-→ FakeProviderAdapter
+ChatWork Provider Lane
+→ Provider Router
+→ Fake / Hermes / Codex Adapter
 ```
 
 当前文件职责：
 
-- `src/app.ts`：应用装配、公开路由和安全错误映射；
-- `src/config.ts`：本机/容器配置校验；
-- `src/database.ts`：初始 migration、开发 bootstrap 和 Repository；
-- `src/service.ts`：会话授权、规范化幂等、串行发送和 Provider 调用；
-- `src/developmentConsole.ts`：仅 development 模式提供验收台；
-- `src/index.ts`：进程入口；
-- `public/*`：开发验收页面，不是正式 Member Web。
+- `src/app.ts`：应用装配、路由注册和安全错误映射；
+- `src/config.ts`：本机/容器配置、显式 Provider 环境 allowlist 与 runtime catalog；
+- `src/database.ts`：V1–V9 migration、开发 bootstrap 和核心 Repository；
+- `src/familyRoutes.ts`、`src/webEntry.ts`、`src/mobilePairing.ts`：家庭、Session 和设备配对边界；
+- `src/chatWorkRoutes.ts`、`src/chatWorkProvider.ts`：Chat/Work 授权、消息与 Agent-scoped Provider Lane；
+- `src/eventStream.ts`、`src/deviceSync.ts`：SSE、补拉和累计 ACK；
+- `src/attachmentRoutes.ts`、`src/attachmentStorage.ts`：分块上传、授权下载与受控文件存储；
+- `src/agentRoutes.ts`、`src/adminWorkspaceRoutes.ts`：成员 Agent 挂载与管理员独立工作区；
+- `src/migrate.ts`：不启动 HTTP/Provider 的 migration-only 入口；
+- `src/index.ts`：正式进程入口；
+- `member-public/*`：同源 Member Web；`admin-public/*` 只在显式 development 配置下注册；`public/*` 是开发验收台。
 
 ## 数据模型
 
-- `members`
-- `devices`
-- `agents`
-- `provider_profiles`
-- `member_agent_bindings`
-- `conversations`
-- `messages`
-- `provider_sessions`
-- `idempotency_records`
-- `schema_migrations`
+- Family / Person / Membership；
+- Managed Device / Device Binding / Entry Binding / Entry Session；
+- Agent / Provider Profile / Assignment；
+- Chat Stream / Work / Thread / Thread Message / Provider Context 与 Turn；
+- Domain Event / Outbox / Device Sync Cursor；
+- Attachment Upload / Chunk / Blob / Message Attachment；
+- 旧 Foundation conversation/message 表与版本化 `schema_migrations`。
 
 ## API
 
-```text
-GET  /health
-GET  /api/v1/me
-POST /api/v1/conversations
-GET  /api/v1/conversations
-GET  /api/v1/conversations/:conversationRef/messages
-POST /api/v1/conversations/:conversationRef/messages
-```
-
-除 `/health` 和 development 验收静态资源外，API 需要：
-
-```http
-Authorization: Bearer <development-token>
-X-Device-Ref: device:test
-```
+公开协议按职责分组：`/api/v1/web-entry/*`、`/api/v1/mobile/*`、`/api/v1/chat*`、`/api/v1/work-conversations*`、`/api/v1/attachments/*`、`/api/v1/events/*`、`/api/v1/sync/*`、`/api/v1/admin/*`，另保留 Foundation conversation API。除 `/health` 和静态入口外均先验证对应 audience 的 Entry Session/Device 权限；Cookie 写请求还要求同源元数据和 `X-Family-AI-Web-Request: 1`。Admin Session 不自动获得 Personal 正文权限。
 
 ## 核心安全规则
 

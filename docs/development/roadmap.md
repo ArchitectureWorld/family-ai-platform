@@ -1,5 +1,11 @@
 # Family AI Platform Development Roadmap
 
+## Current execution overlay — 2026-08-16
+
+本路线图描述产品能力顺序，不等于部署清单。A1–A5 发布基线整改已合入；当前 `main` 已包含 Stage 1–7 的多项源码能力和 development-only Admin/LAN Preview，但正式 `127.0.0.1:8790` 仍是旧 Compose、Schema V3、Fake-only 运行物。源码、自动化、隔离 Preview 与正式部署的逐项矩阵见 [`2026-08-16-current-platform-truth.md`](2026-08-16-current-platform-truth.md)。
+
+下一阶段仍先完成 B/C/D/E 的安全与恢复 Gate，再由 F1 单独批准正式升级；不得因本路线图某项源码已存在而跳过发布依赖。Stage 8 当前 development LAN Preview 不是正式 LAN 能力，B4 仍要求先收口为 `disabled-verified`。
+
 ## Stable product direction
 
 Family AI Platform has one Gateway core and multiple clients. Admin Entry is a privileged client of the same Gateway, not a separate control-plane product. New platform data starts empty; no legacy business data is imported.

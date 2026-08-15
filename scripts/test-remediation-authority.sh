@@ -30,8 +30,10 @@ const requiredFragments = [
   "FAMILY_AI_HOST_PORT=0",
   "FAMILY_AI_IMAGE_REF=<immutable-id>",
   "FAMILY_AI_IMAGE_MANIFEST=<gateway-image-manifest.json>",
-  "A4 合入前",
-  "A4 合入后"
+  "A1–A5 已合入 `main`",
+  "源码、CI、隔离 Preview 和正式 `8790` 必须分层描述",
+  "唯一可交付构建入口",
+  "裸 `docker compose build`"
 ];
 
 const forbiddenLegacyLines = [
@@ -39,6 +41,8 @@ const forbiddenLegacyLines = [
   "- 设备配对和附件；",
   "- 真实 Hermes/Codex Provider；"
 ];
+
+const forbiddenObsoleteFragments = ["A4 合入前", "A4 合入后"];
 
 const invariantFragments = [
   "conversation 必须同时绑定 member 和 agent",
@@ -72,6 +76,11 @@ function validate(content) {
   for (const line of forbiddenLegacyLines) {
     if (content.split("\n").includes(line)) {
       errors.push(`仍存在与现状冲突的整类禁令：${line}`);
+    }
+  }
+  for (const fragment of forbiddenObsoleteFragments) {
+    if (content.includes(fragment)) {
+      errors.push(`仍存在已过期的阶段门禁：${fragment}`);
     }
   }
 
