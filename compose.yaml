@@ -15,6 +15,7 @@ services:
       GATEWAY_HOST: 0.0.0.0
       GATEWAY_CONTAINERIZED: "true"
       GATEWAY_DATABASE_PATH: /app/.runtime/data/gateway.sqlite
+      FAMILY_AI_ATTACHMENT_ROOT: /app/.runtime/data/attachments
     ports:
       - "127.0.0.1:8790:8790"
     volumes:

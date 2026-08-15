@@ -1,14 +1,16 @@
 # Family AI Gateway Foundation
 
-`apps/gateway` 是 Family AI Platform 的唯一业务后端和数据权威。当前 Foundation 仅实现本机开发闭环，使用 Fake Provider，不包含正式 Member/Admin Web、浏览器正式 Session、配对、附件或真实 Hermes/Codex。
+`apps/gateway` 是 Family AI Platform 的唯一业务后端和数据权威。当前本机产品闭环已经包含浏览器 Entry Session、设备配对、Chat / Work 与附件；自动验收仍使用 Fake Provider，正式 Provider、正式部署和正式 Member/Admin Web 继续受发布 Gate 约束。
 
 ## 运行边界
 
 - 默认进程监听：`127.0.0.1:8790`；
 - Docker 容器内部监听 `0.0.0.0:8790`，但 Compose 只发布 `127.0.0.1:8790:8790`；
 - 数据库：`.runtime/data/gateway.sqlite`；
+- 附件：`.runtime/data/attachments`，与数据库共享持久化 `data` 挂载；
 - 开发 Token：`.runtime/config/device-token`；
 - 数据库只保存 Token 的 SHA-256 Hash；
+- 容器根文件系统保持只读，只有显式 runtime 数据目录和临时目录可写；
 - 自动测试和体验只使用 Fake Provider。
 
 ## 分层
@@ -95,6 +97,21 @@ npm run check
 ./scripts/acceptance.sh
 ```
 
+隔离验收（不接触正式 `127.0.0.1:8790`）：
+
+```bash
+FAMILY_AI_RUNTIME_ROOT=<absolute-empty-dir> \
+COMPOSE_PROJECT_NAME=<safe-unique> \
+FAMILY_AI_HOST_PORT=0 \
+FAMILY_AI_IMAGE_REF=<sha256:image-id> \
+./scripts/dev-up.sh
+
+FAMILY_AI_RUNTIME_ROOT=<same-dir> COMPOSE_PROJECT_NAME=<same> ./scripts/acceptance.sh
+FAMILY_AI_RUNTIME_ROOT=<same-dir> COMPOSE_PROJECT_NAME=<same> ./scripts/acceptance-container-attachments.sh
+```
+
+隔离入口只消费调用方已构建的不可变 image ID，并以 `0600` manifest 绑定 runtime、project、容器、网络和实际随机 loopback 端口；重启后会重新解析端口，任何 identity 不匹配都 fail-closed。
+
 停止与重置：
 
 ```bash
@@ -102,4 +119,4 @@ npm run check
 ./scripts/dev-reset.sh
 ```
 
-Foundation PR 必须保持 Draft，直到 Linux/Docker 实机完成 npm、Docker、脚本和浏览器验收。
+行为 PR 转为 Ready 前必须在 Linux/Docker 实机完成 npm、Docker、隔离脚本和真实浏览器验收。

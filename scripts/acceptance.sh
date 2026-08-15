@@ -2,11 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNTIME_DIR="$ROOT_DIR/.runtime"
-TOKEN_FILE="$RUNTIME_DIR/config/device-token"
-COMPOSE_ENV="$RUNTIME_DIR/config/compose.env"
-REPORT_DIR="$ROOT_DIR/docs/acceptance/runtime"
-BASE_URL="http://127.0.0.1:8790"
 SERVICE_ID="family-ai-gateway-foundation"
 DEVICE_REF="device:test"
 AGENT_REF="agent:personal-assistant"
@@ -19,13 +14,93 @@ fail() {
   exit 1
 }
 
+source "$ROOT_DIR/scripts/runtime-isolation-lib.sh"
+
+ISOLATED_MODE=false
+if [[ -n "${FAMILY_AI_RUNTIME_ROOT:-}${COMPOSE_PROJECT_NAME:-}" ]]; then
+  [[ -n "${FAMILY_AI_RUNTIME_ROOT:-}" && -n "${COMPOSE_PROJECT_NAME:-}" ]] \
+    || fail "隔离 acceptance 必须同时提供 FAMILY_AI_RUNTIME_ROOT 与 COMPOSE_PROJECT_NAME。"
+  ISOLATED_MODE=true
+fi
+
+if [[ "$ISOLATED_MODE" == true ]]; then
+  validate_isolated_runtime_path "$FAMILY_AI_RUNTIME_ROOT"
+  validate_isolated_project "$COMPOSE_PROJECT_NAME"
+  RUNTIME_DIR="$FAMILY_AI_RUNTIME_ROOT"
+  ISOLATED_PROJECT="$COMPOSE_PROJECT_NAME"
+  [[ -d "$RUNTIME_DIR" && ! -L "$RUNTIME_DIR" ]] || fail "隔离 runtime 不存在或不是普通目录。"
+  require_runtime_mode "$RUNTIME_DIR"
+else
+  RUNTIME_DIR="$ROOT_DIR/.runtime"
+fi
+
+TOKEN_FILE="$RUNTIME_DIR/config/device-token"
+COMPOSE_ENV="$RUNTIME_DIR/config/compose.env"
+REPORT_DIR="$([[ "$ISOLATED_MODE" == true ]] && printf '%s' "$RUNTIME_DIR/reports" || printf '%s' "$ROOT_DIR/docs/acceptance/runtime")"
+ISOLATED_COMPOSE_FILE="$RUNTIME_DIR/run/compose.isolated.yaml"
+ISOLATED_MANIFEST="$RUNTIME_DIR/run/isolated-runtime-manifest.json"
+BASE_URL="http://127.0.0.1:8790"
+
+if [[ "$ISOLATED_MODE" == true ]]; then
+  [[ -f "$ISOLATED_MANIFEST" && ! -L "$ISOLATED_MANIFEST" ]] || fail "缺少隔离 runtime manifest。"
+  [[ "$(stat -c '%a' "$ISOLATED_MANIFEST")" == "600" ]] || fail "隔离 runtime manifest 权限必须是 0600。"
+  MANIFEST_PROJECT="$(read_manifest_field "$ISOLATED_MANIFEST" project)"
+  MANIFEST_CONTAINER="$(read_manifest_field "$ISOLATED_MANIFEST" containerId)"
+  MANIFEST_NETWORK="$(read_manifest_field "$ISOLATED_MANIFEST" network)"
+  MANIFEST_IMAGE="$(read_manifest_field "$ISOLATED_MANIFEST" imageId)"
+  MANIFEST_PORT="$(read_manifest_field "$ISOLATED_MANIFEST" port)"
+  MANIFEST_DEVICE="$(read_manifest_field "$ISOLATED_MANIFEST" runtimeDevice)"
+  MANIFEST_INODE="$(read_manifest_field "$ISOLATED_MANIFEST" runtimeInode)"
+  MANIFEST_FORMAL_8790="$(read_manifest_field "$ISOLATED_MANIFEST" formal8790)"
+  [[ "$MANIFEST_PROJECT" == "$ISOLATED_PROJECT" ]] || fail "隔离 Compose project 与 manifest 不匹配。"
+  [[ "$MANIFEST_DEVICE" == "$(stat -c '%d' "$RUNTIME_DIR")" && "$MANIFEST_INODE" == "$(stat -c '%i' "$RUNTIME_DIR")" ]] \
+    || fail "隔离 runtime device/inode 与 manifest 不匹配。"
+  [[ -z "${FAMILY_AI_IMAGE_REF:-}" || "$FAMILY_AI_IMAGE_REF" == "$MANIFEST_IMAGE" ]] \
+    || fail "FAMILY_AI_IMAGE_REF 与 manifest 不匹配。"
+  [[ "$MANIFEST_PORT" =~ ^[1-9][0-9]{0,4}$ && "$MANIFEST_PORT" != "8790" ]] \
+    || fail "manifest 隔离端口无效。"
+  BASE_URL="http://127.0.0.1:$MANIFEST_PORT"
+  [[ "$(capture_formal_8790_identity)" == "$MANIFEST_FORMAL_8790" ]] \
+    || fail "正式 8790 身份与 dev-up manifest 不一致。"
+fi
+
 [[ -f "$TOKEN_FILE" ]] || fail "missing .runtime Token; run ./scripts/dev-up.sh first"
 [[ -f "$COMPOSE_ENV" ]] || fail "missing Compose environment; run ./scripts/dev-up.sh first"
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 DEVICE_TOKEN="$(cat "$TOKEN_FILE")"
 
 compose() {
-  docker compose --env-file "$COMPOSE_ENV" "$@"
+  if [[ "$ISOLATED_MODE" == true ]]; then
+    isolated_compose "$@"
+  else
+    docker compose --env-file "$COMPOSE_ENV" "$@"
+  fi
+}
+
+refresh_isolated_port_after_restart() {
+  [[ "$ISOLATED_MODE" == true ]] || return 0
+  [[ "$(compose ps -q gateway)" == "$MANIFEST_CONTAINER" ]] \
+    || fail "restart 后隔离 Gateway 容器与 manifest 不匹配。"
+  local port_rows next_port
+  port_rows="$(compose port gateway 8790)"
+  [[ "$(printf '%s\n' "$port_rows" | sed '/^$/d' | wc -l)" -eq 1 ]] \
+    || fail "restart 后必须解析到唯一隔离端口。"
+  [[ "$port_rows" =~ ^127\.0\.0\.1:([1-9][0-9]{0,4})$ ]] \
+    || fail "restart 后隔离端口必须保持在 loopback。"
+  next_port="${BASH_REMATCH[1]}"
+  [[ "$next_port" != "8790" ]] || fail "restart 后隔离端口不得占用正式 8790。"
+  node --input-type=module - "$ISOLATED_MANIFEST" "$next_port" <<'NODE'
+import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+const [path, port] = process.argv.slice(2);
+const manifest = JSON.parse(readFileSync(path, "utf8"));
+manifest.port = port;
+const temporary = `${path}.tmp`;
+writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+chmodSync(temporary, 0o600);
+renameSync(temporary, path);
+NODE
+  MANIFEST_PORT="$next_port"
+  BASE_URL="http://127.0.0.1:$MANIFEST_PORT"
 }
 
 json_get() {
@@ -151,6 +226,9 @@ request POST "/api/v1/conversations/$CONVERSATION_PATH/messages" 403 "$WRONG_AGE
 record "Cross-Agent rejection" "HTTP 403"
 
 compose restart gateway >/dev/null
+refresh_isolated_port_after_restart
+RESPONSE_STATUS=""
+RESPONSE_BODY=""
 wait_for_health || fail "Gateway Foundation did not recover after restart"
 request GET "/api/v1/conversations/$CONVERSATION_PATH/messages" 200
 [[ "$(json_get "$RESPONSE_BODY" messages.length)" == "4" ]] || fail "history was lost after restart"
@@ -165,6 +243,14 @@ record "Post-restart continuation" "Fake Provider turn 3"
 request GET "/api/v1/conversations/$CONVERSATION_PATH/messages" 200
 [[ "$(json_get "$RESPONSE_BODY" messages.length)" == "6" ]] || fail "continued history should contain six messages"
 record "Final history" "6 persisted messages"
+
+if [[ "$ISOLATED_MODE" == true ]]; then
+  [[ "$(compose ps -q gateway)" == "$MANIFEST_CONTAINER" ]] || fail "隔离 Gateway 容器与 manifest 不匹配。"
+  [[ "$(docker inspect --format '{{.Image}}' "$MANIFEST_CONTAINER")" == "$MANIFEST_IMAGE" ]] \
+    || fail "隔离 Gateway 镜像与 manifest 不匹配。"
+  [[ "$(capture_formal_8790_identity)" == "$MANIFEST_FORMAL_8790" ]] \
+    || fail "正式 8790 身份在隔离 acceptance 期间发生变化。"
+fi
 
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 {

@@ -14,6 +14,8 @@ COPY apps/gateway/package.json apps/gateway/package.json
 RUN npm ci
 
 COPY .gitignore Dockerfile compose.yaml ./
+COPY AGENTS.md ./
+COPY docs/development/2026-07-25-member-web-product-workbench.md docs/development/2026-07-25-member-web-product-workbench.md
 RUN printf '%s\n' \
     '.git' \
     '.github' \

@@ -490,6 +490,21 @@ grep -Fq '127.0.0.1:8790:8790' compose.yaml || {
   exit 1
 }
 
+grep -Fq 'FAMILY_AI_ATTACHMENT_ROOT: /app/.runtime/data/attachments' compose.yaml || {
+  printf 'compose.yaml must place attachments inside the writable persistent data mount.\n' >&2
+  exit 1
+}
+
+if grep -Fq 'FAMILY_AI_ATTACHMENT_ROOT: /app/.runtime/attachments' compose.yaml; then
+  printf 'compose.yaml must not place attachments on the read-only container root.\n' >&2
+  exit 1
+fi
+
+grep -Fq 'read_only: true' compose.yaml || {
+  printf 'compose.yaml must keep the Gateway root filesystem read-only.\n' >&2
+  exit 1
+}
+
 if grep -Fq '0.0.0.0:8790:8790' compose.yaml; then
   printf 'compose.yaml exposes Gateway outside loopback.\n' >&2
   exit 1
