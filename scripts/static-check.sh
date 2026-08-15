@@ -526,6 +526,8 @@ grep -Fq 'RUN npm run check' Dockerfile || {
 }
 
 bash scripts/test-verify-foundation-preflight.sh
+bash scripts/test-runtime-backup-restore.sh
+bash scripts/test-runtime-candidate-stage.sh
 bash scripts/test-remediation-authority.sh
 bash scripts/test-ci-compose-smoke.sh
 bash scripts/test-build-gateway-image.sh

@@ -4,7 +4,7 @@ set -euo pipefail
 { set +x; } 2>/dev/null
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNTIME_DIR="$ROOT_DIR/.runtime"
+RUNTIME_DIR="${FAMILY_AI_RUNTIME_ROOT:-$ROOT_DIR/.runtime}"
 LOG_DIR="$ROOT_DIR/docs/acceptance/runtime/logs"
 MEMBER_WEB_URL_FILE="$RUNTIME_DIR/config/member-web-url"
 
@@ -12,6 +12,21 @@ fail() {
   printf 'FOUNDATION VERIFICATION FAILED: %s\n' "$1" >&2
   exit 1
 }
+
+# This command is intentionally disposable-only. It may reset only the repository's
+# own ignored .runtime directory; an operator-supplied retained runtime is never reset.
+if [[ -n "${FAMILY_AI_RUNTIME_ROOT:-}" ]]; then
+  [[ "$RUNTIME_DIR" == /* && "$RUNTIME_DIR" != / && "$RUNTIME_DIR" != "$HOME" && "$RUNTIME_DIR" != "$ROOT_DIR" ]] \
+    || fail "disposable runtime path is unsafe."
+  if [[ -d "$RUNTIME_DIR" && -n "$(find "$RUNTIME_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    fail "disposable-only verification refuses a non-empty retained runtime."
+  fi
+fi
+if [[ "${1:-}" == "--preflight-only" ]]; then
+  printf 'FOUNDATION disposable preflight: PASS\n'
+  exit 0
+fi
+[[ $# -eq 0 ]] || fail "unknown argument."
 
 command -v docker >/dev/null 2>&1 || fail "未找到 Docker。"
 docker compose version >/dev/null 2>&1 || fail "当前 Docker 不支持 'docker compose'。"

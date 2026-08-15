@@ -133,6 +133,8 @@ A2 Compose 附件持久化
 → A6 文档事实校正
 ```
 
+A5 已提供 retained runtime 的 sealed snapshot、无网络 migration-only candidate staging、原子目录交换与 previous restore 原语；它们不会自行发布或重启正式 `8790`。正式升级仍需后续 F1 的逐 Gate 审批编排，操作边界见 [`docs/operations/release-and-rollback.md`](docs/operations/release-and-rollback.md)。
+
 在上述发布基线整改完成前，不继续 Push Notification、iOS/HarmonyOS、语音或正式 Admin Web 等产品扩展。
 
 iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、iPhone 与部署 Gateway 的真机验收。Member Web 和 iOS 共享服务端对象与协议，但保持独立交互实现。
@@ -156,6 +158,8 @@ iOS Mobile Entry Foundation 仍在 PR #14 中保持 Draft，等待真实 Mac、i
 ```bash
 ./scripts/verify-foundation.sh
 ```
+
+该命令只适用于 disposable 开发 runtime，会调用 reset；不得指向需要保留的正式或副本数据。retained runtime 必须使用 `docs/operations/release-and-rollback.md` 中的 preflight、stop evidence、snapshot/candidate/restore 链路。
 
 该命令会：
 
