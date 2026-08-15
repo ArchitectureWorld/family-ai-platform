@@ -13,8 +13,8 @@ RUN printf '%s\n' \
       "deb [check-valid-until=no] ${DEBIAN_SECURITY_SNAPSHOT} bookworm-security main" \
       > /etc/apt/sources.list \
   && rm -f /etc/apt/sources.list.d/debian.sources \
-  && apt-get -o Acquire::Check-Valid-Until=false update \
-  && apt-get install -y --no-install-recommends \
+  && apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=8 update \
+  && apt-get -o Acquire::Retries=8 install -y --no-install-recommends \
       "python3=${PYTHON3_VERSION}" \
       "make=${MAKE_VERSION}" \
       "g++=${GXX_VERSION}" \
