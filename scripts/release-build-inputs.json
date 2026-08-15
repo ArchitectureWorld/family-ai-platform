@@ -1,0 +1,59 @@
+{
+  "formatVersion": 1,
+  "classifications": [
+    "runtime-build",
+    "quality-tool",
+    "docs-only"
+  ],
+  "buildMaterials": {
+    "platform": "linux/amd64",
+    "baseImageRef": "node:22.16.0-bookworm-slim",
+    "baseImageDigest": "sha256:1471ea646673136b8308550ac14b36d847ffb21c24bc31828279e443c924e488",
+    "debianSnapshot": "http://snapshot.debian.org/archive/debian/20250611T000000Z",
+    "debianSecuritySnapshot": "http://snapshot.debian.org/archive/debian-security/20250611T000000Z",
+    "toolchainPackages": {
+      "python3": "3.11.2-1+b1",
+      "make": "4.3-4.1",
+      "g++": "4:12.2.0-3",
+      "git": "1:2.39.5-0+deb12u2"
+    }
+  },
+  "rules": [
+    { "pattern": "scripts/release-build-inputs.json", "classification": "runtime-build" },
+    { "pattern": "scripts/release-build-inputs.mjs", "classification": "runtime-build" },
+    { "pattern": "scripts/build-gateway-image.sh", "classification": "runtime-build" },
+    { "pattern": "scripts/gateway-schema-capabilities.json", "classification": "runtime-build" },
+    { "pattern": "scripts/gateway-release-capabilities.json", "classification": "runtime-build" },
+    { "pattern": "scripts/gateway-schema-capabilities.mjs", "classification": "runtime-build" },
+    { "pattern": "scripts/dev-up.sh", "classification": "runtime-build" },
+    { "pattern": "scripts/dev-down.sh", "classification": "runtime-build" },
+    { "pattern": "scripts/dev-reset.sh", "classification": "runtime-build" },
+    { "pattern": "scripts/runtime-isolation-lib.sh", "classification": "runtime-build" },
+    { "pattern": ".dockerignore", "classification": "runtime-build" },
+    { "pattern": ".gitignore", "classification": "runtime-build" },
+    { "pattern": "Dockerfile", "classification": "runtime-build" },
+    { "pattern": "compose.yaml", "classification": "runtime-build" },
+    { "pattern": "package.json", "classification": "runtime-build" },
+    { "pattern": "package-lock.json", "classification": "runtime-build" },
+    { "pattern": "tsconfig.base.json", "classification": "runtime-build" },
+    { "pattern": "apps/gateway/package.json", "classification": "runtime-build" },
+    { "pattern": "apps/gateway/tsconfig.json", "classification": "runtime-build" },
+    { "pattern": "apps/gateway/admin-public/**", "classification": "runtime-build" },
+    { "pattern": "apps/gateway/member-public/**", "classification": "runtime-build" },
+    { "pattern": "apps/gateway/public/**", "classification": "runtime-build" },
+    { "pattern": "apps/gateway/src/**", "classification": "runtime-build" },
+    { "pattern": "packages/**", "classification": "runtime-build" },
+    { "pattern": ".github/**", "classification": "quality-tool" },
+    { "pattern": ".gitleaks.toml", "classification": "quality-tool" },
+    { "pattern": "vitest.config.ts", "classification": "quality-tool" },
+    { "pattern": "apps/gateway/test/**", "classification": "quality-tool" },
+    { "pattern": "AGENTS.md", "classification": "quality-tool" },
+    { "pattern": "SECURITY.md", "classification": "quality-tool" },
+    { "pattern": "docs/development/2026-07-25-member-web-product-workbench.md", "classification": "quality-tool" },
+    { "pattern": "scripts/**", "classification": "quality-tool" },
+    { "pattern": ".superpowers/**", "classification": "docs-only" },
+    { "pattern": "README.md", "classification": "docs-only" },
+    { "pattern": "apps/gateway/README.md", "classification": "docs-only" },
+    { "pattern": "docs/**", "classification": "docs-only" }
+  ]
+}

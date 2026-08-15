@@ -433,6 +433,8 @@ JSON 报告只留在 Git ignored 路径；命令前设置 `umask 077`，输出�
 
 ### Task A4：把发布阻断项纳入 CI
 
+**当前实现状态（2026-08-15，提交前工作树）：** CI 四 job、两层 capability receipt、规范 build-input tree hash、digest/snapshot/toolchain 固定、三文件 image wrapper、manifest 强制隔离 smoke 与文档已实现；聚焦 RED→GREEN/静态门禁通过，仍须在最终提交 SHA 完成 `npm run check`、production audit、真实 wrapper build、container smoke 和 GitHub 四 job 复验。
+
 **建议分支：** `codex/ci-release-blocker-gates`
 
 **依赖：** A2、A3 均已合入最新 `main`。

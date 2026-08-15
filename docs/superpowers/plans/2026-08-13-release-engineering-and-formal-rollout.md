@@ -22,6 +22,8 @@
 
 ## 1. Task A4：CI 自动阻断 audit、镜像与容器回归
 
+**当前实现状态（2026-08-15，提交前工作树）：** 静态 CI RED、client version RED、capability/build-input fixture RED 已转 GREEN；wrapper、CI artifact/load、manifest-bound 隔离入口和运维文档已落地。最终提交 SHA 的完整 npm/audit/Docker/container/GitHub 证据尚待执行，不能以本行代替完成判据。
+
 **建议分支：** codex/ci-release-blocker-gates
 
 **依赖：** A2 与 A3 已合入。

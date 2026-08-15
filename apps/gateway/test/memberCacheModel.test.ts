@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
+  MEMBER_CACHE_DATABASE_VERSION,
   MEMBER_CACHE_STORES,
   applyEventTransaction,
   clearMemberCache,
@@ -64,12 +65,18 @@ describe("Member Web cache model", () => {
     request.result = database;
     const indexedDBImpl = { open: (name: string, version: number) => {
       expect(name).toBe("family-ai-member-web-v2:family:a:person:a:device:a");
-      expect(version).toBe(2);
+      expect(version).toBe(MEMBER_CACHE_DATABASE_VERSION);
       return request;
     } };
     const opening = openMemberCache("family-ai-member-web-v2:family:a:person:a:device:a", { indexedDBImpl });
     request.emit("success");
     await expect(opening).resolves.toMatchObject({ close: expect.any(Function) });
+  });
+
+  it("exports the exact positive IndexedDB version used by the opener", () => {
+    expect(MEMBER_CACHE_DATABASE_VERSION).toBe(2);
+    expect(Number.isInteger(MEMBER_CACHE_DATABASE_VERSION)).toBe(true);
+    expect(MEMBER_CACHE_DATABASE_VERSION).toBeGreaterThan(0);
   });
 
   it.each([undefined, "", 42])(

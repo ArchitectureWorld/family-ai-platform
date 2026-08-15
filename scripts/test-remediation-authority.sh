@@ -29,6 +29,7 @@ const requiredFragments = [
   "COMPOSE_PROJECT_NAME=<safe-unique>",
   "FAMILY_AI_HOST_PORT=0",
   "FAMILY_AI_IMAGE_REF=<immutable-id>",
+  "FAMILY_AI_IMAGE_MANIFEST=<gateway-image-manifest.json>",
   "A4 合入前",
   "A4 合入后"
 ];

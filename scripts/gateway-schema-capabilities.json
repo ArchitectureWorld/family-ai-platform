@@ -1,0 +1,65 @@
+{
+  "formatVersion": 1,
+  "snapshotFormat": {
+    "write": 1,
+    "read": [1]
+  },
+  "schemas": [
+    {
+      "schemaVersion": 3,
+      "migrationHead": 3,
+      "attachments": "absent-legacy",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "legacy",
+      "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 4,
+      "migrationHead": 4,
+      "attachments": "absent-legacy",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "legacy",
+      "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 5,
+      "migrationHead": 5,
+      "attachments": "absent-legacy",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "legacy",
+      "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 6,
+      "migrationHead": 6,
+      "attachments": "absent-legacy",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "bounded-replay-v1",
+      "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 7,
+      "migrationHead": 7,
+      "attachments": "absent-legacy",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "bounded-replay-v1",
+      "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 8,
+      "migrationHead": 8,
+      "attachments": "present",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "bounded-replay-v1",
+      "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 9,
+      "migrationHead": 9,
+      "attachments": "present",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "bounded-replay-v1",
+      "providerOperations": "legacy"
+    }
+  ]
+}

@@ -10,7 +10,7 @@ export const MEMBER_CACHE_STORES = [
 ];
 
 export const LEGACY_DATABASE_NAME = "family-ai-member-web";
-const DATABASE_VERSION = 2;
+export const MEMBER_CACHE_DATABASE_VERSION = 2;
 const KEY_PATHS = {
   meta: "key",
   threads: "threadRef",
@@ -149,7 +149,7 @@ export async function openMemberCache(
     throw error;
   }
   if (!indexedDBImpl) throw new Error("INDEXED_DB_UNAVAILABLE");
-  const request = indexedDBImpl.open(databaseName, DATABASE_VERSION);
+  const request = indexedDBImpl.open(databaseName, MEMBER_CACHE_DATABASE_VERSION);
   request.addEventListener("upgradeneeded", () => {
     const database = request.result;
     if (!database.objectStoreNames.contains("meta")) {
