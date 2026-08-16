@@ -375,6 +375,8 @@ Confirm its random port has no listener and no container remains. Do not stop fo
 - Modify: `docs/superpowers/plans/2026-08-13-security-and-identity-hardening.md`
 - Modify: `docs/superpowers/plans/2026-08-13-deep-review-remediation-program.md`
 - Create: `docs/development/2026-08-16-device-scoped-chat-idempotency.md`
+- Create/Modify: `docs/development/evidence/2026-08-16-device-scoped-chat-idempotency/`
+  (13 个脱敏纯文本证据文件)
 
 - [x] **Step 1: Update the Gateway security contract**
 
@@ -419,7 +421,8 @@ git add \
   apps/gateway/README.md \
   docs/superpowers/plans/2026-08-13-security-and-identity-hardening.md \
   docs/superpowers/plans/2026-08-13-deep-review-remediation-program.md \
-  docs/development/2026-08-16-device-scoped-chat-idempotency.md
+  docs/development/2026-08-16-device-scoped-chat-idempotency.md \
+  docs/development/evidence/2026-08-16-device-scoped-chat-idempotency/
 git commit -m "docs: record device-scoped idempotency"
 ```
 
