@@ -26,6 +26,9 @@
 
 **建议分支：** codex/disable-unsafe-hermes-argv
 
+**合入状态：** PR #37，合并提交
+`cd742fb532359e2001783e4ae87e2fd3b970459f`。
+
 **依赖：** A6 已合入；不依赖 Hermes 上游 stdin 能力。
 
 **修改文件：**
@@ -159,22 +162,29 @@
 
 ### B2.2 RED
 
-- [ ] 建立同一 member 的 device A/B；A 发消息并得到 Provider 结果。
-- [ ] B 使用相同 clientMessageId、occurredAt、正文和附件重放，断言 409，响应不含 A 的 messageRef、assistantMessageRef 或正文，Provider 计数仍为 1。
-- [ ] B 使用相同 ID 但不同正文仍得到相同公开 409，避免内容 oracle。
-- [ ] A 的完全相同重放仍返回原 message/Provider 结果，计数为 1。
-- [ ] 错误 member、agent、audience 在 device conflict 前被授权边界拒绝。
-- [ ] 不改变现有 Person-level Device Sync 可见性：同一 Person 的设备 A/B 仍可看到该 Person 有权同步的同一 domain event，只有 cursor/ack 按设备隔离。B2 只禁止设备 B 通过消息 POST 的幂等缓存命中拿到 A 的成功响应；增加回归防止误做 origin-device 事件过滤。
+- [x] 建立同一 member 的 device A/B；A 发消息并得到 Provider 结果。
+- [x] B 使用相同 clientMessageId、occurredAt、正文和附件重放，断言 409，响应不含 A 的 messageRef、assistantMessageRef 或正文，Provider 计数仍为 1。
+- [x] B 使用相同 ID 但不同正文仍得到相同公开 409，避免内容 oracle。
+- [x] A 的完全相同重放仍返回原 message/Provider 结果，计数为 1。
+- [x] 错误 member、agent、audience 在 device conflict 前被授权边界拒绝。
+- [x] 不改变现有 Person-level Device Sync 可见性：同一 Person 的设备 A/B 仍可看到该 Person 有权同步的同一 domain event，只有 cursor/ack 按设备隔离。B2 只禁止设备 B 通过消息 POST 的幂等缓存命中拿到 A 的成功响应；增加回归防止误做 origin-device 事件过滤。
 
 先运行目标测试并确认 B 的同内容重放当前错误地返回原结果。
 
 ### B2.3 最小实现
 
-- [ ] appendThreadMessage 已先 requireThread；保留该次序。
-- [ ] findMessageByClientId 命中后，先比较 existing.origin.deviceRef 与 input.origin.deviceRef，再计算/比较现有 logical fingerprint。
-- [ ] actor=person 时 deviceRef 必填；system/provider 消息不走客户端幂等入口。
-- [ ] device mismatch 与 payload mismatch 使用同一 THREAD_MESSAGE_CONFLICT envelope，不回显任何已有记录字段。
-- [ ] 不改唯一索引、不新增 migration、不改变成功响应。
+- [x] appendThreadMessage 已先 requireThread；保留该次序。
+- [x] findMessageByClientId 命中后，先比较 existing.origin.deviceRef 与 input.origin.deviceRef，再计算/比较现有 logical fingerprint。
+- [x] actor=person 时 deviceRef 必填；system/provider 消息不走客户端幂等入口。
+- [x] device mismatch 与 payload mismatch 使用同一 THREAD_MESSAGE_CONFLICT envelope，不回显任何已有记录字段。
+- [x] 不改唯一索引、不新增 migration、不改变成功响应。
+
+2026-08-16 验证状态：B2 已实现，待独立 PR。生产修改只在
+`chatWorkDomain.ts` 中增加命中已有消息后的 device 比较；未修改
+Service、Schema/migration 或 Device Sync。聚焦 RED 为 `3 failed / 22 passed`，
+GREEN 为 `25/25`，邻近回归为 `21/21`，加强路由泄漏断言后的
+route/provider 回归为 `11/11`。完整门禁、不可变镜像和浏览器证据见
+[`B2 开发记录`](../../development/2026-08-16-device-scoped-chat-idempotency.md)。
 
 验证命令：
 

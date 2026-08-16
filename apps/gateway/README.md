@@ -74,6 +74,12 @@ ChatWork Provider Lane
 9. bootstrap 只插入缺失记录，不更新已有状态；
 10. 错误响应不返回 SQL、堆栈、Token、路径或 Provider 内部信息。
 
+Chat/Work 的 `threadRef + clientMessageId` 幂等返回还要求来源 device
+完全一致；不同 active device 复用同一 key 时，无论 payload 是否相同都
+返回同一个净化后的 `409 THREAD_MESSAGE_CONFLICT`，且不会读取已有
+Provider 结果或再次调用 Provider。该限制不改变同一 Person 多设备的领域事件
+可见性，Sync cursor/ACK 仍按 device 隔离。
+
 ## 本地验证
 
 首次生成全新的锁文件：
