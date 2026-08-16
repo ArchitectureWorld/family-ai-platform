@@ -127,7 +127,7 @@ B2 只收紧消息 POST 的幂等结果返回，不改变 Person 级事件可见
 
 ## 10. 运维、台账与回滚
 
-本任务不改变正式端口、持久服务、Hermes Home/Profile、Provider 路由或正式运行架构，因此不更新 `service-ports.md/json` 和 `agent-architecture.md`。隔离验收端口是随机、loopback、任务生命周期内的临时资源；开发记录必须明确它不是正式部署。
+本任务不改变正式端口、Hermes Home/Profile、Provider 路由或正式运行架构，因此不更新 `agent-architecture.md`。运行后立即销毁的证据 runtime 使用随机 loopback 端口，不登记为持久服务；最终保留给用户体验的 runtime 在实际端口确定后，必须同步更新 `/home/youran/data/service-ports.md` 和 `service-ports.json`，标明它是临时、loopback、非正式 `8790` 的体验入口。容器重启导致随机端口变化时，两份台账必须同步改为当前实际端口；体验 runtime 停止后也必须移除对应记录。
 
 本任务没有数据 migration。代码回滚会重新开放跨设备幂等结果泄露，只允许用于故障定位，不能作为安全发布结果。若新实现不可用，应保持写入口 fail-closed，而不是恢复跨设备缓存命中。
 
