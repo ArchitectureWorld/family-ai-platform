@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -31,12 +32,22 @@ function runtimeFixture() {
   const codexWorkingDirectory = join(root, "workspace");
   writeFileSync(executable, `#!/usr/bin/env node
 const { appendFileSync } = require("node:fs");
-appendFileSync(
-  ${JSON.stringify(invocationLog)},
-  JSON.stringify(process.argv.slice(2)) + "\\n"
-);
-process.stdout.write("Profile native reply");
-process.stderr.write("session_id: profile_native_session_42\\n");
+void (async () => {
+  let prompt = "";
+  for await (const chunk of process.stdin) prompt += chunk;
+  appendFileSync(
+    ${JSON.stringify(invocationLog)},
+    JSON.stringify({ args: process.argv.slice(2), prompt }) + "\\n"
+  );
+  process.stdout.write(JSON.stringify({
+    type: "thread.started",
+    thread_id: "thread_config_42"
+  }) + "\\n");
+  process.stdout.write(JSON.stringify({
+    type: "item.completed",
+    item: { type: "agent_message", text: "Codex config probe" }
+  }) + "\\n");
+})();
 `, { mode: 0o700 });
   for (const directory of [jarvisHome, personalHome, codexWorkingDirectory]) {
     mkdirSync(directory);
@@ -59,6 +70,7 @@ function realEnvironment(fixture = runtimeFixture()): NodeJS.ProcessEnv {
     FAMILY_AI_HERMES_JARVIS_HOME: fixture.jarvisHome,
     FAMILY_AI_HERMES_PERSONAL_HOME: fixture.personalHome,
     FAMILY_AI_HERMES_PROFILES: "ZZH,nsy",
+    FAMILY_AI_HERMES_PRIVATE_INPUT_MODE: "disabled",
     FAMILY_AI_CODEX_EXECUTABLE: fixture.executable,
     FAMILY_AI_CODEX_WORKING_DIRECTORY: fixture.codexWorkingDirectory
   };
@@ -197,7 +209,8 @@ describe("Gateway configuration", () => {
         executable: fixture.executable,
         jarvisHome: fixture.jarvisHome,
         personalHome: fixture.personalHome,
-        profiles: ["zzh", "nsy"]
+        profiles: ["zzh", "nsy"],
+        privateInputMode: "disabled"
       },
       codex: {
         executable: fixture.executable,
@@ -223,6 +236,29 @@ describe("Gateway configuration", () => {
     expect(() => loadGatewayConfig({
       ...valid,
       FAMILY_AI_CODEX_WORKING_DIRECTORY: join(fixture.root, "missing-workspace")
+    })).toThrow("runtime configuration");
+  });
+
+  it("defaults Hermes private input to disabled and rejects unsupported modes", () => {
+    const fixture = runtimeFixture();
+    const withoutMode = realEnvironment(fixture);
+    delete withoutMode.FAMILY_AI_HERMES_PRIVATE_INPUT_MODE;
+    const defaultRuntime = loadGatewayConfig(withoutMode).providerRuntime;
+    expect(defaultRuntime).toMatchObject({
+      mode: "real",
+      hermes: { privateInputMode: "disabled" }
+    });
+
+    expect(loadGatewayConfig({
+      ...realEnvironment(fixture),
+      FAMILY_AI_HERMES_PRIVATE_INPUT_MODE: "query-stdin-v1"
+    }).providerRuntime).toMatchObject({
+      mode: "real",
+      hermes: { privateInputMode: "query-stdin-v1" }
+    });
+    expect(() => loadGatewayConfig({
+      ...realEnvironment(fixture),
+      FAMILY_AI_HERMES_PRIVATE_INPUT_MODE: "argv-query"
     })).toThrow("runtime configuration");
   });
 
@@ -254,7 +290,7 @@ describe("Gateway configuration", () => {
     expect(runtime.hermes).not.toHaveProperty("provider");
   });
 
-  it("builds Jarvis and personal invocations without global route overrides", async () => {
+  it("keeps Hermes fail-closed while preserving Codex stdin invocation", async () => {
     const fixture = runtimeFixture();
     const runtime = buildProviderRuntime(
       loadGatewayConfig(realEnvironment(fixture)).providerRuntime
@@ -275,24 +311,38 @@ describe("Gateway configuration", () => {
       "provider-profile:hermes-jarvis",
       "provider-profile:hermes-zzh"
     ]) {
-      await runtime.router.resolve(providerProfileRef).invoke({
+      expect(await runtime.router.resolve(providerProfileRef).invoke({
         ...baseRequest,
         providerProfileRef
+      })).toMatchObject({
+        status: "failed",
+        error: { code: "PROVIDER_UNAVAILABLE" }
       });
     }
+    expect(existsSync(fixture.invocationLog)).toBe(false);
 
-    const [jarvisArgs, zzhArgs] = readFileSync(
+    const codexResult = await runtime.router
+      .resolve("provider-profile:codex-cli")
+      .invoke({
+        ...baseRequest,
+        providerProfileRef: "provider-profile:codex-cli"
+      });
+    expect(codexResult).toMatchObject({
+      status: "succeeded",
+      output: [{ type: "text", text: "Codex config probe" }]
+    });
+    const invocations = readFileSync(
       fixture.invocationLog,
       "utf8"
-    ).trim().split("\n").map(line => JSON.parse(line) as string[]);
-
-    for (const args of [jarvisArgs, zzhArgs]) {
-      expect(args).not.toContain("-m");
-      expect(args).not.toContain("--provider");
-    }
-    expect(jarvisArgs).not.toContain("-p");
-    expect(zzhArgs).toContain("-p");
-    expect(zzhArgs).toContain("zzh");
+    ).trim().split("\n").map(line => JSON.parse(line) as {
+      args: string[];
+      prompt: string;
+    });
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]?.prompt).toBe("route probe");
+    expect(invocations[0]?.args).toContain("exec");
+    expect(invocations[0]?.args).not.toContain("route probe");
+    expect(invocations[0]?.args).not.toContain("-q");
   });
 
   it("composes deterministic Agent and Provider refs for every real runtime", () => {

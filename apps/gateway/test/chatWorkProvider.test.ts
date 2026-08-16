@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -8,6 +8,7 @@ import type {
 } from "@family-ai/contracts";
 import {
   FakeProviderAdapter,
+  HermesCliProviderAdapter,
   type ProviderAdapter
 } from "@family-ai/provider-adapter-sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -510,6 +511,45 @@ describe("Chat Work Message service", () => {
     expect(stored.status).toBe("failed");
     expect(stored.error_json).not.toContain("/private/");
     expect(stored.error_json).not.toContain("session");
+  });
+
+  it("maps disabled Hermes to a bounded Provider failure without spawning", async () => {
+    const marker = join(directory, "hermes-spawned");
+    const script = join(directory, "fake-hermes.mjs");
+    writeFileSync(
+      script,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "spawned");`
+    );
+    const adapter = new HermesCliProviderAdapter({
+      executable: process.execPath,
+      prefixArgs: [script],
+      cwd: directory,
+      providerProfileRef: "provider-profile:fake-local",
+      privateInputMode: "disabled"
+    });
+    const service = new ChatWorkMessageService(
+      domainRepository,
+      providerRepository,
+      adapter,
+      () => currentNow
+    );
+    const chat = domainRepository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+
+    const rejection = await service
+      .sendPersonMessage(command(chat.chat.threadRef, "hermes-disabled"))
+      .then(
+        () => null,
+        (error: unknown) => error
+      );
+    expect.soft(rejection).toMatchObject({
+      code: "PROVIDER_UNAVAILABLE",
+      statusCode: 502
+    });
+    expect.soft(existsSync(marker)).toBe(false);
   });
 
   it("serializes Provider calls in one Thread but allows different Threads to run in parallel", async () => {

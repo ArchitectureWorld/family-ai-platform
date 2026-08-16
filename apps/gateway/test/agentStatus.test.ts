@@ -2,7 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProviderAdapter } from "@family-ai/provider-adapter-sdk";
-import { ProviderAdapterRouter } from "@family-ai/provider-adapter-sdk";
+import {
+  HermesCliProviderAdapter,
+  ProviderAdapterRouter
+} from "@family-ai/provider-adapter-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openGatewayDatabase } from "../src/database.js";
 import {
@@ -125,6 +128,43 @@ describe("AgentStatusService", () => {
     current = new Date(current.getTime() + 1);
     expect((await service.snapshot("agent:test")).status).toBe("idle");
     expect(health).toHaveBeenCalledTimes(2);
+    db.close();
+  });
+
+  it("reports a configured Hermes catalog entry offline while private input is disabled", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "family-ai-hermes-status-"));
+    directories.push(directory);
+    const db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    const providerProfileRef = "provider-profile:hermes-jarvis";
+    db.prepare(
+      `INSERT INTO provider_profiles
+       (provider_profile_ref, provider_kind, display_name, created_at)
+       VALUES(?, 'hermes', 'Jarvis', ?)`
+    ).run(providerProfileRef, checkedAt);
+    db.prepare(
+      "INSERT INTO agents(agent_ref, display_name, created_at) VALUES(?, 'Jarvis', ?)"
+    ).run("agent:hermes-jarvis", checkedAt);
+    db.prepare(
+      `INSERT INTO agent_runtime_bindings
+       (agent_ref, provider_profile_ref, status, created_at, updated_at)
+       VALUES(?, ?, 'active', ?, ?)`
+    ).run("agent:hermes-jarvis", providerProfileRef, checkedAt, checkedAt);
+    const adapter = new HermesCliProviderAdapter({
+      executable: process.execPath,
+      cwd: directory,
+      providerProfileRef,
+      privateInputMode: "disabled"
+    });
+    const service = new AgentStatusService(
+      db,
+      ProviderAdapterRouter.single(providerProfileRef, adapter),
+      { now: () => new Date(checkedAt) }
+    );
+
+    expect(await service.snapshot("agent:hermes-jarvis")).toMatchObject({
+      status: "problem",
+      publicProblem: "Agent 当前无法连接。"
+    });
     db.close();
   });
 });
