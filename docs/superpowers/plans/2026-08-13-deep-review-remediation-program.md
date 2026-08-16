@@ -1072,10 +1072,10 @@ git diff --check
 | A1 单一认证时钟 | 已合入 | PR #30；合并提交 `29baa8f`；本地与 CI 门禁通过 |
 | A1D 阶段授权规则对齐 | 已合入 | PR #31；合并提交 `5d38293`；授权措辞与 CI 已确认 |
 | A2 Compose 附件持久化 | 已合入 | PR #32；合并提交 `8d3c027`；npm/Docker/隔离附件/真实浏览器与 CI 全绿 |
-| A3 生产依赖安全升级 | 已实现，待独立 PR | production audit 0 High/0 Critical；SSE shutdown 兼容性 RED→GREEN；最终提交 SHA 仍须完整复验 |
-| A4 CI 发布阻断门禁 | 待开始 | 依赖 A2/A3 |
-| A5 整体备份与恢复基础 | 待开始 | 依赖 A4；所有 V10+ migration 的前置门 |
-| A6 文档事实校正 | 待开始 | 依赖 A1–A5 的最新证据 |
+| A3 生产依赖安全升级 | 已合入 | PR #33；合并提交 `b50dc86`；production audit 0 High/0 Critical，SSE shutdown 兼容性与完整门禁通过 |
+| A4 CI 发布阻断门禁 | 已合入 | PR #34；合并提交 `5ec0840`；精确 SHA 镜像、隔离 runtime 和 CI 六项检查已纳入门禁 |
+| A5 整体备份与恢复基础 | 已合入 | PR #35；合并提交 `be6a52c`；sealed snapshot、candidate staging、atomic restore 与 legacy V3 副本演练通过 |
+| A6 文档事实校正 | 已合入 | PR #36；合并提交 `5169efb`；源码、隔离验收与正式 `8790` 事实分层已校正 |
 | B1a 禁用 Hermes argv | 已实现，待独立 PR | 基于 A6 后 `5169efb`；Hermes 零 spawn/fail-closed、Codex stdin 回归与本地全量门禁通过 |
 | B1b Hermes 私密输入 | 外部前置待核 | 依赖 B1a 和 Hermes `--query-stdin` 等受支持能力 |
 | B2 device 级幂等 | 待开始 | 依赖 A6；优先无 Schema 的跨设备 conflict 语义 |
