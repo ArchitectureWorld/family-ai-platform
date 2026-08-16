@@ -110,6 +110,16 @@ function messageInvalid(message: string): GatewayDomainError {
   );
 }
 
+function threadMessageConflict(): GatewayDomainError {
+  return new GatewayDomainError(
+    "THREAD_MESSAGE_CONFLICT",
+    409,
+    "conflict",
+    false,
+    "同一个客户端消息编号已经用于不同内容。"
+  );
+}
+
 function attachmentNotFound(): GatewayDomainError {
   return new GatewayDomainError(
     "ATTACHMENT_NOT_FOUND",
@@ -735,6 +745,9 @@ export class ChatWorkDomainRepository {
       this.validateMessageProvenance(input.personRef, input.actor, input.origin);
       const existing = this.findMessageByClientId(input.threadRef, input.clientMessageId);
       if (existing) {
+        if (existing.origin.deviceRef !== input.origin.deviceRef) {
+          throw threadMessageConflict();
+        }
         const existingFingerprint = logicalMessageFingerprint({
           actor: existing.actor,
           content: existing.content,
@@ -748,13 +761,7 @@ export class ChatWorkDomainRepository {
           attachmentRefs
         });
         if (existingFingerprint !== incomingFingerprint) {
-          throw new GatewayDomainError(
-            "THREAD_MESSAGE_CONFLICT",
-            409,
-            "conflict",
-            false,
-            "同一个客户端消息编号已经用于不同内容。"
-          );
+          throw threadMessageConflict();
         }
         return existing;
       }

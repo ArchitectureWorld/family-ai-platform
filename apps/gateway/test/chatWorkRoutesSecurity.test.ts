@@ -167,6 +167,75 @@ describe("Chat Work HTTP route security", () => {
     expect(valid.statusCode).toBe(200);
   });
 
+  it("does not expose one device's message or Provider result through another device replay", async () => {
+    const chat = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat?timezone=UTC",
+      headers: entryHeaders(personal)
+    });
+    const threadRef = String(chat.json().chat.threadRef);
+    const payload = {
+      protocolVersion: 1,
+      clientMessageId: "cross-device-route-0001",
+      occurredAt: "2026-07-24T06:31:00.000Z",
+      content: {
+        type: "text",
+        text: "设备 A 的路由私密标记。",
+        language: "zh-CN"
+      }
+    };
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+      headers: entryHeaders(personal),
+      payload
+    });
+    expect(first.statusCode).toBe(201);
+    const firstBody = first.json() as {
+      message: { messageRef: string; content: { text: string } };
+      assistantMessageRef: string;
+    };
+    const second = createSecondPersonalEntry({
+      familyRef,
+      personRef: ownerPersonRef
+    });
+    const conflictBodies: unknown[] = [];
+
+    for (const content of [
+      payload.content,
+      { ...payload.content, text: "设备 B 的不同正文。" }
+    ]) {
+      const conflict = await app.inject({
+        method: "POST",
+        url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+        headers: entryHeaders(second),
+        payload: { ...payload, content }
+      });
+      expect(conflict.statusCode).toBe(409);
+      expectPublicError(conflict, {
+        code: "THREAD_MESSAGE_CONFLICT",
+        category: "conflict",
+        retryable: false
+      });
+      const conflictBody = conflict.json();
+      conflictBodies.push(conflictBody);
+      const serialized = JSON.stringify(conflictBody);
+      expect(serialized).not.toContain(firstBody.message.messageRef);
+      expect(serialized).not.toContain(firstBody.assistantMessageRef);
+      expect(serialized).not.toContain(firstBody.message.content.text);
+    }
+    expect(conflictBodies[1]).toEqual(conflictBodies[0]);
+
+    const replay = await app.inject({
+      method: "POST",
+      url: `/api/v1/threads/${encodeURIComponent(threadRef)}/messages`,
+      headers: entryHeaders(personal),
+      payload
+    });
+    expect(replay.statusCode).toBe(201);
+    expect(replay.json()).toEqual(first.json());
+  });
+
   it("rejects forged identity fields and unsupported Work protocol versions", async () => {
     for (const payload of [
       {

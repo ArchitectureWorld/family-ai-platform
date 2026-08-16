@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
-import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
+import {
+  openGatewayDatabase,
+  sha256,
+  type GatewayDatabase
+} from "../src/database.js";
 import { FamilyDomainRepository } from "../src/familyDomain.js";
 
 interface AssistantAssignmentRow {
@@ -57,6 +61,38 @@ describe("Chat Work message provenance", () => {
     return row;
   }
 
+  function bindSecondOwnerDevice(): string {
+    const deviceRef = "device:second-owner-domain";
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO managed_devices
+         (device_ref, display_name, terminal_type, platform, status, credential_hash,
+          created_at, updated_at, revoked_at)
+         VALUES(?, 'Second Owner Web', 'web', 'test', 'active', ?, ?, ?, NULL)`
+      ).run(
+        deviceRef,
+        sha256("second-owner-domain-credential"),
+        fixedNow.toISOString(),
+        fixedNow.toISOString()
+      );
+      db.prepare(
+        `INSERT INTO device_bindings
+         (device_binding_ref, device_ref, owner_scope, family_ref, person_ref,
+          status, bound_at, revoked_at)
+         SELECT 'device-binding:second-owner-domain', ?, 'person', family_ref, ?,
+                'active', ?, NULL
+         FROM family_memberships
+         WHERE person_ref = ? AND status = 'active'`
+      ).run(
+        deviceRef,
+        ownerPersonRef,
+        fixedNow.toISOString(),
+        ownerPersonRef
+      );
+    })();
+    return deviceRef;
+  }
+
   it("replays one logical message after reconnecting and preserves its first accepted origin", () => {
     const chat = repository.ensureHomeChat({
       personRef: ownerPersonRef,
@@ -92,6 +128,60 @@ describe("Chat Work message provenance", () => {
       personRef: ownerPersonRef,
       threadRef: chat.chat.threadRef
     }).messages).toHaveLength(1);
+  });
+
+  it("rejects a replay from another active device before returning the first message", () => {
+    const chat = repository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const input = {
+      personRef: ownerPersonRef,
+      threadRef: chat.chat.threadRef,
+      clientMessageId: "cross-device-domain-0001",
+      actor: { type: "person" as const, personRef: ownerPersonRef },
+      origin: {
+        deviceRef: ownerDeviceRef,
+        connectionRef: null,
+        entryAudience: "personal" as const
+      },
+      content: {
+        type: "text" as const,
+        text: "设备 A 的私密消息。",
+        language: "zh-CN"
+      },
+      occurredAt: fixedNow.toISOString()
+    };
+    const first = repository.appendThreadMessage(input);
+    const secondDeviceRef = bindSecondOwnerDevice();
+
+    for (const content of [
+      input.content,
+      { ...input.content, text: "设备 B 的不同正文。" }
+    ]) {
+      try {
+        repository.appendThreadMessage({
+          ...input,
+          origin: { ...input.origin, deviceRef: secondDeviceRef },
+          content
+        });
+        throw new Error("Expected a device-scoped conflict");
+      } catch (error) {
+        expect(error).toMatchObject({
+          code: "THREAD_MESSAGE_CONFLICT",
+          statusCode: 409,
+          category: "conflict",
+          retryable: false
+        });
+      }
+    }
+
+    expect(repository.appendThreadMessage(input)).toEqual(first);
+    expect(repository.listThreadMessages({
+      personRef: ownerPersonRef,
+      threadRef: chat.chat.threadRef
+    }).messages).toEqual([first]);
   });
 
   it("rejects a Person message whose device is not bound to that Person", () => {
