@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "bundleKind": "family-ai-device-scoped-idempotency-sanitized-text-evidence",
+  "bundleRoot": "docs/development/evidence/2026-08-16-device-scoped-chat-idempotency",
+  "source": {
+    "behaviorEvidenceCommit": "c59cd3f2c8ed0bc813ff0506f4dd120f66b5d27d",
+    "candidateImageId": "sha256:50c5bd5857f3bf9dba3cdb31a757825cc9733da36d0c290929b50e046c01a25b",
+    "candidateArchiveSha256": "e32f53b45979c53a25e280680b70fa047d822c363bd1fdeceaeed08935d44cbc",
+    "candidateManifestSha256": "b62cd4c5badf75d879a3e78910a6eb5ee775c6add5a5ca7d4d8c9511a3a3caf7",
+    "candidateBuildInputTreeHash": "d8046b18bbd38910a762e803a84c29c2a39956a8da0f739141270369b6dfa86c",
+    "evidenceRun": "R3",
+    "temporaryAllowlistFileCount": 42,
+    "temporaryAllowlistIndexSha256": "7355718f0074e718c8804f751d8cf543890d2a07ebae75f441d5423a95e4ef7f"
+  },
+  "originalEvidenceSha256": {
+    "browser-journey.json": "9d144334a16d578a37d4af599f7d45ea717d63fa6183b4b0169193054b560da1",
+    "before-refresh.snapshot.txt": "c739318a6539921b964369562d6988a2e6832917852814ff498f2d3a76656a8f",
+    "after-refresh.snapshot.txt": "c739318a6539921b964369562d6988a2e6832917852814ff498f2d3a76656a8f",
+    "after-restart.snapshot.txt": "c739318a6539921b964369562d6988a2e6832917852814ff498f2d3a76656a8f",
+    "third-turn.snapshot.txt": "f0589e0bcc4ca0770d13661c2e9cec9d0952c980670fbe2aceac157cd88b7620",
+    "work-view.snapshot.txt": "d6cd807498dc6fb1d339739c56bb8b397a931d468f10b681879eaa9147a6fbbe",
+    "chat-return.snapshot.txt": "f0589e0bcc4ca0770d13661c2e9cec9d0952c980670fbe2aceac157cd88b7620",
+    "gateway-restart-command.log": "e8f7c8d214afb238f85b41f3750f3774cd2c19c59e5e25a5e0e0a4823d7e094a",
+    "browser-console-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "browser-errors-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "sqlite-final-aggregate.json": "125c4188b871470d8e6fe35a72a78dbaaacef6978818ab776e026330d27fca2a",
+    "sensitive-cleanup.status": "bc6c2bf53ea256c354f8c26d6d1244b50eef5ab49e6aa4706e2df0fd9c03ca89",
+    "temporary-screenshot": "16e8c06c18b7af1f0985047dd34be91567add3d3a78c9f774b3d731789b272ae"
+  },
+  "files": {
+    "README.md": "217039ea24c7f9e2bcedddb0e98ac250e3a78d16d343338500a8143993cb1c6e",
+    "after-refresh.snapshot.txt": "eb1bcf0cb33dc54bb34ef9b00b8bc2c49f1fa4b0bf24e9926fa55622c5f4c236",
+    "after-restart.snapshot.txt": "eb1bcf0cb33dc54bb34ef9b00b8bc2c49f1fa4b0bf24e9926fa55622c5f4c236",
+    "before-refresh.snapshot.txt": "eb1bcf0cb33dc54bb34ef9b00b8bc2c49f1fa4b0bf24e9926fa55622c5f4c236",
+    "browser-journey.json": "fa71bea59258a3a72719a37e56ec862a3a63d36ae979a69de16e817d0e190a47",
+    "browser-zero-errors.json": "5050f372d38a693919814dcc89d65376ebc307d14c74fb72692b6c5f3d888b09",
+    "chat-return.snapshot.txt": "e3ceae245296e1918450bbb4a156c95c468839ab5f68c213c0fdc01a38bec9ee",
+    "database-and-cleanup-summary.json": "17f524f3d4e2e0245481c98b9875d693179b7e715fbaa06dd785729705e287d4",
+    "formal-identity-summary.json": "59e31b3d2c0711f2b6a17050b786a867acf4d545bdb09bba9d7914216272a451",
+    "gateway-restart-summary.json": "80a21518c4f4119f5dc52666b06601229c691394ec288f3ae8d6f01273b9995d",
+    "third-turn.snapshot.txt": "e3ceae245296e1918450bbb4a156c95c468839ab5f68c213c0fdc01a38bec9ee",
+    "work-view.snapshot.txt": "5bddfa97ac3d73bde4090fd1dcdf6a07edd28df1fb6a8d71936e94141b1a2fca"
+  },
+  "scope": {
+    "persistentFileCountExcludingManifest": 12,
+    "containsOnlySanitizedText": true,
+    "containsRuntimeDefinition": false,
+    "containsDatabase": false,
+    "containsCredentialOrSessionMaterial": false,
+    "containsMessageBody": false,
+    "containsPrivateAbsolutePath": false,
+    "screenshotPersistedInRepository": false
+  },
+  "limitations": [
+    "The temporary 42-file allowlist was checked during R3 but is not claimed as a durable repository bundle.",
+    "This bundle persists only the key sanitized text subset and cannot prove the whole temporary runtime contained no secrets.",
+    "The temporary screenshot was visually inspected and hash-recorded but is not stored in Git.",
+    "The temporary curl capture wrapper was removed and is unavailable for byte-for-byte review.",
+    "Final exact-HEAD retained-runtime evidence remains a Task 4 requirement."
+  ]
+}

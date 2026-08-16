@@ -19,7 +19,7 @@
 - Verify unchanged: `apps/gateway/test/deviceSyncIsolation.test.ts`
 - Modify: `apps/gateway/src/chatWorkDomain.ts`
 
-- [ ] **Step 1: Add a second active owner-device fixture to the Domain security test**
+- [x] **Step 1: Add a second active owner-device fixture to the Domain security test**
 
 Import `sha256` from `../src/database.js` and add this helper inside the existing `describe` block:
 
@@ -98,7 +98,7 @@ it("rejects a replay from another active device before returning the first messa
 });
 ```
 
-- [ ] **Step 2: Add a Provider-service regression that proves zero second call**
+- [x] **Step 2: Add a Provider-service regression that proves zero second call**
 
 Import `sha256` from `../src/database.js`, add an equivalent `bindSecondOwnerDevice()` helper in the `Chat Work Message service` describe block, and add:
 
@@ -144,7 +144,7 @@ it("rejects another device before replaying a successful Provider Turn", async (
 });
 ```
 
-- [ ] **Step 3: Add a real HTTP/Entry Session regression**
+- [x] **Step 3: Add a real HTTP/Entry Session regression**
 
 Reuse `createSecondPersonalEntry({ familyRef, personRef: ownerPersonRef })` and add this test to `chatWorkRoutesSecurity.test.ts`:
 
@@ -205,7 +205,7 @@ it("does not expose one device's message or Provider result through another devi
 });
 ```
 
-- [ ] **Step 4: Run the focused suite and verify RED**
+- [x] **Step 4: Run the focused suite and verify RED**
 
 Run:
 
@@ -220,7 +220,7 @@ npm exec --workspace @family-ai/gateway -- vitest run \
 
 Expected: the three new cross-device tests fail because same-payload device B currently receives device A's result. Existing original-device replay, authorization, and Device Sync tests remain green. A compile error, fixture error, or unrelated assertion is not an acceptable RED.
 
-- [ ] **Step 5: Add one shared conflict constructor and the minimal device check**
+- [x] **Step 5: Add one shared conflict constructor and the minimal device check**
 
 Add next to `messageInvalid` in `chatWorkDomain.ts`:
 
@@ -264,7 +264,7 @@ if (existing) {
 
 Do not change the `requireThread → validateMessageProvenance → findMessageByClientId` order. Do not modify `chatWorkMessageService.ts`, the unique index, migrations, event queries, or sync cursors unless a failing test proves the design assumptions wrong.
 
-- [ ] **Step 6: Run GREEN and nearby domain regression**
+- [x] **Step 6: Run GREEN and nearby domain regression**
 
 Run the focused command from Step 4, then:
 
@@ -279,7 +279,7 @@ git diff --check
 
 Expected: all selected tests pass; Fake Provider calls remain exactly one; the unchanged Device Sync test proves both devices still see the Person event with independent cursors.
 
-- [ ] **Step 7: Commit the behavior change**
+- [x] **Step 7: Commit the behavior change**
 
 ```bash
 git add \
@@ -296,7 +296,7 @@ git commit -m "fix: scope chat idempotency to device"
 - No tracked changes in this task
 - Evidence directory: new `mktemp -d` paths outside the repository
 
-- [ ] **Step 1: Reinstall from the lock and run all host gates**
+- [x] **Step 1: Reinstall from the lock and run all host gates**
 
 ```bash
 npm ci
@@ -307,7 +307,7 @@ git diff --check
 
 Expected: contracts, Provider SDK, Gateway, script gates, typecheck, and build all pass with zero failed tests. Record exact passed/failed/skipped totals.
 
-- [ ] **Step 2: Build an immutable candidate from the exact behavior commit**
+- [x] **Step 2: Build an immutable candidate from the exact behavior commit**
 
 Create a new absolute output directory with `mktemp -d`, then run:
 
@@ -327,7 +327,7 @@ b2_image_ref="$(node -e '
 
 Expected: the image label, manifest `sourceCommit`, image ID, archive digest, and current HEAD agree exactly. Do not use a `local-unverified` image.
 
-- [ ] **Step 3: Run isolated Gateway, core acceptance, and attachment persistence**
+- [x] **Step 3: Run isolated Gateway, core acceptance, and attachment persistence**
 
 Use a new empty runtime and unique Compose project:
 
@@ -352,11 +352,11 @@ COMPOSE_PROJECT_NAME="$b2_project" \
 
 Expected: two messages, idempotency, cross-Agent isolation, restart recovery, third continuation, and two-chunk attachment reassembly all pass. Capture the report path and manifest identity without printing credentials.
 
-- [ ] **Step 4: Complete one evidence-browser journey**
+- [x] **Step 4: Complete one evidence-browser journey**
 
 Use the same candidate to generate a protected one-time Member handoff and complete the exact browser sequence from Task 4 Step 4. This first browser run supplies documentation evidence; it does not become the final user runtime because Task 3 will add a docs-only commit. Record only the source commit, image ID, random loopback port, public browser outcomes, and screenshot path.
 
-- [ ] **Step 5: Stop this evidence-only candidate**
+- [x] **Step 5: Stop this evidence-only candidate**
 
 Run:
 
@@ -376,7 +376,7 @@ Confirm its random port has no listener and no container remains. Do not stop fo
 - Modify: `docs/superpowers/plans/2026-08-13-deep-review-remediation-program.md`
 - Create: `docs/development/2026-08-16-device-scoped-chat-idempotency.md`
 
-- [ ] **Step 1: Update the Gateway security contract**
+- [x] **Step 1: Update the Gateway security contract**
 
 Add a concise paragraph under Core Security Rules stating:
 
@@ -387,11 +387,11 @@ Chat/Work 的 `threadRef + clientMessageId` 幂等返回还要求来源 device �
 该限制不改变同一 Person 多设备的领域事件可见性，Sync cursor/ACK 仍按 device 隔离。
 ```
 
-- [ ] **Step 2: Close the B2 checklist and master status without overstating deployment**
+- [x] **Step 2: Close the B2 checklist and master status without overstating deployment**
 
 In the security plan, mark only verified B2 RED/GREEN/implementation items complete and record B1a as merged by PR #37 / `cd742fb`. In the remediation master table, set B1a to merged and B2 to `已实现，待独立 PR`; retain B1b as H0 blocked. Do not claim formal `8790` contains B2.
 
-- [ ] **Step 3: Write the development record with the unified gate matrix**
+- [x] **Step 3: Write the development record with the unified gate matrix**
 
 Create `docs/development/2026-08-16-device-scoped-chat-idempotency.md` covering:
 
@@ -410,7 +410,7 @@ Create `docs/development/2026-08-16-device-scoped-chat-idempotency.md` covering:
 
 Explain that no Schema or Hermes architecture change occurred. Evidence-only random ports were destroyed and did not enter inventory; the final retained experience port will be written to both port ledgers after it exists. Never include tokens, cookies, message bodies, or private handoff material.
 
-- [ ] **Step 4: Run documentation gates and commit**
+- [x] **Step 4: Run documentation gates and commit**
 
 ```bash
 bash scripts/static-check.sh

@@ -56,12 +56,12 @@ device 隔离。实现未修改 Service 或 Sync，Schema 仍为 V9。
 |---|---|---|
 | 聚焦 RED | PASS | 4 files，3 failed / 1 passed；3 failed / 22 passed，失败精确命中跨设备错误复用 |
 | 聚焦 GREEN 与领域回归 | PASS | focused `25/25`；neighbor `21/21`；加强 route/provider 断言后 `11/11` |
-| `npm ci` / `npm run check` | PASS | `npm ci` 成功；npm audit 仍有开发依赖 1 moderate + 1 high，本任务未越界自动修复。最终宿主 check 为 94 files / 913 passed / 0 failed / 0 skipped；static、typecheck、build 和 `git diff --check` 通过 |
+| `npm ci` / `npm run check` | PASS | `npm ci` 成功；npm audit 仍有开发依赖 1 moderate + 1 high，本任务未越界自动修复。行为证据 HEAD `c59cd3f2c8ed0bc813ff0506f4dd120f66b5d27d` 的宿主 check 为 94 files / 913 passed / 0 failed / 0 skipped；static、typecheck、build 和 `git diff --check` 通过。包含后续文档提交的 final exact-HEAD 门禁仍由 Task 4 重跑 |
 | 不可变镜像构建 / Docker | PASS | source/OCI revision `c59cd3f2c8ed0bc813ff0506f4dd120f66b5d27d`；image `sha256:50c5bd5857f3bf9dba3cdb31a757825cc9733da36d0c290929b50e046c01a25b`；archive SHA-256 `e32f53b45979c53a25e280680b70fa047d822c363bd1fdeceaeed08935d44cbc`；manifest SHA-256 `b62cd4c5badf75d879a3e78910a6eb5ee775c6add5a5ca7d4d8c9511a3a3caf7`；build-input tree `d8046b18bbd38910a762e803a84c29c2a39956a8da0f739141270369b6dfa86c`；容器内 contracts `75 passed`、SDK `27 passed`、Gateway `810 passed / 1 environment-only skipped` |
 | 隔离 dev-up / acceptance | PASS | 独立 project 与 `0700` runtime 消费同一份 `0600` manifest，随机 loopback；core acceptance 和 attachment 2-chunk/restart/SHA 验收通过，报告 `gateway-foundation-20260816-155033.md` SHA-256 `987a8b34aa823dcfea89ab14f4405f5d5909ff962ad25ccc34e870bcc0ca765a` |
-| 任务专属容器 / 浏览器 | PASS | R1/R2 只作编排收敛，权威证据为 R3：`agent-browser 0.27.0` 完成两轮消息、刷新恢复、Gateway 重启并重解析随机端口 `32818 → 32819`、同一身份 SHA 匹配、第三轮和 Work 往返；console/errors 均为空，无 overlay；19-step journey 全部成功，截图 `family-ai-b2-browser-r3-c59cd3f2.png` SHA-256 `16e8c06c18b7af1f0985047dd34be91567add3d3a78c9f774b3d731789b272ae` 已人工检查正常 |
-| 正式服务 / 真实 Provider | SKIP | 未获正式部署或真实 Provider 调用授权；只使用 Fake Provider。正式 `8790` 的 health SHA-256、容器 `b4c2f7876e6d`、image `sha256:00d6a37f…` 和 loopback listener 在前后不变 |
-| 文档与运维台账 | PASS | 本分支同步 Gateway README、详细执行包、总计划与本记录。证据 runtime 已销毁，不是持久服务，因此未更新 `service-ports.*`；无 Hermes 运行架构变化，未更新 `agent-architecture.md` |
+| 任务专属容器 / 浏览器 | PASS | R1/R2 只作编排收敛，权威证据为 R3：`agent-browser 0.27.0` 完成两轮消息、刷新恢复、Gateway 重启并重解析随机端口 `32818 → 32819`、同一身份 SHA 匹配、第三轮和 Work 往返；console/errors 均为空，无 overlay；19-step journey 全部成功。当次临时截图 `family-ai-b2-browser-r3-c59cd3f2.png` SHA-256 `16e8c06c18b7af1f0985047dd34be91567add3d3a78c9f774b3d731789b272ae` 已独立目检正常，未将二进制截图固化到仓库，不承诺本次会话结束后仍可取 |
+| 正式服务 / 真实 Provider | SKIP | 未获正式部署或真实 Provider 调用授权；只使用 Fake Provider。正式 `8790` before/after 的 health SHA-256 `169e9de22c2ac0692d38b07ecfd8800519e99140c49bb935cb3cadb47f252f1b`、container ID `b4c2f7876e6d80a2731a7782e3a5cb88a32478e43234723958b7929ce7451fb0`、image ID `sha256:00d6a37fd5ec8e35e85eeb0e70eb5d856647e1452afff01f9ba98b94d6ae7ce7` 和唯一 `127.0.0.1:8790` listener 全部不变 |
+| 文档与运维台账 | PASS | 本分支同步 Gateway README、详细执行包、总计划、本记录与仓内稳定脱敏证据 bundle。证据 runtime 已销毁，不是持久服务，因此未更新 `service-ports.*`；无 Hermes 运行架构变化，未更新 `agent-architecture.md` |
 
 不可变构建身份以 manifest、OCI revision、image ID、archive hash 与
 build-input tree 的交叉一致为证；`/health` 响应的 SHA-256 只用来比较
@@ -69,12 +69,20 @@ build-input tree 的交叉一致为证；`/health` 响应的 SHA-256 只用来�
 
 ## 证据边界、端口与未覆盖项
 
-R3 保留的 42 份公开证据均为 `0600`，安全词扫描通过；索引
+R3 当次临时 allowlist 的 42 份公开证据均为 `0600`，安全词扫描通过；临时索引
 `browser-evidence-index.json` SHA-256 为
 `7355718f0074e718c8804f751d8cf543890d2a07ebae75f441d5423a95e4ef7f`。这个结论只
 覆盖该 42 份经 allowlist 保留的公开证据，不代表整个 runtime 不含
 一次性凭据或其他秘密。配对码、Token、Cookie、handoff fragment 和私密
 消息正文均未进入 Git 或本文。
+
+上述 42 份不被描述为长期保留；其中关键、脱敏、纯文本证据已固化到
+[`device-scoped-chat-idempotency 证据 bundle`](evidence/2026-08-16-device-scoped-chat-idempotency/README.md)。
+bundle 只保留结构化步骤、UI 可访问性快照、计数、哈希和运行身份摘要，
+不包含 runtime Compose、Token、Cookie、fragment、绝对私有路径或消息正文。
+bundle `manifest.json` SHA-256 为
+`e08a74fd67d4cec29735257497ed7813df224a4b3567294bc6bb20e8e75bffa3`，
+其内 12 份非 manifest 文件已按仓库相对路径和实际 SHA-256 逐一复核。
 
 R3 的临时 curl capture wrapper 在清理时已删除，因此它不能再做
 逐字节复审。后续最终 retained runtime 若采用类似编排，必须保留不含
