@@ -193,8 +193,25 @@ describe("Chat Work HTTP route security", () => {
     expect(first.statusCode).toBe(201);
     const firstBody = first.json() as {
       message: { messageRef: string; content: { text: string } };
-      assistantMessageRef: string;
     };
+    let assistantMessageRef = "";
+    const evidenceDb = openGatewayDatabase(databasePath);
+    try {
+      evidenceDb.pragma("query_only = ON");
+      const turn = evidenceDb.prepare(
+        `SELECT assistant_message_ref
+         FROM thread_provider_turns
+         WHERE user_message_ref = ?
+           AND status = 'succeeded'
+           AND assistant_message_ref IS NOT NULL`
+      ).get(firstBody.message.messageRef) as {
+        assistant_message_ref: string;
+      } | undefined;
+      expect(turn?.assistant_message_ref).toEqual(expect.any(String));
+      assistantMessageRef = turn?.assistant_message_ref ?? "";
+    } finally {
+      evidenceDb.close();
+    }
     const second = createSecondPersonalEntry({
       familyRef,
       personRef: ownerPersonRef
@@ -219,9 +236,15 @@ describe("Chat Work HTTP route security", () => {
       });
       const conflictBody = conflict.json();
       conflictBodies.push(conflictBody);
+      expect(Object.keys(conflictBody).sort()).toEqual([
+        "category",
+        "code",
+        "message",
+        "retryable"
+      ]);
       const serialized = JSON.stringify(conflictBody);
       expect(serialized).not.toContain(firstBody.message.messageRef);
-      expect(serialized).not.toContain(firstBody.assistantMessageRef);
+      expect(serialized).not.toContain(assistantMessageRef);
       expect(serialized).not.toContain(firstBody.message.content.text);
     }
     expect(conflictBodies[1]).toEqual(conflictBodies[0]);
