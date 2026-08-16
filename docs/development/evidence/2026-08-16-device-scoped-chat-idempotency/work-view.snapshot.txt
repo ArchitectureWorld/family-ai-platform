@@ -1,0 +1,21 @@
+- link "Family AI 个人工作台"
+- region "选择 Agent"
+  - radio "个人助理 空闲" [checked=true]
+- navigation "个人工作台"
+  - button "Chat 持续对话"
+  - button "Work 长期事项"
+- region "最近 WORK"
+  - heading "最近 WORK" [level=2]
+  - button "创建 Work"
+- button "退出当前会话"
+- button "移除此浏览器"
+- heading "使用 个人助理 推进重要事项" [level=2]
+- region "选择一个 Work"
+  - heading "选择一个 Work" [level=2]
+  - combobox "选择 Work" [expanded=false]
+    - option "选择 Work" [selected]
+  - button "选择 Work"
+  - heading "让 个人助理 继续推进" [level=3]
+  - button "添加 Work 附件" [disabled]
+  - textbox "Work 消息输入" [disabled]
+  - button "发送" [disabled]

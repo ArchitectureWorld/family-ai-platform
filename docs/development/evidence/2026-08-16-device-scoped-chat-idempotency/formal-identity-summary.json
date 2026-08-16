@@ -1,0 +1,15 @@
+{
+  "endpoint": "127.0.0.1:8790",
+  "listener": {
+    "address": "127.0.0.1",
+    "port": 8790,
+    "loopbackOnly": true,
+    "beforeAfterMatched": true
+  },
+  "healthBodySha256": "169e9de22c2ac0692d38b07ecfd8800519e99140c49bb935cb3cadb47f252f1b",
+  "containerId": "b4c2f7876e6d80a2731a7782e3a5cb88a32478e43234723958b7929ce7451fb0",
+  "imageId": "sha256:00d6a37fd5ec8e35e85eeb0e70eb5d856647e1452afff01f9ba98b94d6ae7ce7",
+  "r3FormalIdentitySha256": "a0b63124562e43407d5388aded11ffe9cf0edb881c2a9fed98206ad8b43126f2",
+  "r3BeforeAfterMatched": true,
+  "serviceRestartedOrDeployed": false
+}

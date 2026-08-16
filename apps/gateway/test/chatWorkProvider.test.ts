@@ -16,7 +16,11 @@ import { AgentManagementRepository } from "../src/agentManagement.js";
 import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
 import { ChatWorkMessageService } from "../src/chatWorkMessageService.js";
 import { ChatWorkProviderRepository } from "../src/chatWorkProvider.js";
-import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
+import {
+  openGatewayDatabase,
+  sha256,
+  type GatewayDatabase
+} from "../src/database.js";
 import { FamilyDomainRepository } from "../src/familyDomain.js";
 
 const initialNow = "2026-07-23T16:00:00.000Z";
@@ -369,6 +373,38 @@ describe("Chat Work Message service", () => {
     };
   }
 
+  function bindSecondOwnerDevice(): string {
+    const deviceRef = "device:second-owner-provider";
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO managed_devices
+         (device_ref, display_name, terminal_type, platform, status, credential_hash,
+          created_at, updated_at, revoked_at)
+         VALUES(?, 'Second Owner Web', 'web', 'test', 'active', ?, ?, ?, NULL)`
+      ).run(
+        deviceRef,
+        sha256("second-owner-provider-credential"),
+        currentNow.toISOString(),
+        currentNow.toISOString()
+      );
+      db.prepare(
+        `INSERT INTO device_bindings
+         (device_binding_ref, device_ref, owner_scope, family_ref, person_ref,
+          status, bound_at, revoked_at)
+         SELECT 'device-binding:second-owner-provider', ?, 'person', family_ref, ?,
+                'active', ?, NULL
+         FROM family_memberships
+         WHERE person_ref = ? AND status = 'active'`
+      ).run(
+        deviceRef,
+        ownerPersonRef,
+        currentNow.toISOString(),
+        ownerPersonRef
+      );
+    })();
+    return deviceRef;
+  }
+
   it("continues one Provider Session per Thread and isolates Work Context", async () => {
     const adapter = new FakeProviderAdapter({ clock: () => currentNow });
     const service = new ChatWorkMessageService(
@@ -452,6 +488,60 @@ describe("Chat Work Message service", () => {
       personRef: ownerPersonRef,
       threadRef: chat.chat.threadRef
     }).messages).toHaveLength(2);
+  });
+
+  it("rejects another device before replaying a successful Provider Turn", async () => {
+    const adapter = new FakeProviderAdapter({ clock: () => currentNow });
+    const service = new ChatWorkMessageService(
+      domainRepository,
+      providerRepository,
+      adapter,
+      () => currentNow
+    );
+    const chat = domainRepository.ensureHomeChat({
+      personRef: ownerPersonRef,
+      timezone: "UTC",
+      localDate: "2026-07-23"
+    });
+    const input = command(chat.chat.threadRef, "cross-device");
+    const first = await service.sendPersonMessage(input);
+    const secondDeviceRef = bindSecondOwnerDevice();
+
+    await expect(service.sendPersonMessage({
+      ...input,
+      deviceRef: secondDeviceRef
+    })).rejects.toMatchObject({
+      code: "THREAD_MESSAGE_CONFLICT",
+      statusCode: 409
+    });
+    await expect(service.sendPersonMessage({
+      ...input,
+      deviceRef: secondDeviceRef,
+      content: {
+        ...input.content,
+        text: "不同正文也不得形成内容 oracle。"
+      }
+    })).rejects.toMatchObject({
+      code: "THREAD_MESSAGE_CONFLICT",
+      statusCode: 409
+    });
+
+    const replayed = await service.sendPersonMessage(input);
+    expect(replayed).toMatchObject({
+      message: first.message,
+      assistantMessageRef: first.assistantMessageRef,
+      replayedProviderTurn: true
+    });
+    expect(adapter.calls).toHaveLength(1);
+    const messages = domainRepository.listThreadMessages({
+      personRef: ownerPersonRef,
+      threadRef: chat.chat.threadRef
+    }).messages;
+    expect(messages).toHaveLength(2);
+    expect(messages.map((message) => message.actor.type)).toEqual([
+      "person",
+      "assistant"
+    ]);
   });
 
   it("resolves the adapter from the persisted Provider Profile", async () => {

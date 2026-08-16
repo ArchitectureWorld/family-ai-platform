@@ -1,0 +1,25 @@
+{
+  "databaseAggregate": {
+    "person": {
+      "count": 3,
+      "minThreadSequence": 1,
+      "maxThreadSequence": 5
+    },
+    "assistant": {
+      "count": 3,
+      "minThreadSequence": 2,
+      "maxThreadSequence": 6
+    }
+  },
+  "cleanup": {
+    "automationBrowserClosed": true,
+    "captureWrapperRemoved": true,
+    "captureWrapperByteReviewAvailable": false,
+    "evidenceRuntimeDestroyed": true,
+    "containerCount": 0,
+    "networkCount": 0,
+    "listenerCount": 0,
+    "mainPreExistingModifiedFileCount": 4,
+    "targetWorktreeCleanAtTeardown": true
+  }
+}

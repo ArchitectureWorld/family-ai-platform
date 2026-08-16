@@ -644,21 +644,24 @@ authorization scope = deviceRef + memberRef + conversationRef + agentRef
 request fingerprint = deviceRef + entryAudience + clientMessageId/idempotencyKey + normalizedRequestHash
 ```
 
-- [ ] 安全最低要求：两个不同 device 使用相同 `clientMessageId`/key 时绝不返回另一设备缓存的消息或 Provider 结果。
-- [ ] 推荐的无 Schema 最小语义：同 Thread 的 `clientMessageId` 继续是全局逻辑消息 ID；另一合法 device 复用它时返回稳定 `THREAD_MESSAGE_CONFLICT`，不泄露旧响应。`connectionRef` 不进入指纹，允许同 device 断线重连。
-- [ ] **本计划唯一授权方案是无 Schema 的跨设备 conflict 语义。** 如果产品明确要求“不同 device 可独立使用相同 clientMessageId”，立即停止 B2 和所有尚未开始的 migration 任务，先写 superseding 设计并重画 migration 串行链、整体重编号；在新计划获批前不得开始 B3/V10，也不得由 B2 自行创建 migration。
-- [ ] 同 device、同 key、同 body：只执行一次并重放同一结果。
-- [ ] 同 device、同 key、不同 body：返回稳定 conflict，不调用 Provider。
-- [ ] 授权检查先于缓存命中；撤销 device 后不能读旧幂等结果。
+- [x] 安全最低要求：两个不同 device 使用相同 `clientMessageId`/key 时绝不返回另一设备缓存的消息或 Provider 结果。
+- [x] 推荐的无 Schema 最小语义：同 Thread 的 `clientMessageId` 继续是全局逻辑消息 ID；另一合法 device 复用它时返回稳定 `THREAD_MESSAGE_CONFLICT`，不泄露旧响应。`connectionRef` 不进入指纹，允许同 device 断线重连。
+- [x] **本计划唯一授权方案是无 Schema 的跨设备 conflict 语义。** 如果产品明确要求“不同 device 可独立使用相同 clientMessageId”，立即停止 B2 和所有尚未开始的 migration 任务，先写 superseding 设计并重画 migration 串行链、整体重编号；在新计划获批前不得开始 B3/V10，也不得由 B2 自行创建 migration。
+- [x] 同 device、同 key、同 body：只执行一次并重放同一结果。
+- [x] 同 device、同 key、不同 body：返回稳定 conflict，不调用 Provider。
+- [x] 授权检查先于缓存命中；撤销 device 后不能读旧幂等结果。
 
 **Step 2：RED 与最小实现**
 
-- [ ] 先用 Route/Domain 测试证明跨 device 发生错误复用。
-- [ ] 保留现有 thread_ref + client_message_id 唯一索引；命中旧消息后先比较 origin.deviceRef 和 entryAudience，再比较现有逻辑 fingerprint。
-- [ ] device 或 audience 不同统一返回 THREAD_MESSAGE_CONFLICT，不回显旧 message/Provider 结果；connectionRef 仍不参与指纹。
-- [ ] 所有命中路径先完成当前 device、member、thread、agent 授权；本任务不创建 migration。
+- [x] 先用 Route/Domain 测试证明跨 device 发生错误复用。
+- [x] 保留现有 thread_ref + client_message_id 唯一索引；命中旧消息后先比较 origin.deviceRef，再比较现有逻辑 fingerprint。entryAudience 已由命中前的 provenance 校验处理。
+- [x] device 不同返回与 payload mismatch 相同的 THREAD_MESSAGE_CONFLICT，不回显旧 message/Provider 结果；错误 audience/provenance 在查询前按原边界拒绝，connectionRef 仍不参与指纹。
+- [x] 所有命中路径先完成当前 device、member、thread、agent 授权；本任务不创建 migration。
 
-**验证：** 聚焦安全测试、Provider 调用次数、完整门禁和重启后幂等重放；Schema 保持 V9。
+**验证：** 聚焦 RED `3 failed / 22 passed`，GREEN `25/25`，邻近
+领域回归 `21/21`，加强 route/provider 泄漏断言后 `11/11`；完整
+`npm run check` 为 94 files / 913 passed / 0 failed / 0 skipped。同一不可变
+候选完成 core/attachments 和真实浏览器重启旅程；Schema 保持 V9。
 
 ### Task B3：移动配对 claim 只能完成一次
 
@@ -1076,9 +1079,9 @@ git diff --check
 | A4 CI 发布阻断门禁 | 已合入 | PR #34；合并提交 `5ec0840`；精确 SHA 镜像、隔离 runtime 和 CI 六项检查已纳入门禁 |
 | A5 整体备份与恢复基础 | 已合入 | PR #35；合并提交 `be6a52c`；sealed snapshot、candidate staging、atomic restore 与 legacy V3 副本演练通过 |
 | A6 文档事实校正 | 已合入 | PR #36；合并提交 `5169efb`；源码、隔离验收与正式 `8790` 事实分层已校正 |
-| B1a 禁用 Hermes argv | 已实现，待独立 PR | 基于 A6 后 `5169efb`；Hermes 零 spawn/fail-closed、Codex stdin 回归与本地全量门禁通过 |
+| B1a 禁用 Hermes argv | 已合入 | PR #37；合并提交 `cd742fb532359e2001783e4ae87e2fd3b970459f`；Hermes 零 spawn/fail-closed、Codex stdin 回归与门禁通过 |
 | B1b Hermes 私密输入 | 外部前置待核 | 依赖 B1a 和 Hermes `--query-stdin` 等受支持能力 |
-| B2 device 级幂等 | 待开始 | 依赖 A6；优先无 Schema 的跨设备 conflict 语义 |
+| B2 device 级幂等 | 已实现，待独立 PR | 基于 B1a merge `cd742fb`；无 Schema 的跨设备 conflict 语义，宿主、不可变候选、隔离验收和真实浏览器门禁已通过 |
 | B3 配对 claim 原 Session 重放 | 待开始 | 依赖 A5/A6；预期 V10，现场确认 head |
 | B4 禁用 LAN Preview | 待开始 | 第一阶段固定`disabled-verified`；未来开放需另立治理任务 |
 | C1 附件事务与启动对账 | 待开始 | 依赖 A2/A5/B3；预期 V11 |

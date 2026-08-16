@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "evidenceRun": "R3",
+  "sourceCommit": "c59cd3f2c8ed0bc813ff0506f4dd120f66b5d27d",
+  "imageId": "sha256:50c5bd5857f3bf9dba3cdb31a757825cc9733da36d0c290929b50e046c01a25b",
+  "agentBrowserVersion": "0.27.0",
+  "journeyRecordCount": 19,
+  "allExitCodesZero": true,
+  "steps": [
+    {
+      "step": "runtime_started",
+      "port": 32816,
+      "sourceImageMatches": true,
+      "runtimeMode": "0700",
+      "manifestMode": "0600"
+    },
+    {
+      "step": "core_acceptance",
+      "port": 32817,
+      "passed": true
+    },
+    {
+      "step": "attachment_acceptance",
+      "port": 32818,
+      "passed": true,
+      "twoChunkRestartShaPreserved": true
+    },
+    {
+      "step": "browser_entry_ready",
+      "port": 32818
+    },
+    {
+      "step": "browser_opened",
+      "fragmentCleared": true,
+      "searchEmpty": true,
+      "hasContent": true,
+      "overlayAbsent": true,
+      "chatControl": true,
+      "workControl": true,
+      "composer": true,
+      "identitySha256": "d02431b5bdb4ea6cf713fd86d9a62f4ccfb1df200876d93f6b5cae2774c2e06c"
+    },
+    {
+      "step": "message_one_visible",
+      "personMessageCount": 1,
+      "assistantMessageCount": 1,
+      "overlayAbsent": true
+    },
+    {
+      "step": "two_turns_before_refresh",
+      "personMessageCount": 2,
+      "assistantMessageCount": 2,
+      "overlayAbsent": true
+    },
+    {
+      "step": "after_browser_refresh",
+      "personMessageCount": 2,
+      "assistantMessageCount": 2,
+      "historyRecovered": true,
+      "fragmentCleared": true,
+      "overlayAbsent": true
+    },
+    {
+      "step": "gateway_restart",
+      "portBefore": 32818,
+      "portAfter": 32819,
+      "portChanged": true,
+      "formalIdentitySha256": "a0b63124562e43407d5388aded11ffe9cf0edb881c2a9fed98206ad8b43126f2",
+      "formalMatches": true
+    },
+    {
+      "step": "after_gateway_restart",
+      "port": 32819,
+      "personMessageCount": 2,
+      "assistantMessageCount": 2,
+      "historyRecovered": true,
+      "identitySha256Before": "d02431b5bdb4ea6cf713fd86d9a62f4ccfb1df200876d93f6b5cae2774c2e06c",
+      "identitySha256After": "d02431b5bdb4ea6cf713fd86d9a62f4ccfb1df200876d93f6b5cae2774c2e06c",
+      "identityMatches": true,
+      "overlayAbsent": true
+    },
+    {
+      "step": "third_turn_after_restart",
+      "personMessageCount": 3,
+      "assistantMessageCount": 3,
+      "overlayAbsent": true
+    },
+    {
+      "step": "work_view_opened",
+      "workView": true,
+      "workSelector": true,
+      "workAttachment": true,
+      "workComposer": true,
+      "workSend": true,
+      "overlayAbsent": true
+    },
+    {
+      "step": "chat_returned_from_work",
+      "personMessageCount": 3,
+      "assistantMessageCount": 3,
+      "chatReturned": true,
+      "overlayAbsent": true
+    },
+    {
+      "step": "final_browser_evidence",
+      "personMessageCount": 3,
+      "assistantMessageCount": 3,
+      "consoleBytes": 0,
+      "errorBytes": 0,
+      "overlayAbsent": true,
+      "screenshotBasename": "family-ai-b2-browser-r3-c59cd3f2.png",
+      "screenshotSha256": "16e8c06c18b7af1f0985047dd34be91567add3d3a78c9f774b3d731789b272ae",
+      "screenshotPersistedInRepository": false
+    },
+    {
+      "step": "screenshot_inspected",
+      "visuallySafe": true,
+      "hasContent": true,
+      "overlayAbsent": true
+    },
+    {
+      "step": "database_final_state",
+      "personMessageCount": 3,
+      "assistantMessageCount": 3
+    },
+    {
+      "step": "browser_closed",
+      "passed": true
+    },
+    {
+      "step": "sensitive_artifacts_removed",
+      "passed": true
+    },
+    {
+      "step": "runtime_destroyed",
+      "port": 32819,
+      "containerCount": 0,
+      "networkCount": 0,
+      "listenerCount": 0,
+      "formalMatches": true,
+      "mainModifiedCount": 4,
+      "targetClean": true
+    }
+  ]
+}
