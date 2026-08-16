@@ -12,6 +12,12 @@
 - 数据库只保存 Token 的 SHA-256 Hash；
 - 容器根文件系统保持只读，只有显式 runtime 数据目录和临时目录可写；
 - 自动测试与 A2–A5 隔离验收只使用 Fake Provider；真实 Provider 调用未纳入自动化或本轮 Preview 证据。
+- Hermes 私密输入默认并显式为 `disabled`：当前 Hermes CLI 只有不安全的
+  `-q <prompt>` 单次调用，因此 Hermes Agent/Profile 仍保留在 catalog 中，
+  但 health 为 offline、invoke 返回 `PROVIDER_UNAVAILABLE` 且不会 spawn。
+  预留的 `query-stdin-v1` 在 B1b 合入前同样 fail-closed；Codex 继续只从
+  stdin 接收 prompt。详见
+  [`Provider 私密输入边界设计`](../../docs/superpowers/specs/2026-08-13-provider-private-input-boundary-design.md)。
 
 ## 分层
 

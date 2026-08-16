@@ -12,11 +12,11 @@
 
 ## 0. 领取规则与人工 Gate
 
-- [ ] 先读根 AGENTS.md、README、Gateway README、总计划和目标模块既有设计。
-- [ ] 创建分支或修改文件前实时刷新远端 main；无法证明本地领先提交已在远端时停止。
-- [ ] B1a、B1b、B2、B3、B4 分别建立 direct-main PR；依赖未合入时不得堆叠。
-- [ ] B1a 无需等待 Hermes 上游，先把已知 argv 泄露路径默认禁用；B1b 才有 Hermes 外部能力 Gate。B4 不设“开放 LAN”选择，直接以第一阶段 loopback/无正式管理员能力不变量为上位约束禁用。
-- [ ] 每项同分支更新本文、总计划和 docs/development 开发记录。
+- [x] B1a 已读根 AGENTS.md、README、Gateway README、总计划和目标模块既有设计。
+- [x] B1a 创建分支或修改文件前已实时刷新远端 main；基线为 `5169efb`。
+- [x] B1a 使用独立 direct-main 分支；B1b、B2、B3、B4 未堆叠进本分支。
+- [x] B1a 不等待 Hermes 上游，先把已知 argv 泄露路径默认禁用；B1b 仍受 Hermes 外部能力 Gate 阻断。
+- [x] B1a 同分支更新本文、总计划和 docs/development 开发记录。
 - [ ] B3 是 V10，必须在 A5 整体备份/恢复合入后开始，并先查询实时 Schema head。
 - [ ] 每个 Task 的最终报告必须逐项填写总计划 0.2 的统一门禁矩阵：聚焦 RED、GREEN/领域回归、`npm ci`/`npm run check`、不可变 build/Docker、隔离 dev-up/acceptance、任务专属容器/浏览器、正式服务/真实 Provider、文档/台账。每项只能写 `PASS`、`FAIL` 或 `SKIP + 具体原因`，不得因某项不适用而删除该行。
 
@@ -43,12 +43,12 @@
 - apps/gateway/README.md
 - 本文、总计划和 `docs/development/2026-08-<实施日>-disable-unsafe-hermes-argv.md`
 
-- [ ] RED 证明当前 real mode 未配置私密输入能力时仍可走 `-q <prompt>` spawn；Preview 脚本也不能隐式启用该路径。
-- [ ] 增加 `FAMILY_AI_HERMES_PRIVATE_INPUT_MODE=disabled|query-stdin-v1`，默认 disabled、未知值 fail-closed。
-- [ ] SDK Hermes adapter 构造参数新增显式 privateInputMode；默认/disabled 的 invoke 直接返回安全错误且零 spawn，禁止其他调用方绕过 Gateway config 直接恢复 `-q`。
-- [ ] Gateway disabled 时保留 Hermes Agent/Profile catalog，但 health=offline，invoke 返回 `PROVIDER_UNAVAILABLE` 且零 spawn；所有脚本显式写 disabled，不能依赖默认值。
-- [ ] query-stdin-v1 在 B1b 合入前也必须 fail-closed 为“能力未注册”，禁止先拼一个上游不存在的参数。
-- [ ] Codex 现有 stdin 路径保持可用并补“不受 Hermes disable 影响”回归。
+- [x] RED 证明当前 real mode 未配置私密输入能力时仍可走 `-q <prompt>` spawn；Preview 脚本也不能隐式启用该路径。
+- [x] 增加 `FAMILY_AI_HERMES_PRIVATE_INPUT_MODE=disabled|query-stdin-v1`，默认 disabled、未知值 fail-closed。
+- [x] SDK Hermes adapter 构造参数新增显式 privateInputMode；默认/disabled 的 invoke 直接返回安全错误且零 spawn，禁止其他调用方绕过 Gateway config 直接恢复 `-q`。
+- [x] Gateway disabled 时保留 Hermes Agent/Profile catalog，但 health=offline，invoke 返回 `PROVIDER_UNAVAILABLE` 且零 spawn；所有脚本显式写 disabled，不能依赖默认值。
+- [x] query-stdin-v1 在 B1b 合入前也必须 fail-closed 为“能力未注册”，禁止先拼一个上游不存在的参数。
+- [x] Codex 现有 stdin 路径保持可用并补“不受 Hermes disable 影响”回归。
 
 验证：
 
@@ -88,9 +88,9 @@
 2026-08-13 现场 Hermes v0.20.0 / 2026.8.3 的 hermes chat --help 只有 -q/--query，没有 stdin 单次 query 参数。实施时必须重新核对当前本机版本和官方文档：
 
 - [ ] 若已有官方 stdin/FD 契约，记录精确 release/commit、帮助输出 hash、上游测试证据和最小 one-shot 证据；
-- [ ] 若仍没有，记录 H0 blocked 并停止 B1b；Hermes 上游修改、分支、测试、发布和 rollback 必须由独立仓库计划及用户授权完成，不在 Family direct-main PR 临场跨仓修改；
-- [ ] B1a 的 Hermes Adapter 继续 disabled/fail-closed，禁止回退到 argv、环境变量、临时文件路径或 shell；
-- [ ] 本仓任务不能修改 Hermes home/profile/model 或重启无关 personal assistants。
+- [x] 2026-08-16 复核仍没有受支持 stdin/FD 单次 query，已记录 H0 blocked 并停止 B1b；未跨仓修改 Hermes；
+- [x] B1a 的 Hermes Adapter 继续 disabled/fail-closed，禁止回退到 argv、环境变量、临时文件路径或 shell；
+- [x] 本仓任务未修改 Hermes home/profile/model，也未重启无关 personal assistants。
 
 ### B1.2 RED
 

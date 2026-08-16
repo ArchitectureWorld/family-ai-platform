@@ -291,6 +291,7 @@ describe("isolated Member Web Preview scripts", () => {
       "FAMILY_AI_HERMES_JARVIS_HOME",
       "FAMILY_AI_HERMES_PERSONAL_HOME",
       "FAMILY_AI_HERMES_PROFILES",
+      "FAMILY_AI_HERMES_PRIVATE_INPUT_MODE",
       "FAMILY_AI_CODEX_EXECUTABLE",
       "FAMILY_AI_CODEX_WORKING_DIRECTORY"
     ]) {
@@ -516,6 +517,7 @@ describe("isolated Member Web Preview scripts", () => {
       "FAMILY_AI_HERMES_JARVIS_HOME",
       "FAMILY_AI_HERMES_PERSONAL_HOME",
       "FAMILY_AI_HERMES_PROFILES",
+      "FAMILY_AI_HERMES_PRIVATE_INPUT_MODE",
       "FAMILY_AI_CODEX_EXECUTABLE",
       "FAMILY_AI_CODEX_WORKING_DIRECTORY",
       "FAMILY_AI_ATTACHMENT_ROOT",
@@ -523,6 +525,7 @@ describe("isolated Member Web Preview scripts", () => {
     ]);
     expect(gatewayEnvironment).toContain("FAMILY_AI_PROVIDER_MODE=real");
     expect(gatewayEnvironment).toContain("FAMILY_AI_HERMES_PROFILES=nsy,zzg,zzh");
+    expect(gatewayEnvironment).toContain("FAMILY_AI_HERMES_PRIVATE_INPUT_MODE=disabled");
     expect(gatewayEnvironment).toContain(
       `FAMILY_AI_ATTACHMENT_ROOT=${join(runtime, "attachments")}`
     );

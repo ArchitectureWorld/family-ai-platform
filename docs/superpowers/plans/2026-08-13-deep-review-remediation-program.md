@@ -600,9 +600,9 @@ git diff --check
 
 **Step 1：能力门禁**
 
-- [ ] 先读当前 Hermes v0.20 与 Codex CLI 的本机 `--help` 和官方文档，确认 stdin、stdin marker 或文件描述符契约；不得猜参数。
-- [ ] 2026-08-13 已现场运行当前 Hermes v0.20 的 `hermes chat --help`：单次调用只有 `-q/--query`，没有受支持的 stdin 参数；执行时仍须复核当前版本。若仍成立，B1b 记录 H0 blocked 并停止；Hermes 上游改造必须是独立跨仓计划和用户授权，不得由 Family direct-main PR 临场修改。
-- [ ] 不论 H0 是否已满足，B1a 都先把已知 `-q <prompt>` 路径改为默认 disabled/零 spawn；若上游能力未完成，Hermes Provider 必须继续 fail-closed，禁止回退到 argv、临时文件路径参数或环境变量传 prompt。
+- [x] 2026-08-16 已读当前 Hermes 与 Codex CLI 的本机 `--help` 和 Hermes 官方 parser/文档，确认私密输入契约；未猜参数。
+- [x] 2026-08-16 复核 Hermes 单次调用仍只有 `-q/--query`，没有受支持的 stdin/FD 参数；已记录 H0 blocked 并停止 B1b，未临场跨仓修改。
+- [x] B1a 已把已知 `-q <prompt>` 路径改为默认 disabled/零 spawn；Hermes Provider 继续 fail-closed，无 argv、临时文件路径参数或环境变量 fallback。
 
 **Step 2：RED**
 
@@ -614,7 +614,7 @@ git diff --check
 **Step 3：实现**
 
 - [ ] `runControlledProcess` 已有有界 stdin、NUL 拒绝、EPIPE、abort 和 timeout 处理；先加回归，只在测试证明缺陷时最小修补，不另造第二套通道。
-- [ ] B1a 增加 `FAMILY_AI_HERMES_PRIVATE_INPUT_MODE=disabled|query-stdin-v1`，默认 disabled；disabled 时 SDK/Gateway 都零 spawn，B1b 合入前 `query-stdin-v1` 也以“能力未注册”fail-closed。
+- [x] B1a 增加 `FAMILY_AI_HERMES_PRIVATE_INPUT_MODE=disabled|query-stdin-v1`，默认 disabled；disabled 时 SDK/Gateway 都零 spawn，B1b 合入前 `query-stdin-v1` 也以“能力未注册”fail-closed。
 - [ ] H0 已满足后，B1b 才让 Hermes CLI adapter 使用经上游证明的 `chat --query-stdin` + stdin，不保留 `-q` fallback；argv 只保留非敏感开关、模型 ID 和 opaque session ref。Codex 已用 stdin，只补回归。
 - [ ] 错误对象和审计只保留 allowlist 字段，不回显输入或本机路径。
 
@@ -1072,11 +1072,11 @@ git diff --check
 | A1 单一认证时钟 | 已合入 | PR #30；合并提交 `29baa8f`；本地与 CI 门禁通过 |
 | A1D 阶段授权规则对齐 | 已合入 | PR #31；合并提交 `5d38293`；授权措辞与 CI 已确认 |
 | A2 Compose 附件持久化 | 已合入 | PR #32；合并提交 `8d3c027`；npm/Docker/隔离附件/真实浏览器与 CI 全绿 |
-| A3 生产依赖安全升级 | 已实现，待独立 PR | production audit 0 High/0 Critical；SSE shutdown 兼容性 RED→GREEN；最终提交 SHA 仍须完整复验 |
-| A4 CI 发布阻断门禁 | 待开始 | 依赖 A2/A3 |
-| A5 整体备份与恢复基础 | 待开始 | 依赖 A4；所有 V10+ migration 的前置门 |
-| A6 文档事实校正 | 待开始 | 依赖 A1–A5 的最新证据 |
-| B1a 禁用 Hermes argv | 待开始 | 依赖 A6；不等待 H0，必须先 fail-closed |
+| A3 生产依赖安全升级 | 已合入 | PR #33；合并提交 `b50dc86`；production audit 0 High/0 Critical，SSE shutdown 兼容性与完整门禁通过 |
+| A4 CI 发布阻断门禁 | 已合入 | PR #34；合并提交 `5ec0840`；精确 SHA 镜像、隔离 runtime 和 CI 六项检查已纳入门禁 |
+| A5 整体备份与恢复基础 | 已合入 | PR #35；合并提交 `be6a52c`；sealed snapshot、candidate staging、atomic restore 与 legacy V3 副本演练通过 |
+| A6 文档事实校正 | 已合入 | PR #36；合并提交 `5169efb`；源码、隔离验收与正式 `8790` 事实分层已校正 |
+| B1a 禁用 Hermes argv | 已实现，待独立 PR | 基于 A6 后 `5169efb`；Hermes 零 spawn/fail-closed、Codex stdin 回归与本地全量门禁通过 |
 | B1b Hermes 私密输入 | 外部前置待核 | 依赖 B1a 和 Hermes `--query-stdin` 等受支持能力 |
 | B2 device 级幂等 | 待开始 | 依赖 A6；优先无 Schema 的跨设备 conflict 语义 |
 | B3 配对 claim 原 Session 重放 | 待开始 | 依赖 A5/A6；预期 V10，现场确认 head |

@@ -11,6 +11,7 @@ import {
   FakeProviderAdapter,
   HermesCliProviderAdapter,
   ProviderAdapterRouter,
+  type HermesPrivateInputMode,
   type ProviderAdapter
 } from "@family-ai/provider-adapter-sdk";
 import type { GatewayMode } from "./app.js";
@@ -27,6 +28,7 @@ export interface RealGatewayProviderRuntimeConfig {
     jarvisHome: string;
     personalHome: string;
     profiles: readonly string[];
+    privateInputMode: HermesPrivateInputMode;
   };
   codex: {
     executable: string;
@@ -132,6 +134,16 @@ function profileNames(raw: string | undefined): readonly string[] {
   return profiles;
 }
 
+function hermesPrivateInputMode(
+  raw: string | undefined
+): HermesPrivateInputMode {
+  const mode = raw ?? "disabled";
+  if (mode !== "disabled" && mode !== "query-stdin-v1") {
+    throw runtimeConfigurationError();
+  }
+  return mode;
+}
+
 function providerRuntimeConfig(env: NodeJS.ProcessEnv): GatewayProviderRuntimeConfig {
   const mode = env.FAMILY_AI_PROVIDER_MODE ?? "fake";
   if (mode === "fake") return { mode };
@@ -142,7 +154,10 @@ function providerRuntimeConfig(env: NodeJS.ProcessEnv): GatewayProviderRuntimeCo
       executable: existingExecutable(env.FAMILY_AI_HERMES_EXECUTABLE),
       jarvisHome: existingDirectory(env.FAMILY_AI_HERMES_JARVIS_HOME),
       personalHome: existingDirectory(env.FAMILY_AI_HERMES_PERSONAL_HOME),
-      profiles: profileNames(env.FAMILY_AI_HERMES_PROFILES)
+      profiles: profileNames(env.FAMILY_AI_HERMES_PROFILES),
+      privateInputMode: hermesPrivateInputMode(
+        env.FAMILY_AI_HERMES_PRIVATE_INPUT_MODE
+      )
     },
     codex: {
       executable: existingExecutable(env.FAMILY_AI_CODEX_EXECUTABLE),
@@ -196,7 +211,8 @@ export function buildProviderRuntime(
       allowedEnvironment: controlledEnvironment([
         ["HERMES_HOME", config.hermes.jarvisHome]
       ]),
-      providerProfileRef: jarvisProviderRef
+      providerProfileRef: jarvisProviderRef,
+      privateInputMode: config.hermes.privateInputMode
     })
   ] as const);
   agents.push({
@@ -217,7 +233,8 @@ export function buildProviderRuntime(
           ["HERMES_HOME", config.hermes.personalHome]
         ]),
         profileName,
-        providerProfileRef
+        providerProfileRef,
+        privateInputMode: config.hermes.privateInputMode
       })
     ] as const);
     agents.push({
