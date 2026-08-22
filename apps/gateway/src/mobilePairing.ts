@@ -529,10 +529,12 @@ export class MobilePairingRepository {
          (device_ref, display_name, terminal_type, platform, status, credential_hash,
           created_at, updated_at, revoked_at, installation_ref,
           system_version, app_version, device_model, last_seen_at)
-         VALUES(?, ?, 'mobile', 'ios', 'active', ?, ?, ?, NULL, ?, ?, ?, ?, ?)`
+         VALUES(?, ?, ?, ?, 'active', ?, ?, ?, NULL, ?, ?, ?, ?, ?)`
       ).run(
         deviceRef,
         input.device.displayName,
+        input.device.terminalType,
+        input.device.platform,
         credentialHash,
         now,
         now,
