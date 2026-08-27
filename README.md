@@ -101,6 +101,16 @@ Web Device + HttpOnly Personal Entry
 
 以下能力存在于当前 `main` 源码，并由自动化测试覆盖；不能据此推断正式 `8790` 已部署：
 
+正式 Runtime Truth 可重复生成：
+
+```bash
+bash scripts/report-current-runtime.sh > current-runtime.json
+jq empty current-runtime.json
+```
+
+当前四层矩阵与 2026-08-27 只读现场摘要见
+[`docs/development/2026-08-25-current-platform-truth.md`](docs/development/2026-08-25-current-platform-truth.md)。
+
 - Family、Person、Device、EntryBinding 和双 Entry Session；
 - Chat / Work Contracts v1；
 - Home Chat、DailyEpisode、WorkConversation 和 ThreadMessage 持久化；
@@ -141,7 +151,7 @@ Web Device + HttpOnly Personal Entry
 | development LAN Preview | 是，非正式信任模型 | 是 | 当前监听 `8791/9080/9443`，本轮 HTTPS 旅程未复验 | 不适用；不属于正式 `8790` |
 | 正式 `8790` | 候选发布工具存在 | CI 六项检查通过 | 不等于正式发布 | 旧 Compose 容器、Schema V3、Fake-only；A2–A5 候选未部署 |
 
-正式容器当前为 `family-ai-platform-foundation-gateway-1`，image ID `sha256:00d6a37f…7ce7`，创建于 2026-07-22，loopback health 正常；system/user `family-ai-gateway.service` 均 inactive。完整现场证据见 [`docs/development/2026-08-16-current-platform-truth.md`](docs/development/2026-08-16-current-platform-truth.md)。
+正式容器当前为 `family-ai-platform-foundation-gateway-1`，image ID `sha256:00d6a37f…7ce7`，创建于 2026-07-22，loopback health 正常；system/user `family-ai-gateway.service` 均 inactive。最新可重复现场证据见 [`docs/development/2026-08-25-current-platform-truth.md`](docs/development/2026-08-25-current-platform-truth.md)。
 
 在后续安全与正式发布 Gate 完成前，不继续 Push Notification、iOS/HarmonyOS、语音或正式 Admin Web 等产品扩展。
 

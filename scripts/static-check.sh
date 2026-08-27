@@ -475,6 +475,7 @@ fi
 
 production_build_files=(Dockerfile compose.yaml package.json)
 for script in scripts/*; do
+  [[ -f "$script" ]] || continue
   case "$script" in
     scripts/static-check.sh|scripts/test-*|scripts/member-preview-*) ;;
     *) production_build_files+=("$script") ;;
