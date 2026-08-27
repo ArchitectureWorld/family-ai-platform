@@ -22,6 +22,7 @@ import {
   reconcileOutgoing
 } from "./thread.js";
 import { createWorkController } from "./work.js";
+import { secureRandomUuid } from "./random.js";
 
 let activeWorkbench = null;
 let requestedGeneration = 0;
@@ -1085,7 +1086,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
       const work = selectedWork(store.getState());
       if (!work) throw new Error("WORK_NOT_SELECTED");
       const idempotencyKey = pendingExecutionKeys.get(work.workConversationRef) ??
-        `canvas-link:${crypto.randomUUID()}`;
+        `canvas-link:${secureRandomUuid()}`;
       pendingExecutionKeys.set(work.workConversationRef, idempotencyKey);
       const result = await api.createExecutionLink(work.workConversationRef, {
         protocolVersion: 1,

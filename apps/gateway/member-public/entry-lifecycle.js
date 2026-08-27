@@ -4,6 +4,7 @@ import {
   INSTALLATION_KEY,
   installationIdForStorageKey
 } from "./entry-storage.js";
+import { secureRandomUuid } from "./random.js";
 
 const CHANNEL_NAME = "family-ai-member-entry-lifecycle";
 const WAKE_TYPES = new Set([
@@ -107,7 +108,7 @@ export function createEntryController(input) {
     AbortControllerClass = globalThis.AbortController,
     eventTarget = globalThis,
     now = () => new Date(),
-    uuid = () => globalThis.crypto.randomUUID(),
+    uuid = () => secureRandomUuid(),
     onViewState = () => {}
   } = input;
 

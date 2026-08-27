@@ -70,6 +70,7 @@ describe("Member Web product entry", () => {
       for (const name of [
         "entry.js",
         "api.js",
+        "random.js",
         "store.js",
         "cache.js",
         "thread.js",
