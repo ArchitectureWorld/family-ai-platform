@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { secureRandomUuid } from "../member-public/random.js";
+import { secureRandomUuid } from "../member-public/pairing.js";
 
 describe("Member secure random UUID", () => {
   it("falls back to getRandomValues with RFC 4122 version and variant bits", () => {

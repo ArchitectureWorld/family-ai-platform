@@ -47,7 +47,6 @@ const productModules = [
   ["/member/assets/api.js", "api.js"],
   ["/member/assets/cache-identity.js", "cache-identity.js"],
   ["/member/assets/pairing.js", "pairing.js"],
-  ["/member/assets/random.js", "random.js"],
   ["/member/assets/entry-storage.js", "entry-storage.js"],
   ["/member/assets/entry-mutation.js", "entry-mutation.js"],
   ["/member/assets/entry-lifecycle.js", "entry-lifecycle.js"],

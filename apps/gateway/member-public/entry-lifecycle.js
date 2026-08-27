@@ -4,7 +4,7 @@ import {
   INSTALLATION_KEY,
   installationIdForStorageKey
 } from "./entry-storage.js";
-import { secureRandomUuid } from "./random.js";
+import { secureRandomUuid } from "./pairing.js";
 
 const CHANNEL_NAME = "family-ai-member-entry-lifecycle";
 const WAKE_TYPES = new Set([

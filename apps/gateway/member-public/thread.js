@@ -5,7 +5,7 @@ import {
   saveDraft as persistDraft,
   saveOutgoing
 } from "./cache.js";
-import { secureRandomUuid } from "./random.js";
+import { secureRandomUuid } from "./pairing.js";
 
 function threadSequence(value) {
   const sequence = Number(value?.threadSequence);

@@ -1,4 +1,4 @@
-import { secureRandomUuid } from "./random.js";
+import { secureRandomUuid } from "./pairing.js";
 
 export const INSTALLATION_KEY = "family-ai-web-installation-id";
 const LOCK_PREFIX = "family-ai-member-entry-lock:";

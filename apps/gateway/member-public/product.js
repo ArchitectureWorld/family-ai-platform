@@ -22,7 +22,7 @@ import {
   reconcileOutgoing
 } from "./thread.js";
 import { createWorkController } from "./work.js";
-import { secureRandomUuid } from "./random.js";
+import { secureRandomUuid } from "./pairing.js";
 
 let activeWorkbench = null;
 let requestedGeneration = 0;
