@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AttachmentPublicMetadata,
   ChatWorkConversion,
@@ -13,9 +13,12 @@ import type {
   WorkProgressSnapshot
 } from "@family-ai/contracts";
 import {
+  executionLinkSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
-  MAX_MESSAGE_ATTACHMENT_BYTES
+  MAX_MESSAGE_ATTACHMENT_BYTES,
+  resourceRefSchema
 } from "@family-ai/contracts";
+import type { ExecutionLink, ResourceRef } from "@family-ai/contracts";
 import type { GatewayDatabase } from "./database.js";
 import { AgentManagementRepository } from "./agentManagement.js";
 import { requireAdminAgentAssignment } from "./adminWorkspace.js";
@@ -53,6 +56,52 @@ export interface CreateWorkFromChatResult {
 
 function nullableString(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value);
+}
+
+function integrationPayloadHash(value: object): string {
+  const canonical = (input: unknown): unknown => {
+    if (Array.isArray(input)) return input.map(canonical);
+    if (input && typeof input === "object") {
+      return Object.fromEntries(
+        Object.entries(input)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, item]) => [key, canonical(item)])
+      );
+    }
+    return input;
+  };
+  return createHash("sha256")
+    .update(JSON.stringify(canonical(value)), "utf8")
+    .digest("hex");
+}
+
+function mapExecutionLink(row: Record<string, unknown>): ExecutionLink {
+  const status = String(row.status);
+  return executionLinkSchema.parse({
+    linkRef: String(row.link_ref),
+    workConversationRef: String(row.work_conversation_ref),
+    externalResource: {
+      schemaVersion: "resource-ref/1.0",
+      system: String(row.external_system),
+      kind: String(row.external_kind),
+      id: String(row.external_resource_ref),
+      uri: `ai://${String(row.external_system)}/${String(row.external_kind)}/${String(row.external_resource_ref)}`
+    },
+    rootSession: {
+      schemaVersion: "resource-ref/1.0",
+      system: "super-canvas",
+      kind: "session",
+      id: String(row.root_session_ref),
+      uri: `ai://super-canvas/session/${String(row.root_session_ref)}`
+    },
+    status,
+    deepLink: nullableString(row.deep_link),
+    sourceSequence: Number(row.source_sequence),
+    createdByPersonRef: String(row.created_by_person_ref),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    revokedAt: nullableString(row.revoked_at)
+  });
 }
 
 function requirePerson(db: GatewayDatabase, personRef: string): void {
@@ -636,6 +685,247 @@ export class ChatWorkDomainRepository {
        ORDER BY t.last_active_at DESC, t.created_at DESC, w.work_conversation_ref`
     ).all(personRef, agentRef) as Array<Record<string, unknown>>;
     return rows.map(mapWorkConversation);
+  }
+
+  createExecutionLink(input: {
+    personRef: string;
+    agentRef?: string;
+    workConversationRef: string;
+    idempotencyKey: string;
+    externalResource: ResourceRef;
+    rootSession: ResourceRef;
+    deepLink: string;
+    sourceSequence: number;
+  }): ExecutionLink {
+    const externalResource = resourceRefSchema.parse(input.externalResource);
+    const rootSession = resourceRefSchema.parse(input.rootSession);
+    if (
+      externalResource.system !== "super-canvas" ||
+      externalResource.kind !== "workflow" ||
+      rootSession.system !== "super-canvas" ||
+      rootSession.kind !== "session"
+    ) {
+      throw new GatewayDomainError(
+        "EXECUTION_LINK_TARGET_INVALID",
+        400,
+        "validation",
+        false,
+        "Execution link target must be a Canvas Workflow and root Session."
+      );
+    }
+    if (!Number.isSafeInteger(input.sourceSequence) || input.sourceSequence < 0) {
+      throw new GatewayDomainError(
+        "EXECUTION_LINK_SOURCE_SEQUENCE_INVALID",
+        400,
+        "validation",
+        false,
+        "Execution link source sequence is invalid."
+      );
+    }
+    const idempotencyKey = input.idempotencyKey.trim();
+    if (idempotencyKey.length < 8 || idempotencyKey.length > 160) {
+      throw new GatewayDomainError(
+        "EXECUTION_LINK_IDEMPOTENCY_INVALID",
+        400,
+        "validation",
+        false,
+        "Execution link idempotency key is invalid."
+      );
+    }
+    const work = input.agentRef
+      ? this.getWorkConversation(input.personRef, input.agentRef, input.workConversationRef)
+      : this.getWorkConversation(input.personRef, input.workConversationRef);
+    if (!work) throw workNotFound();
+    const payloadHash = integrationPayloadHash({
+      workConversationRef: input.workConversationRef,
+      externalResource,
+      rootSession,
+      deepLink: input.deepLink,
+      sourceSequence: input.sourceSequence
+    });
+    return this.db.transaction(() => {
+      const replay = this.db.prepare(
+        `SELECT l.* FROM work_external_links l
+         JOIN work_conversations w
+           ON w.work_conversation_ref = l.work_conversation_ref
+         WHERE l.idempotency_key = ? AND w.person_ref = ?`
+      ).get(idempotencyKey, input.personRef) as Record<string, unknown> | undefined;
+      if (replay) {
+        if (String(replay.payload_sha256) !== payloadHash) {
+          throw new GatewayDomainError(
+            "EXECUTION_LINK_CONFLICT",
+            409,
+            "conflict",
+            false,
+            "The same idempotency key was used with a different payload."
+          );
+        }
+        return mapExecutionLink(replay);
+      }
+      const active = this.db.prepare(
+        `SELECT 1 FROM work_external_links l
+         JOIN work_conversations w
+           ON w.work_conversation_ref = l.work_conversation_ref
+         WHERE l.work_conversation_ref = ? AND w.person_ref = ?
+           AND l.external_system = ? AND l.external_kind = ?
+           AND l.external_resource_ref = ? AND l.status = 'active'`
+      ).get(
+        input.workConversationRef,
+        input.personRef,
+        externalResource.system,
+        externalResource.kind,
+        externalResource.id
+      );
+      if (active) {
+        throw new GatewayDomainError(
+          "EXECUTION_LINK_EXISTS",
+          409,
+          "conflict",
+          false,
+          "This Canvas Workflow is already linked to the Work."
+        );
+      }
+      const now = this.now().toISOString();
+      const linkRef = `execution-link:${randomUUID()}`;
+      this.db.prepare(
+        `INSERT INTO work_external_links
+         (link_ref, work_conversation_ref, external_system, external_kind,
+          external_resource_ref, root_session_ref, deep_link, source_sequence,
+          idempotency_key, payload_sha256, status, created_by_person_ref,
+          created_at, updated_at, revoked_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, NULL)`
+      ).run(
+        linkRef,
+        input.workConversationRef,
+        externalResource.system,
+        externalResource.kind,
+        externalResource.id,
+        rootSession.id,
+        input.deepLink,
+        input.sourceSequence,
+        idempotencyKey,
+        payloadHash,
+        input.personRef,
+        now,
+        now
+      );
+      const row = this.db.prepare(
+        "SELECT * FROM work_external_links WHERE link_ref = ?"
+      ).get(linkRef) as Record<string, unknown>;
+      return mapExecutionLink(row);
+    })();
+  }
+
+  listExecutionLinks(
+    personRef: string,
+    workConversationRef: string,
+    agentRef?: string
+  ): ExecutionLink[] {
+    const work = agentRef
+      ? this.getWorkConversation(personRef, agentRef, workConversationRef)
+      : this.getWorkConversation(personRef, workConversationRef);
+    if (!work) throw workNotFound();
+    const rows = this.db.prepare(
+      `SELECT l.* FROM work_external_links l
+       JOIN work_conversations w
+         ON w.work_conversation_ref = l.work_conversation_ref
+       WHERE l.work_conversation_ref = ? AND w.person_ref = ?
+       ORDER BY l.created_at, l.link_ref`
+    ).all(workConversationRef, personRef) as Array<Record<string, unknown>>;
+    return rows.map(mapExecutionLink);
+  }
+
+  revokeExecutionLink(input: {
+    personRef: string;
+    agentRef?: string;
+    workConversationRef: string;
+    linkRef: string;
+  }): ExecutionLink {
+    const work = input.agentRef
+      ? this.getWorkConversation(
+        input.personRef,
+        input.agentRef,
+        input.workConversationRef
+      )
+      : this.getWorkConversation(input.personRef, input.workConversationRef);
+    if (!work) throw workNotFound();
+    return this.db.transaction(() => {
+      const row = this.db.prepare(
+        `SELECT l.* FROM work_external_links l
+         JOIN work_conversations w
+           ON w.work_conversation_ref = l.work_conversation_ref
+         WHERE l.link_ref = ? AND l.work_conversation_ref = ? AND w.person_ref = ?`
+      ).get(
+        input.linkRef,
+        input.workConversationRef,
+        input.personRef
+      ) as Record<string, unknown> | undefined;
+      if (!row) throw workNotFound();
+      if (String(row.status) === "revoked") return mapExecutionLink(row);
+      const now = this.now().toISOString();
+      this.db.prepare(
+        `UPDATE work_external_links
+         SET status = 'revoked', deep_link = NULL, revoked_at = ?, updated_at = ?
+         WHERE link_ref = ? AND status = 'active'`
+      ).run(now, now, input.linkRef);
+      const updated = this.db.prepare(
+        "SELECT * FROM work_external_links WHERE link_ref = ?"
+      ).get(input.linkRef) as Record<string, unknown>;
+      return mapExecutionLink(updated);
+    })();
+  }
+
+  selectedWorkMessageRefs(input: {
+    personRef: string;
+    agentRef: string;
+    workConversationRef: string;
+    messageRefs: readonly string[];
+  }): ResourceRef[] {
+    const work = this.getWorkConversation(
+      input.personRef,
+      input.agentRef,
+      input.workConversationRef
+    );
+    if (!work) throw workNotFound();
+    const selected: ResourceRef[] = [];
+    const query = this.db.prepare(
+      `SELECT m.message_ref
+       FROM thread_messages m
+       JOIN work_conversations w ON w.thread_ref = m.thread_ref
+       WHERE m.message_ref = ? AND w.work_conversation_ref = ?
+         AND w.person_ref = ? AND w.agent_ref = ?`
+    );
+    for (const messageRef of input.messageRefs) {
+      const row = query.get(
+        messageRef,
+        input.workConversationRef,
+        input.personRef,
+        input.agentRef
+      ) as { message_ref: string } | undefined;
+      if (!row) {
+        throw new GatewayDomainError(
+          "EXECUTION_LINK_MESSAGE_INVALID",
+          400,
+          "validation",
+          false,
+          "Selected message does not belong to this Work."
+        );
+      }
+      selected.push(resourceRefSchema.parse({
+        schemaVersion: "resource-ref/1.0",
+        system: "family-ai",
+        kind: "message",
+        id: row.message_ref,
+        uri: `ai://family-ai/message/${row.message_ref}`
+      }));
+    }
+    return selected;
+  }
+
+  resolveExecutionWorkAgent(personRef: string, workConversationRef: string): string {
+    const agentRef = this.resolveWorkAgent(personRef, workConversationRef);
+    if (!agentRef) throw workNotFound();
+    return agentRef;
   }
 
   createAdminWorkConversation(input: {

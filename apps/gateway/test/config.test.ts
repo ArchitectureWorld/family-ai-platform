@@ -125,6 +125,35 @@ describe("Gateway configuration", () => {
     })).toThrow("positive integer");
   });
 
+  it("allows only trusted internal Canvas origins", () => {
+    expect(loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      FAMILY_AI_CANVAS_BASE_URL: "http://127.0.0.1:3000"
+    })).toMatchObject({
+      canvasBaseUrl: "http://127.0.0.1:3000",
+      canvasAllowContainerService: false
+    });
+    expect(loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      GATEWAY_CONTAINERIZED: "true",
+      GATEWAY_HOST: "0.0.0.0",
+      FAMILY_AI_CANVAS_BASE_URL: "http://canvas:3000"
+    })).toMatchObject({
+      canvasBaseUrl: "http://canvas:3000",
+      canvasAllowContainerService: true
+    });
+    for (const value of [
+      "https://127.0.0.1:3000",
+      "http://example.com:3000",
+      "http://user:password@127.0.0.1:3000"
+    ]) {
+      expect(() => loadGatewayConfig({
+        GATEWAY_DEVICE_TOKEN: token,
+        FAMILY_AI_CANVAS_BASE_URL: value
+      })).toThrow("FAMILY_AI_CANVAS_BASE_URL");
+    }
+  });
+
   it("rejects non-loopback binding outside the approved container profile", () => {
     expect(() =>
       loadGatewayConfig({

@@ -610,7 +610,7 @@ describe("Member Web render lifecycle", () => {
     const ids = [
       ...readFileSync(indexPath, "utf8").matchAll(/id="([^"]+)"/g),
     ].map((match) => match[1]);
-    expect(ids).toHaveLength(91);
+    expect(ids).toHaveLength(95);
     for (const id of ids)
       expect(harness.document.getElementById(id)).not.toBeNull();
     expect(harness.elements.pairingCode.parentElement).toBe(
@@ -648,7 +648,7 @@ describe("Member Web render lifecycle", () => {
         );
       if (!voidTags.has(tag) && !value.endsWith("/>")) stack.push({ tag, id });
     }
-    expect(actualParents).toHaveLength(91);
+    expect(actualParents).toHaveLength(95);
     for (const [id, expectedParent] of actualParents) {
       let parent = harness.elements[id].parentElement;
       while (parent && !parent.id) parent = parent.parentElement;

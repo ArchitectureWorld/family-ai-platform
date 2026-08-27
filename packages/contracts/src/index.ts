@@ -156,3 +156,4 @@ export * from "./agentManagement.js";
 export * from "./chatWork.js";
 export * from "./sync.js";
 export * from "./webEntry.js";
+export * from "./integrations.js";

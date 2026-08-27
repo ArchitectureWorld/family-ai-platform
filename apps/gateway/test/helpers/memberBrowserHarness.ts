@@ -281,6 +281,10 @@ const tag: Record<string, string> = {
   workSummary: "p",
   workPhaseSummary: "p",
   workProgressGroups: "div",
+  executionLinkStatus: "p",
+  createExecutionLinkButton: "button",
+  openExecutionLinkButton: "button",
+  revokeExecutionLinkButton: "button",
   workSendMessageButton: "button",
   workComposerStatus: "span",
 };
@@ -354,6 +358,10 @@ export function createMemberDocumentHarness() {
     nodes.workDetailGoal,
     nodes.workSummary,
     nodes.workProgress,
+    nodes.executionLinkStatus,
+    nodes.createExecutionLinkButton,
+    nodes.openExecutionLinkButton,
+    nodes.revokeExecutionLinkButton,
   );
   nodes.workProgress.append(nodes.workPhaseSummary, nodes.workProgressGroups);
   nodes.chatEmptyState.append(nodes.chatEmptyTitle, nodes.chatEmptyMessage);
@@ -453,6 +461,10 @@ export function createMemberDocumentHarness() {
     workProgress: "workDetail",
     workPhaseSummary: "workProgress",
     workProgressGroups: "workProgress",
+    executionLinkStatus: "workDetail",
+    createExecutionLinkButton: "workDetail",
+    openExecutionLinkButton: "workDetail",
+    revokeExecutionLinkButton: "workDetail",
     mobileNavigation: "workspaceView",
     mobileCreateWorkButton: "mobileNavigation",
     createWorkDialog: null,
@@ -864,6 +876,9 @@ export function memberActions(overrides: Record<string, unknown> = {}) {
     retry: vi.fn(async () => ({ status: "succeeded" })),
     toggleMessageSelection: vi.fn(),
     convertChatToWork: vi.fn(async () => undefined),
+    expandInCanvas: vi.fn(async () => null),
+    openExistingCanvas: vi.fn(async () => null),
+    revokeCanvasLink: vi.fn(async () => undefined),
     ...overrides,
   };
 }

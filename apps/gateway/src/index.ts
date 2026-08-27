@@ -15,6 +15,12 @@ const app = await buildGatewayApp({
   providerRouter: runtime.router,
   configuredAgentRuntimes: runtime.agents,
   authoritativeAgentRuntimeCatalog: runtime.authoritative,
+  ...(config.canvasBaseUrl === undefined
+    ? {}
+    : {
+        canvasBaseUrl: config.canvasBaseUrl,
+        canvasAllowContainerService: config.canvasAllowContainerService
+      }),
   ...(config.previewAdminEntryPath === undefined
     ? {}
     : {

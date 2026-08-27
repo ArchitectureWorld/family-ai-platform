@@ -23,6 +23,7 @@ services:
       GATEWAY_CONTAINERIZED: "true"
       GATEWAY_DATABASE_PATH: /app/.runtime/data/gateway.sqlite
       FAMILY_AI_ATTACHMENT_ROOT: /app/.runtime/data/attachments
+      FAMILY_AI_CANVAS_BASE_URL: ${FAMILY_AI_CANVAS_BASE_URL:-}
     ports:
       - "127.0.0.1:8790:8790"
     volumes:

@@ -21,7 +21,7 @@
 | Fake Provider | 是 | 是 | 是 | 是；当前 V3 运行物只确认 Fake |
 | Hermes Provider | 是 | 进程边界测试存在 | 真实调用未验证 | 否 |
 | Codex Provider | 是 | 进程边界测试存在 | 真实调用未验证 | 否 |
-| retained 发布/恢复 | 是 | V3/V9 fixture 覆盖 | stopped fixture 已有证据 | 未部署；本 WP4 不执行发布 |
+| retained 发布/恢复 | 是 | V3/V10 fixture 覆盖 | stopped fixture 已有证据 | 未部署；本 WP4 不执行发布 |
 
 ## 正式 `127.0.0.1:8790` 现场摘要
 
@@ -36,7 +36,7 @@
 - providers：V3/Fake-only；Hermes/Codex 正式能力均 false。
 - systemd：system 与 user `family-ai-gateway.service` 均 inactive。
 
-这些事实与 `scripts/fixtures/runtime-truth/formal-v3.json` 的 Schema、owner、route 与 capability 判定一致。`candidate-v9.json` 只用于测试候选状态，不是正式部署声明。
+这些事实与 `scripts/fixtures/runtime-truth/formal-v3.json` 的 Schema、owner、route 与 capability 判定一致。`candidate-v10.json` 只用于测试候选状态，不是正式部署声明。
 
 ## 可重复生成
 

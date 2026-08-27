@@ -11,7 +11,7 @@ import { FamilyDomainRepository } from "../src/familyDomain.js";
 
 const openAtVersion = openGatewayDatabase as unknown as (
   databasePath: string,
-  options: { migrationLimit: 7 | 8 | 9 }
+  options: { migrationLimit: 7 | 8 | 9 | 10 }
 ) => GatewayDatabase;
 
 describe("attachment metadata migration", () => {
@@ -84,7 +84,7 @@ describe("attachment metadata migration", () => {
     db = openGatewayDatabase(databasePath);
     expect(
       db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()
-    ).toEqual({ version: 9 });
+    ).toEqual({ version: 10 });
     expect(
       db.prepare(
         `SELECT message_ref, thread_sequence, content_text

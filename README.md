@@ -101,6 +101,8 @@ Web Device + HttpOnly Personal Entry
 
 以下能力存在于当前 `main` 源码，并由自动化测试覆盖；不能据此推断正式 `8790` 已部署：
 
+- Family Work 可通过 ResourceRef/AssetRef 幂等创建、打开和撤销 Canvas Workflow 执行链接；实现边界见 [`docs/development/2026-08-27-family-work-canvas-links.md`](docs/development/2026-08-27-family-work-canvas-links.md)。
+
 正式 Runtime Truth 可重复生成：
 
 ```bash

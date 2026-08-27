@@ -46,7 +46,7 @@ CI 分为 `quality`、`production-audit`、`docker-build`、`container-smoke`、
 - `production-audit` 执行 `npm audit --omit=dev --audit-level=high`；
 - `docker-build` 只调用上述 wrapper，并上传以 exact SHA 命名的三文件 artifact；
 - `container-smoke` 在新的 runner 校验 archive hash、加载同一 image ID、重放 capability/build-input receipt，然后以临时 runtime 和唯一 Compose project 运行健康及两分片附件重启验收。
-- `retained-runtime-smoke` 消费同一 sealed artifact，在 stopped 临时容器下执行 V3/V9 snapshot、V9 migration-only candidate stage、附件破坏后的单 syscall restore，以及 rollback bundle 安全物化；它不接触正式 runtime 或端口。
+- `retained-runtime-smoke` 消费同一 sealed artifact，在 stopped 临时容器下执行 V3/V10 snapshot、V10 migration-only candidate stage、附件破坏后的单 syscall restore，以及 rollback bundle 安全物化；它不接触正式 runtime 或端口。
 
 smoke 使用 non-root、只读 root filesystem、`no-new-privileges` 和随机 loopback 端口；不调用 reset，不读取正式 runtime，也不发布正式端口。artifact 不包含环境变量、Token、Cookie、数据库、附件或原始响应。
 

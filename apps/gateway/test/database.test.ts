@@ -30,7 +30,8 @@ const migrationVersions = [
   { version: 6 },
   { version: 7 },
   { version: 8 },
-  { version: 9 }
+  { version: 9 },
+  { version: 10 }
 ];
 
 const mobilePairingColumnNames = [
@@ -306,12 +307,12 @@ describe("gateway database", () => {
         applied_at TEXT NOT NULL
       );
       INSERT INTO schema_migrations(version, applied_at)
-      VALUES(10, '2026-07-25T00:00:00.000Z');
+      VALUES(11, '2026-07-25T00:00:00.000Z');
     `);
     legacy.close();
 
     expect(() => openGatewayDatabase(databasePath)).toThrow(
-      "Unsupported Gateway schema version: 10"
+      "Unsupported Gateway schema version: 11"
     );
   });
 

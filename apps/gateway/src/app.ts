@@ -33,6 +33,11 @@ import { ChatWorkMessageService } from "./chatWorkMessageService.js";
 import { ChatWorkProviderRepository } from "./chatWorkProvider.js";
 import { registerChatWorkRoutes } from "./chatWorkRoutes.js";
 import {
+  HttpCanvasWorkflowClient,
+  WorkExecutionLinkService,
+  type CanvasWorkflowClient
+} from "./workExecutionLinks.js";
+import {
   GatewayRepository,
   openGatewayDatabase,
   runDevelopmentBootstrap,
@@ -83,6 +88,9 @@ export interface BuildGatewayAppOptions {
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
   previewAdminEntryPath?: string;
   previewAdminOrigin?: string;
+  canvasBaseUrl?: string;
+  canvasAllowContainerService?: boolean;
+  canvasWorkflowClient?: CanvasWorkflowClient;
   now?: () => Date;
 }
 
@@ -322,6 +330,21 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     now,
     agentManagementRepository
   );
+  const canvasWorkflowClient = options.canvasWorkflowClient ?? (
+    options.canvasBaseUrl
+      ? new HttpCanvasWorkflowClient(options.canvasBaseUrl, {
+        allowContainerService: options.canvasAllowContainerService === true
+      })
+      : undefined
+  );
+  const executionLinks = canvasWorkflowClient
+    ? new WorkExecutionLinkService(
+      chatWorkRepository,
+      attachmentRepository,
+      canvasWorkflowClient,
+      now
+    )
+    : undefined;
   const mobileDeviceSummaryRepository = new MobileDeviceSummaryRepository(db);
   const mobileRepository = new MobilePairingRepository(db, { now });
   const webEntryRepository = new WebEntryRepository(db, now);
@@ -434,6 +457,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     repository: chatWorkRepository,
     messageService: chatWorkMessageService,
     entryAuthenticator,
+    ...(executionLinks === undefined ? {} : { executionLinks }),
     now
   });
   registerAdminWorkspaceRoutes(app, {

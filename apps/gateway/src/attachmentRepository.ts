@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
+  assetRefSchema,
+  type AssetRef,
   type AttachmentPublicMetadata,
   DEFAULT_FAMILY_ATTACHMENT_QUOTA_BYTES,
   INCOMPLETE_UPLOAD_TTL_MS,
@@ -396,6 +398,48 @@ export class AttachmentRepository {
       downloadUrl:
         `/api/v1/attachments/${encodeURIComponent(attachment.attachmentRef)}`
     };
+  }
+
+  integrationAssetRef(input: {
+    familyRef: string;
+    personRef: string;
+    attachmentRef: string;
+  }): AssetRef {
+    const attachment = this.getOwned(
+      input.familyRef,
+      input.personRef,
+      input.attachmentRef
+    );
+    if (
+      !attachment ||
+      !["ready", "attached"].includes(attachment.state) ||
+      !attachment.detectedMediaType ||
+      !attachment.sha256 ||
+      !attachment.storageKey
+    ) {
+      throw domainError(
+        "ATTACHMENT_NOT_READY",
+        409,
+        "conflict",
+        "附件尚未上传完成。"
+      );
+    }
+    return assetRefSchema.parse({
+      schemaVersion: "asset-ref/1.0",
+      asset: {
+        schemaVersion: "resource-ref/1.0",
+        system: "family-ai",
+        kind: "attachment",
+        id: attachment.attachmentRef,
+        uri: `ai://family-ai/attachment/${attachment.attachmentRef}`
+      },
+      fileName: attachment.fileName,
+      mediaType: attachment.detectedMediaType,
+      sizeBytes: attachment.sizeBytes,
+      sha256: attachment.sha256,
+      sensitivity: "project-private",
+      retrievalMode: "capability"
+    });
   }
 
   requireDownload(input: {

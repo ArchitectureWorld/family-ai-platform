@@ -831,6 +831,7 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     timeZone
   });
   const workController = createWorkController({ api, cache, store, threadController });
+  const pendingExecutionKeys = new Map();
   attachmentController = createAttachmentController({
     api,
     cache,
@@ -1079,6 +1080,38 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
         return work;
       });
     },
+    async expandInCanvas() {
+      assertUsableAgent();
+      const work = selectedWork(store.getState());
+      if (!work) throw new Error("WORK_NOT_SELECTED");
+      const idempotencyKey = pendingExecutionKeys.get(work.workConversationRef) ??
+        `canvas-link:${crypto.randomUUID()}`;
+      pendingExecutionKeys.set(work.workConversationRef, idempotencyKey);
+      const result = await api.createExecutionLink(work.workConversationRef, {
+        protocolVersion: 1,
+        idempotencyKey,
+        messageRefs: [],
+        attachmentRefs: []
+      });
+      pendingExecutionKeys.delete(work.workConversationRef);
+      return result.link;
+    },
+    async openExistingCanvas() {
+      assertUsableAgent();
+      const work = selectedWork(store.getState());
+      if (!work) throw new Error("WORK_NOT_SELECTED");
+      const result = await api.listExecutionLinks(work.workConversationRef);
+      return result.links.find((link) => link.status === "active" && link.deepLink) ?? null;
+    },
+    async revokeCanvasLink() {
+      assertUsableAgent();
+      const work = selectedWork(store.getState());
+      if (!work) throw new Error("WORK_NOT_SELECTED");
+      const result = await api.listExecutionLinks(work.workConversationRef);
+      const link = result.links.find((item) => item.status === "active");
+      if (!link) throw new Error("EXECUTION_LINK_NOT_FOUND");
+      return api.revokeExecutionLink(work.workConversationRef, link.linkRef);
+    },
     async send(target, text) {
       assertUsableAgent();
       const state = store.getState();
@@ -1175,6 +1208,15 @@ async function startWorkbenchGeneration(context, options, generation, eagerStop)
     ),
     createWork: (...args) => runTrackedAction(
       () => actionImplementations.createWork(...args)
+    ),
+    expandInCanvas: (...args) => runTrackedAction(
+      () => actionImplementations.expandInCanvas(...args)
+    ),
+    openExistingCanvas: (...args) => runTrackedAction(
+      () => actionImplementations.openExistingCanvas(...args)
+    ),
+    revokeCanvasLink: (...args) => runTrackedAction(
+      () => actionImplementations.revokeCanvasLink(...args)
     ),
     send: (...args) => runTrackedAction(
       () => actionImplementations.send(...args)

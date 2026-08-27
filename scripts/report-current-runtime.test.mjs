@@ -35,9 +35,9 @@ test('reports the formal V3 Fake-only fixture without upgrading its facts', () =
   });
 });
 
-test('reports candidate V9 capabilities only when fixture evidence contains them', () => {
-  const report = reportWithFixture('candidate-v9');
-  assert.equal(report.runtime.schemaVersion, 9);
+test('reports candidate V10 capabilities only when fixture evidence contains them', () => {
+  const report = reportWithFixture('candidate-v10');
+  assert.equal(report.runtime.schemaVersion, 10);
   assert.equal(report.capabilities.memberWeb, true);
   assert.equal(report.capabilities.attachments, true);
   assert.deepEqual(report.providers, ['fake', 'hermes', 'codex']);

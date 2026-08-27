@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import {
   CHAT_WORK_PROTOCOL_VERSION,
+  createExecutionLinkRequestSchema,
+  createExecutionLinkResponseSchema,
   createWorkConversationRequestSchema,
   createWorkConversationResponseSchema,
   createWorkFromChatRequestSchema,
@@ -10,6 +12,7 @@ import {
   sendThreadMessageRequestSchema,
   sendThreadMessageResponseSchema,
   threadMessageListResponseSchema,
+  executionLinkListResponseSchema,
   workConversationListResponseSchema,
   workConversationRefSchema,
   workProgressSnapshotResponseSchema
@@ -17,6 +20,7 @@ import {
 import { z } from "zod";
 import type { ChatWorkDomainRepository } from "./chatWorkDomain.js";
 import type { ChatWorkMessageService } from "./chatWorkMessageService.js";
+import type { WorkExecutionLinkService } from "./workExecutionLinks.js";
 import {
   requireEntryRequest,
   type EntrySessionAuthenticator
@@ -49,6 +53,13 @@ const threadMessagesQuerySchema = z
 
 const workProgressParamsSchema = z
   .object({ workConversationRef: workConversationRefSchema })
+  .strict();
+
+const executionLinkParamsSchema = z
+  .object({
+    workRef: workConversationRefSchema,
+    linkRef: z.string().regex(/^execution-link:[a-z0-9][a-z0-9._:-]{1,126}$/).optional()
+  })
   .strict();
 
 function invalidRequest(message: string): GatewayDomainError {
@@ -121,10 +132,24 @@ export function registerChatWorkRoutes(
     repository: ChatWorkDomainRepository;
     messageService: ChatWorkMessageService;
     entryAuthenticator: EntrySessionAuthenticator;
+    executionLinks?: WorkExecutionLinkService;
     now?: () => Date;
   }
 ): void {
   const now = input.now ?? (() => new Date());
+
+  const executionLinks = (): WorkExecutionLinkService => {
+    if (!input.executionLinks) {
+      throw new GatewayDomainError(
+        "CANVAS_INTEGRATION_UNAVAILABLE",
+        503,
+        "availability",
+        true,
+        "超级画板执行链接尚未配置。"
+      );
+    }
+    return input.executionLinks;
+  };
 
   app.get("/api/v1/chat", async (request) => {
     const context = requireEntryRequest(request, input.entryAuthenticator, "personal");
@@ -189,6 +214,99 @@ export function registerChatWorkRoutes(
       conversation
     }));
   });
+
+  app.post(
+    "/api/v1/work-conversations/:workRef/execution-links",
+    async (request, reply) => {
+      const context = requireEntryRequest(
+        request,
+        input.entryAuthenticator,
+        "personal"
+      );
+      const params = parseRequest(
+        executionLinkParamsSchema,
+        request.params,
+        "Work 编号不正确。"
+      );
+      const command = parseRequest(
+        createExecutionLinkRequestSchema,
+        request.body,
+        "执行链接请求不正确。"
+      );
+      const agentRef = input.repository.resolveExecutionWorkAgent(
+        context.person.personRef,
+        params.workRef
+      );
+      const link = await executionLinks().create({
+        personRef: context.person.personRef,
+        familyRef: context.family.familyRef,
+        agentRef,
+        workConversationRef: params.workRef,
+        command
+      });
+      return reply.code(201).send(createExecutionLinkResponseSchema.parse({
+        protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+        link
+      }));
+    }
+  );
+
+  app.get(
+    "/api/v1/work-conversations/:workRef/execution-links",
+    async (request) => {
+      const context = requireEntryRequest(
+        request,
+        input.entryAuthenticator,
+        "personal"
+      );
+      const params = parseRequest(
+        executionLinkParamsSchema,
+        request.params,
+        "Work 编号不正确。"
+      );
+      const agentRef = input.repository.resolveExecutionWorkAgent(
+        context.person.personRef,
+        params.workRef
+      );
+      return executionLinkListResponseSchema.parse({
+        protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+        links: executionLinks().list({
+          personRef: context.person.personRef,
+          agentRef,
+          workConversationRef: params.workRef
+        })
+      });
+    }
+  );
+
+  app.delete(
+    "/api/v1/work-conversations/:workRef/execution-links/:linkRef",
+    async (request) => {
+      const context = requireEntryRequest(
+        request,
+        input.entryAuthenticator,
+        "personal"
+      );
+      const params = parseRequest(
+        executionLinkParamsSchema.required({ linkRef: true }),
+        request.params,
+        "执行链接编号不正确。"
+      );
+      const agentRef = input.repository.resolveExecutionWorkAgent(
+        context.person.personRef,
+        params.workRef
+      );
+      return createExecutionLinkResponseSchema.parse({
+        protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
+        link: executionLinks().revoke({
+          personRef: context.person.personRef,
+          agentRef,
+          workConversationRef: params.workRef,
+          linkRef: params.linkRef
+        })
+      });
+    }
+  );
 
   app.get("/api/v1/threads/:threadRef/messages", async (request) => {
     const context = requireEntryRequest(request, input.entryAuthenticator, "personal");

@@ -13,7 +13,7 @@
     "sourceCommit": "ebc2b2017036ddb04b0421d837e9c15eda94d963"
   },
   "runtime": {
-    "schemaVersion": 9,
+    "schemaVersion": 10,
     "restartCount": 1,
     "health": "healthy",
     "createdAt": "2026-08-27T00:00:00.000Z",

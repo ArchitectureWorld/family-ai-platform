@@ -124,7 +124,7 @@ bash "$ROOT_DIR/scripts/runtime-restore.sh" \
   --receipt "$TEST_ROOT/evidence/restore.json" >/dev/null
 
 cmp "$TEST_ROOT/runtime/data/attachments/example.txt" "$TEST_ROOT/original-attachment"
-node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync(process.argv[1])); const c=JSON.parse(fs.readFileSync(process.argv[2])); const r=JSON.parse(fs.readFileSync(process.argv[3])); if(m.schemaVersion!==9||c.beforeSchema!==9||c.afterSchema!==9||r.manifestKind!=="runtime-restore-receipt-v1")process.exit(1)' \
+node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync(process.argv[1])); const c=JSON.parse(fs.readFileSync(process.argv[2])); const r=JSON.parse(fs.readFileSync(process.argv[3])); if(m.schemaVersion!==10||c.beforeSchema!==10||c.afterSchema!==10||r.manifestKind!=="runtime-restore-receipt-v1")process.exit(1)' \
   "$SNAPSHOT/manifest.json" "$TEST_ROOT/evidence/candidate.json" "$TEST_ROOT/evidence/restore.json"
 
 mkdir -m 700 "$TEST_ROOT/runtime-v3" "$TEST_ROOT/runtime-v3/data" "$TEST_ROOT/snapshot-v3-output"
@@ -179,4 +179,4 @@ bash "$ROOT_DIR/scripts/runtime-restore.sh" \
 node --input-type=module -e 'import Database from "better-sqlite3"; const db=new Database(process.argv[1],{readonly:true}); const version=db.prepare("SELECT MAX(version) version FROM schema_migrations").get().version; db.close(); if(version!==3)process.exit(1);' "$TEST_ROOT/runtime-v3/data/gateway.sqlite"
 [[ ! -e "$TEST_ROOT/runtime-v3/data/attachments" ]]
 
-printf 'runtime retained V3/V9 snapshot/candidate/restore fixtures: PASS\n'
+printf 'runtime retained V3/V10 snapshot/candidate/restore fixtures: PASS\n'

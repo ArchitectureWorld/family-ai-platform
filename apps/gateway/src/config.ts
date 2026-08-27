@@ -57,6 +57,8 @@ export interface GatewayConfig {
   providerRuntime: GatewayProviderRuntimeConfig;
   previewAdminEntryPath?: string;
   previewAdminOrigin?: string;
+  canvasBaseUrl?: string;
+  canvasAllowContainerService?: boolean;
 }
 
 function positiveInteger(raw: string | undefined, fallback: number, name: string): number {
@@ -85,6 +87,29 @@ function attachmentDirectory(raw: string | undefined): string {
     return realpathSync(path);
   }
   return path;
+}
+
+function canvasBaseUrl(raw: string | undefined, containerized: boolean): string | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("FAMILY_AI_CANVAS_BASE_URL must be a valid URL");
+  }
+  const trustedHost = ["127.0.0.1", "localhost", "::1"].includes(url.hostname) ||
+    (containerized && url.hostname === "canvas");
+  if (
+    url.protocol !== "http:" ||
+    !trustedHost ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("FAMILY_AI_CANVAS_BASE_URL must be a trusted internal HTTP origin");
+  }
+  return url.origin;
 }
 
 function runtimeConfigurationError(): Error {
@@ -296,6 +321,10 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
   }
 
   const attachmentRoot = attachmentDirectory(env.FAMILY_AI_ATTACHMENT_ROOT);
+  const configuredCanvasBaseUrl = canvasBaseUrl(
+    env.FAMILY_AI_CANVAS_BASE_URL,
+    containerized
+  );
   const attachmentQuotaBytes = positiveInteger(
     env.FAMILY_AI_ATTACHMENT_QUOTA_BYTES,
     21474836480,
@@ -327,6 +356,12 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     attachmentQuotaBytes,
     deviceToken,
     mode,
+    ...(configuredCanvasBaseUrl === undefined
+      ? {}
+      : {
+          canvasBaseUrl: configuredCanvasBaseUrl,
+          canvasAllowContainerService: containerized
+        }),
     ...(previewAdminEntryPath === undefined
       ? {}
       : {

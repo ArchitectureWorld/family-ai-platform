@@ -419,6 +419,17 @@ export function createApiClient(
       method: "POST",
       body: request
     }),
+    listExecutionLinks: (workConversationRef) => apiRequest(
+      `/api/v1/work-conversations/${encodeURIComponent(workConversationRef)}/execution-links`
+    ),
+    createExecutionLink: (workConversationRef, request) => apiRequest(
+      `/api/v1/work-conversations/${encodeURIComponent(workConversationRef)}/execution-links`,
+      { method: "POST", body: request }
+    ),
+    revokeExecutionLink: (workConversationRef, linkRef) => apiRequest(
+      `/api/v1/work-conversations/${encodeURIComponent(workConversationRef)}/execution-links/${encodeURIComponent(linkRef)}`,
+      { method: "DELETE" }
+    ),
     async getWorkProgress(workConversationRef) {
       try {
         return await apiRequest(

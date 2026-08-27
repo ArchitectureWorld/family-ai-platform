@@ -16,7 +16,7 @@ try {
   const schema = database
     .prepare("SELECT MAX(version) AS version FROM schema_migrations")
     .get() as { version: number };
-  if (quick !== "ok" || foreign.length !== 0 || schema.version !== 9) {
+  if (quick !== "ok" || foreign.length !== 0 || schema.version !== 10) {
     throw new Error("MIGRATION_ONLY_VALIDATION_FAILED");
   }
   process.stdout.write(`${JSON.stringify({ schemaVersion: schema.version, quickCheck: quick, foreignKeyViolations: 0 })}\n`);

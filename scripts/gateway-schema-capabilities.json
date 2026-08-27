@@ -60,6 +60,14 @@
       "attachmentJournal": "none",
       "mobileClaimReplay": "bounded-replay-v1",
       "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 10,
+      "migrationHead": 10,
+      "attachments": "present",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "bounded-replay-v1",
+      "providerOperations": "legacy"
     }
   ]
 }

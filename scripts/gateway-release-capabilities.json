@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "capabilitySetId": "foundation-v9",
-  "schemaHead": 9,
+  "capabilitySetId": "work-canvas-links-v1",
+  "schemaHead": 10,
   "clientDatabaseVersion": 2,
   "databaseNameScheme": "identity-scoped-v2",
   "rollbackClientRequired": false,
