@@ -69,7 +69,7 @@ mkdir -m 700 "$CAPABILITY_DIR"
 cp "$ROOT_DIR/scripts/gateway-schema-capabilities.mjs" "$CAPABILITY_DIR/validator.mjs"
 cp "$ROOT_DIR/scripts/gateway-schema-capabilities.json" "$CAPABILITY_DIR/schema.json"
 cp "$ROOT_DIR/scripts/gateway-release-capabilities.json" "$CAPABILITY_DIR/release.json"
-printf 'export const MIGRATION_V9 = `fixture`;\n' > "$CAPABILITY_DIR/database.ts"
+printf 'export const MIGRATION_V10 = `fixture`;\n' > "$CAPABILITY_DIR/database.ts"
 printf '%s\n' \
   'export const MEMBER_CACHE_DATABASE_VERSION = 2;' \
   'export function open(databaseName, indexedDBImpl) {' \
