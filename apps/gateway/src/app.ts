@@ -246,6 +246,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   }
 
   const app = Fastify({ logger: false });
+  app.get("/favicon.ico", async (_request, reply) => reply.code(204).send());
   const attachmentStorage = new AttachmentStorage(
     options.attachmentRoot ??
       join(dirname(options.databasePath), "attachments")

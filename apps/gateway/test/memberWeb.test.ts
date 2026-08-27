@@ -51,6 +51,9 @@ describe("Member Web product entry", () => {
         expect(member.body).not.toContain("验收台");
         expect(member.body).not.toContain("调试日志");
         expect(member.body).not.toContain(token);
+        const favicon = await app.inject({ method: "GET", url: "/favicon.ico" });
+        expect(favicon.statusCode).toBe(204);
+        expect(favicon.body).toBe("");
       } finally {
         await app.close();
       }
