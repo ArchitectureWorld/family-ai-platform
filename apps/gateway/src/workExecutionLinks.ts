@@ -19,11 +19,15 @@ export interface CanvasWorkflowClient {
     actor: ActorContext;
     work: FamilyWorkToCanvas;
   }): Promise<CanvasWorkflowIntegrationResponse>;
+  revokeFamilyWorkflow(input: {
+    actor: ActorContext;
+    workflowId: string;
+  }): Promise<void>;
 }
 
 
 export class HttpCanvasWorkflowClient implements CanvasWorkflowClient {
-  private readonly endpoint: URL;
+  private readonly baseUrl: URL;
 
   constructor(baseUrl: string, options: { allowContainerService?: boolean } = {}) {
     const base = new URL(baseUrl);
@@ -39,7 +43,7 @@ export class HttpCanvasWorkflowClient implements CanvasWorkflowClient {
     ) {
       throw new Error("FAMILY_AI_CANVAS_BASE_URL must be a trusted internal HTTP origin");
     }
-    this.endpoint = new URL("/api/v1/integrations/family-workflows", base);
+    this.baseUrl = base;
   }
 
   async createFamilyWorkflow(input: {
@@ -48,7 +52,7 @@ export class HttpCanvasWorkflowClient implements CanvasWorkflowClient {
   }): Promise<CanvasWorkflowIntegrationResponse> {
     let response: Response;
     try {
-      response = await fetch(this.endpoint, {
+      response = await fetch(new URL("/api/v1/integrations/family-workflows", this.baseUrl), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
@@ -93,6 +97,44 @@ export class HttpCanvasWorkflowClient implements CanvasWorkflowClient {
       );
     }
     return parsed.data;
+  }
+
+  async revokeFamilyWorkflow(input: {
+    actor: ActorContext;
+    workflowId: string;
+  }): Promise<void> {
+    let response: Response;
+    try {
+      response = await fetch(
+        new URL(
+          `/api/v1/integrations/family-workflows/${encodeURIComponent(input.workflowId)}`,
+          this.baseUrl
+        ),
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input.actor),
+          signal: AbortSignal.timeout(10_000)
+        }
+      );
+    } catch {
+      throw new GatewayDomainError(
+        "CANVAS_INTEGRATION_UNAVAILABLE",
+        503,
+        "availability",
+        true,
+        "超级画板暂时不可用，关联尚未解除，请稍后重试。"
+      );
+    }
+    if (!response.ok) {
+      throw new GatewayDomainError(
+        "CANVAS_INTEGRATION_UNAVAILABLE",
+        response.status >= 500 ? 503 : 409,
+        response.status >= 500 ? "availability" : "conflict",
+        response.status >= 500,
+        "超级画板没有确认解除关联，请稍后重试。"
+      );
+    }
   }
 }
 
@@ -215,12 +257,32 @@ export class WorkExecutionLinkService {
     );
   }
 
-  revoke(input: {
+  async revoke(input: {
     personRef: string;
+    familyRef: string;
     agentRef: string;
     workConversationRef: string;
     linkRef: string;
-  }): ExecutionLink {
+  }): Promise<ExecutionLink> {
+    const link = this.repository.listExecutionLinks(
+      input.personRef,
+      input.workConversationRef,
+      input.agentRef
+    ).find((candidate) => candidate.linkRef === input.linkRef);
+    if (!link) {
+      throw new GatewayDomainError(
+        "WORK_NOT_FOUND",
+        404,
+        "permission",
+        false,
+        "没有找到这个执行链接。"
+      );
+    }
+    if (link.status === "revoked") return link;
+    await this.canvas.revokeFamilyWorkflow({
+      actor: this.actorContext(input),
+      workflowId: link.externalResource.id
+    });
     return this.repository.revokeExecutionLink(input);
   }
 }

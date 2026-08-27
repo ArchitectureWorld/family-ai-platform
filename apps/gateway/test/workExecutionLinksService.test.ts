@@ -48,6 +48,7 @@ describe("WorkExecutionLinkService", () => {
 
   function client(): CanvasWorkflowClient & {
     createFamilyWorkflow: ReturnType<typeof vi.fn>;
+    revokeFamilyWorkflow: ReturnType<typeof vi.fn>;
   } {
     return {
       createFamilyWorkflow: vi.fn(async () => ({
@@ -67,7 +68,8 @@ describe("WorkExecutionLinkService", () => {
           uri: "ai://super-canvas/session/session:one"
         },
         deepLink: "http://127.0.0.1:3000/session-alpha/session:one"
-      }))
+      })),
+      revokeFamilyWorkflow: vi.fn(async () => undefined)
     };
   }
 
@@ -130,5 +132,65 @@ describe("WorkExecutionLinkService", () => {
       }
     })).rejects.toThrow("canvas down");
     expect(repository.listExecutionLinks(personRef, workRef)).toEqual([]);
+  });
+
+  it("revokes Canvas authority before hiding the Family deep link", async () => {
+    const canvas = client();
+    const service = new WorkExecutionLinkService(repository, attachments, canvas);
+    const link = await service.create({
+      personRef,
+      familyRef,
+      agentRef: "agent:personal-assistant",
+      workConversationRef: workRef,
+      command: {
+        protocolVersion: 1,
+        idempotencyKey: "work-one-canvas-42",
+        messageRefs: [],
+        attachmentRefs: []
+      }
+    });
+
+    const revoked = await service.revoke({
+      personRef,
+      familyRef,
+      agentRef: "agent:personal-assistant",
+      workConversationRef: workRef,
+      linkRef: link.linkRef
+    });
+
+    expect(canvas.revokeFamilyWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: "workflow:one",
+      actor: expect.objectContaining({ principal: expect.objectContaining({ id: personRef }) })
+    }));
+    expect(revoked.status).toBe("revoked");
+    expect(revoked.deepLink).toBeNull();
+    expect(repository.getWorkConversation(personRef, workRef)).not.toBeNull();
+  });
+
+  it("keeps the Family link active when Canvas revoke is unavailable", async () => {
+    const canvas = client();
+    const service = new WorkExecutionLinkService(repository, attachments, canvas);
+    const link = await service.create({
+      personRef,
+      familyRef,
+      agentRef: "agent:personal-assistant",
+      workConversationRef: workRef,
+      command: {
+        protocolVersion: 1,
+        idempotencyKey: "work-one-canvas-42",
+        messageRefs: [],
+        attachmentRefs: []
+      }
+    });
+    canvas.revokeFamilyWorkflow.mockRejectedValueOnce(new Error("canvas down"));
+
+    await expect(service.revoke({
+      personRef,
+      familyRef,
+      agentRef: "agent:personal-assistant",
+      workConversationRef: workRef,
+      linkRef: link.linkRef
+    })).rejects.toThrow("canvas down");
+    expect(repository.listExecutionLinks(personRef, workRef)[0]?.status).toBe("active");
   });
 });

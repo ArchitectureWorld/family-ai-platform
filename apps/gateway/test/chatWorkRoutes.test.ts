@@ -55,7 +55,8 @@ describe("Chat Work HTTP routes", () => {
         uri: "ai://super-canvas/session/session:http-route"
       },
       deepLink: "http://127.0.0.1:3000/session-alpha/session:http-route"
-    }))
+    })),
+    revokeFamilyWorkflow: vi.fn(async () => undefined)
   };
 
   async function openApp() {

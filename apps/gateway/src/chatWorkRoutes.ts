@@ -298,8 +298,9 @@ export function registerChatWorkRoutes(
       );
       return createExecutionLinkResponseSchema.parse({
         protocolVersion: CHAT_WORK_PROTOCOL_VERSION,
-        link: executionLinks().revoke({
+        link: await executionLinks().revoke({
           personRef: context.person.personRef,
+          familyRef: context.family.familyRef,
           agentRef,
           workConversationRef: params.workRef,
           linkRef: params.linkRef
