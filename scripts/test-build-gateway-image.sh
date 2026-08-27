@@ -47,6 +47,10 @@ grep -Fq '/app/node_modules/@family-ai/contracts/package.json' "$ROOT_DIR/Docker
   || fail 'runtime image does not materialize the contracts workspace package'
 grep -Fq '/app/node_modules/@family-ai/provider-adapter-sdk/package.json' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image does not materialize the provider SDK workspace package'
+grep -Fq '/app/apps/gateway/public /app/apps/gateway/public' "$ROOT_DIR/Dockerfile" \
+  || fail 'runtime image does not materialize shared Admin QR assets'
+grep -Fq 'await access("./apps/gateway/public/qr.js")' "$ROOT_DIR/Dockerfile" \
+  || fail 'runtime image does not verify shared Admin QR assets'
 grep -Fq 'RUN chmod -R a+rX /app' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image does not normalize exact-worktree file modes'
 grep -Fq 'await import("@family-ai/contracts")' "$ROOT_DIR/Dockerfile" \
