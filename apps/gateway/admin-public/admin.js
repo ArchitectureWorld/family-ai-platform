@@ -1,9 +1,7 @@
 import {
   ADMIN_CLEAN_PATH,
   captureAdminHandoff,
-  clearStoredAdminCredential,
-  readStoredAdminCredential,
-  writeStoredAdminCredential
+  clearLegacyStoredAdminCredential
 } from "./admin-entry.js";
 import { AdminApiError, createAdminApi } from "./admin-api.js";
 import { applyAdminShellState } from "./admin-layout.js";
@@ -153,7 +151,6 @@ function renderFamilySetup(bootstrapCredential) {
         ownerName: data.get("ownerName"),
         deviceName: data.get("deviceName")
       });
-      writeStoredAdminCredential(sessionStorage, result.adminCredential);
       let persistenceWarning = "";
       try {
         await createAdminApi({
@@ -525,6 +522,7 @@ async function openPreviewCredential() {
 
 async function start() {
   showAdminState("initializing");
+  clearLegacyStoredAdminCredential(window);
   const rawFragment = window.location.hash;
   const hasQuery = window.location.search !== "";
   if (rawFragment !== "" || hasQuery) {
@@ -535,7 +533,7 @@ async function start() {
   try {
     credential = rawFragment !== ""
       ? captureAdminHandoff(rawFragment)
-      : readStoredAdminCredential(sessionStorage);
+      : undefined;
     if (hasQuery) throw new Error("ADMIN_QUERY_FORBIDDEN");
 
     const status = await createAdminApi({ credential }).onboardingStatus();
@@ -546,18 +544,13 @@ async function start() {
     }
     if (credential?.kind === "entry") {
       try {
-        writeStoredAdminCredential(sessionStorage, credential);
         await renderManagement(credential);
         return;
-      } catch {
-        clearStoredAdminCredential(sessionStorage);
-      }
+      } catch {}
     }
     credential = await openPreviewCredential();
-    writeStoredAdminCredential(sessionStorage, credential);
     await renderManagement(credential);
   } catch {
-    clearStoredAdminCredential(sessionStorage);
     showAdminState("recovery-required");
   }
 }

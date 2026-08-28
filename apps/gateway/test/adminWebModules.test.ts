@@ -26,8 +26,8 @@ async function layoutModule() {
   return import(`${layoutModuleUrl}?test=${Date.now()}-${Math.random()}`);
 }
 
-function memoryStorage() {
-  const values = new Map<string, string>();
+function memoryStorage(initial: Record<string, string> = {}) {
+  const values = new Map<string, string>(Object.entries(initial));
   return {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => values.set(key, value),
@@ -71,21 +71,69 @@ describe("Admin Web entry boundary", () => {
     }
   });
 
-  it("stores only validated credentials and emits the formal authentication headers", async () => {
-    const {
-      adminHeaders,
-      readStoredAdminCredential,
-      writeStoredAdminCredential
-    } = await entryModule();
-    const storage = memoryStorage();
+  it("keeps current-page credentials usable without exposing storage read or write APIs", async () => {
+    const entry = await entryModule();
+    expect(entry).not.toHaveProperty("readStoredAdminCredential");
+    expect(entry).not.toHaveProperty("writeStoredAdminCredential");
+    const credential = entry.captureAdminHandoff(
+      `#entrySessionRef=entry-session%3Apreview-admin&token=${token}`
+    );
+
+    expect(entry.adminHeaders(credential)).toEqual({
+      Authorization: `Bearer ${token}`,
+      "X-Entry-Session-Ref": "entry-session:preview-admin"
+    });
+    expect(entry.adminHeaders({
+      kind: "bootstrap",
+      deviceRef: "device:test",
+      token
+    })).toEqual({
+      Authorization: `Bearer ${token}`,
+      "X-Device-Ref": "device:test"
+    });
+  });
+
+  it("clears only the exact legacy sessionStorage key without reading credential material", async () => {
+    const { clearLegacyStoredAdminCredential } = await entryModule();
+    const storage = memoryStorage({
+      "family-ai.admin.credential": `legacy-${token}`,
+      "family-ai.admin.unrelated": "preserve-me"
+    });
+    const getItem = vi.spyOn(storage, "getItem");
+    const setItem = vi.spyOn(storage, "setItem");
+
+    expect(clearLegacyStoredAdminCredential({ sessionStorage: storage })).toBe(true);
+    expect(storage.getItem("family-ai.admin.credential")).toBeNull();
+    expect(storage.getItem("family-ai.admin.unrelated")).toBe("preserve-me");
+    expect(getItem).toHaveBeenCalledTimes(2);
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when legacy storage cannot be accessed or cleared", async () => {
+    const { clearLegacyStoredAdminCredential } = await entryModule();
+    const leakingWindow = {
+      get sessionStorage(): never {
+        throw new Error(`storage-private-${token}`);
+      }
+    };
+    const leakingStorage = {
+      removeItem(): never {
+        throw new Error(`remove-private-${token}`);
+      }
+    };
+
+    expect(clearLegacyStoredAdminCredential(leakingWindow)).toBe(false);
+    expect(clearLegacyStoredAdminCredential({ sessionStorage: leakingStorage })).toBe(false);
+  });
+
+  it("emits the formal authentication headers for current-page bootstrap flow", async () => {
+    const { adminHeaders } = await entryModule();
     const credential = {
       kind: "entry",
       entrySessionRef: "entry-session:preview-admin",
       token
     };
 
-    writeStoredAdminCredential(storage, credential);
-    expect(readStoredAdminCredential(storage)).toEqual(credential);
     expect(adminHeaders(credential)).toEqual({
       Authorization: `Bearer ${token}`,
       "X-Entry-Session-Ref": "entry-session:preview-admin"
@@ -98,10 +146,6 @@ describe("Admin Web entry boundary", () => {
       Authorization: `Bearer ${token}`,
       "X-Device-Ref": "device:test"
     });
-
-    storage.setItem("family-ai.admin.credential", '{"kind":"entry","token":"bad"}');
-    expect(readStoredAdminCredential(storage)).toBeNull();
-    expect(storage.getItem("family-ai.admin.credential")).toBeNull();
   });
 });
 
