@@ -481,4 +481,32 @@ describe("Admin Web pairing presentation", () => {
     expect(svg).toContain("Family AI Member Web pairing");
     expect(svg).not.toContain("ABCD-EFGH");
   });
+
+  it("builds a same-origin member handoff for the unified Tailscale entry", async () => {
+    const { memberHandoffUrl } = await pairingModule();
+    const pairing = {
+      pairingRef: "pairing:preview",
+      code: "ABCD-EFGH",
+      expiresAt: "2030-01-01T00:05:00.000Z"
+    };
+
+    expect(memberHandoffUrl(
+      "https://admin-yr.tailf7be7d.ts.net:8793",
+      pairing
+    )).toBe(
+      "https://admin-yr.tailf7be7d.ts.net:8793/member/#pairingRef=pairing%3Apreview&code=ABCD-EFGH"
+    );
+    expect(() => memberHandoffUrl(
+      "http://admin-yr.tailf7be7d.ts.net:8793",
+      pairing
+    )).toThrow("ADMIN_PAIRING_ORIGIN_INVALID");
+    expect(() => memberHandoffUrl(
+      "https://admin-yr.tailf7be7d.ts.net.evil.example:8793",
+      pairing
+    )).toThrow("ADMIN_PAIRING_ORIGIN_INVALID");
+    expect(() => memberHandoffUrl(
+      "https://admin-yr.tailf7be7d.ts.net:9443",
+      pairing
+    )).toThrow("ADMIN_PAIRING_ORIGIN_INVALID");
+  });
 });
