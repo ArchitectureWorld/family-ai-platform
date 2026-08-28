@@ -1,12 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as federationContracts from "../src/federation.js";
 import {
   agentDescriptorV1Schema,
-  agentInvocationAuthorityV1Schema,
   agentInvocationRequestV1Schema,
   agentInvocationResultV1Schema,
   federationActorContextV1Schema
 } from "../src/federation.js";
 import { federationActorContextV1Schema as publicFederationActorContextV1Schema } from "../src/index.js";
+import * as publicContracts from "../src/index.js";
 
 const actor = {
   protocolVersion: 1,
@@ -45,29 +46,57 @@ const invocation = {
   timeoutMs: 30000
 };
 
+const result = {
+  protocolVersion: 1,
+  invocationRef: "invocation:demo-1",
+  correlationRef: "correlation:demo-1",
+  status: "succeeded" as const,
+  output: "已规划三道菜。",
+  completedAt: "2030-01-01T00:00:30.000Z",
+  externalSessionRef: "external-session:opaque-demo-1"
+};
+
 describe("Family federation and Agent invocation contracts v1", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2029-01-01T00:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("accepts the literal Actor fixture and bounded public Agent contracts", () => {
     expect(federationActorContextV1Schema.parse(actor)).toEqual(actor);
     expect(publicFederationActorContextV1Schema.parse(actor)).toEqual(actor);
     expect(agentDescriptorV1Schema.parse(agent)).toEqual(agent);
     expect(agentInvocationRequestV1Schema.parse(invocation)).toEqual(invocation);
     expect(
-      agentInvocationResultV1Schema.parse({
-        protocolVersion: 1,
-        invocationRef: "invocation:demo-1",
-        correlationRef: "correlation:demo-1",
-        status: "succeeded",
-        output: "已规划三道菜。",
-        completedAt: "2030-01-01T00:00:30.000Z",
-        externalSessionRef: "external-session:opaque-demo-1"
-      })
+      agentInvocationResultV1Schema.parse(result)
     ).toMatchObject({ status: "succeeded", output: "已规划三道菜。" });
   });
 
-  it("rejects extra identity data, empty scopes, unsupported products, expired Actors, and raw paths", () => {
+  it("rejects unknown fields on every public object and keeps paths and secrets out", () => {
+    expect(agentDescriptorV1Schema.safeParse({ ...agent, unexpected: true }).success).toBe(false);
     expect(
       federationActorContextV1Schema.safeParse({ ...actor, serviceIdentity: "broker:local" }).success
     ).toBe(false);
+    expect(
+      agentInvocationRequestV1Schema.safeParse({ ...invocation, unexpected: true }).success
+    ).toBe(false);
+    expect(agentInvocationResultV1Schema.safeParse({ ...result, stderr: "raw provider error" }).success).toBe(
+      false
+    );
+    expect(agentDescriptorV1Schema.safeParse({ ...agent, token: "test-token" }).success).toBe(false);
+    expect(agentInvocationRequestV1Schema.safeParse({ ...invocation, localPath: "/srv/agent" }).success).toBe(
+      false
+    );
+    expect(agentInvocationRequestV1Schema.safeParse({ ...invocation, agentRef: "/srv/agent" }).success).toBe(
+      false
+    );
+  });
+
+  it("rejects empty scopes, unsupported products, and expired Actors", () => {
     expect(federationActorContextV1Schema.safeParse({ ...actor, roles: [] }).success).toBe(false);
     expect(federationActorContextV1Schema.safeParse({ ...actor, product: "browser" }).success).toBe(
       false
@@ -78,49 +107,11 @@ describe("Family federation and Agent invocation contracts v1", () => {
         expiresAt: "2000-01-01T00:00:00.000Z"
       }).success
     ).toBe(false);
-    expect(agentInvocationRequestV1Schema.safeParse({ ...invocation, agentRef: "/srv/agent" }).success).toBe(
-      false
-    );
-    expect(
-      agentInvocationResultV1Schema.safeParse({
-        protocolVersion: 1,
-        invocationRef: "invocation:demo-1",
-        correlationRef: "correlation:demo-1",
-        status: "failed",
-        output: "调用未完成",
-        completedAt: "2030-01-01T00:00:30.000Z",
-        externalSessionRef: "external-session:opaque-demo-1",
-        stderr: "raw provider error"
-      }).success
-    ).toBe(false);
   });
 
-  it("binds an invocation to the Actor context, person, product, and assigned Agent", () => {
-    const authority = {
-      actor,
-      personRef: "person:demo",
-      agentRef: "agent:demo",
-      invocation
-    };
-
-    expect(agentInvocationAuthorityV1Schema.safeParse(authority).success).toBe(true);
-    expect(
-      agentInvocationAuthorityV1Schema.safeParse({
-        ...authority,
-        agentRef: "agent:other"
-      }).success
-    ).toBe(false);
-    expect(
-      agentInvocationAuthorityV1Schema.safeParse({
-        ...authority,
-        personRef: "person:other"
-      }).success
-    ).toBe(false);
-    expect(
-      agentInvocationAuthorityV1Schema.safeParse({
-        ...authority,
-        invocation: { ...invocation, product: "me" }
-      }).success
-    ).toBe(false);
+  it("does not publish an allocation authority contract", () => {
+    expect(federationContracts).not.toHaveProperty("AgentInvocationAuthorityV1");
+    expect(federationContracts).not.toHaveProperty("agentInvocationAuthorityV1Schema");
+    expect(publicContracts).not.toHaveProperty("agentInvocationAuthorityV1Schema");
   });
 });

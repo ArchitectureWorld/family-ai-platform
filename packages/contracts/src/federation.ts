@@ -50,13 +50,6 @@ export interface AgentInvocationResultV1 {
   externalSessionRef: string;
 }
 
-export interface AgentInvocationAuthorityV1 {
-  actor: FederationActorContextV1;
-  personRef: string;
-  agentRef: string;
-  invocation: AgentInvocationRequestV1;
-}
-
 const protocolVersionSchema = z.literal(1);
 const timestampSchema = z.string().datetime({ offset: true });
 const productIdSchema = z.enum(["family", "canvas", "me"]);
@@ -145,42 +138,3 @@ export const agentInvocationResultV1Schema = z
     externalSessionRef: externalSessionRefSchema
   })
   .strict();
-
-export const agentInvocationAuthorityV1Schema = z
-  .object({
-    actor: federationActorContextV1Schema,
-    personRef: personRefSchema,
-    agentRef: agentRefSchema,
-    invocation: agentInvocationRequestV1Schema
-  })
-  .strict()
-  .superRefine((value, context) => {
-    if (value.personRef !== value.actor.personRef) {
-      context.addIssue({
-        code: "custom",
-        path: ["personRef"],
-        message: "personRef must match the Actor context"
-      });
-    }
-    if (value.agentRef !== value.invocation.agentRef) {
-      context.addIssue({
-        code: "custom",
-        path: ["agentRef"],
-        message: "agentRef must match the invocation"
-      });
-    }
-    if (value.invocation.product !== value.actor.product) {
-      context.addIssue({
-        code: "custom",
-        path: ["invocation", "product"],
-        message: "invocation product must match the Actor context"
-      });
-    }
-    if (value.invocation.actorContextRef !== value.actor.contextRef) {
-      context.addIssue({
-        code: "custom",
-        path: ["invocation", "actorContextRef"],
-        message: "actorContextRef must match the Actor context"
-      });
-    }
-  });
