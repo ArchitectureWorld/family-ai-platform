@@ -913,6 +913,51 @@ CREATE UNIQUE INDEX work_external_links_active_target_idx
   WHERE status = 'active';
 `;
 
+const MIGRATION_V11 = `
+CREATE TABLE federation_services (
+  service_ref TEXT PRIMARY KEY,
+  product TEXT NOT NULL CHECK(product IN ('canvas', 'me')),
+  token_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK(status IN ('active', 'revoked')),
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+
+CREATE TABLE agent_discovery_observations (
+  agent_ref TEXT PRIMARY KEY REFERENCES agents(agent_ref),
+  kind TEXT NOT NULL CHECK(kind IN ('agent', 'harness', 'provider', 'tool-gateway', 'terminal')),
+  runtime TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('available', 'unavailable', 'disabled')),
+  capabilities_json TEXT NOT NULL,
+  observed_at TEXT NOT NULL
+);
+
+CREATE TABLE federation_actor_contexts (
+  context_ref TEXT PRIMARY KEY,
+  product TEXT NOT NULL,
+  family_ref TEXT NOT NULL,
+  person_ref TEXT NOT NULL,
+  device_ref TEXT NOT NULL,
+  entry_session_ref TEXT NOT NULL,
+  assignment_version INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE agent_invocation_audit (
+  invocation_ref TEXT PRIMARY KEY,
+  correlation_ref TEXT NOT NULL,
+  product TEXT NOT NULL,
+  person_ref TEXT NOT NULL,
+  agent_ref TEXT NOT NULL,
+  local_session_ref TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error_code TEXT,
+  started_at TEXT NOT NULL,
+  completed_at TEXT
+);
+`;
+
 function applyMigrationV8(db: GatewayDatabase): void {
   db.pragma("foreign_keys = OFF");
   try {
@@ -958,6 +1003,15 @@ function applyMigrationV10(db: GatewayDatabase): void {
   })();
 }
 
+function applyMigrationV11(db: GatewayDatabase): void {
+  db.transaction(() => {
+    db.exec(MIGRATION_V11);
+    db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(11, ?)"
+    ).run(new Date().toISOString());
+  })();
+}
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -967,7 +1021,7 @@ function latestMigrationVersion(db: GatewayDatabase): number {
 
 function applyMigrations(
   db: GatewayDatabase,
-  migrationLimit: 6 | 7 | 8 | 9 | 10
+  migrationLimit: 6 | 7 | 8 | 9 | 10 | 11
 ): void {
   const ledgerExists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
@@ -1046,13 +1100,17 @@ function applyMigrations(
     applyMigrationV10(db);
     latest = 10;
   }
+  if (latest === 10 && migrationLimit >= 11) {
+    applyMigrationV11(db);
+    latest = 11;
+  }
   if (latest !== migrationLimit) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
 
 export interface GatewayDatabaseOpenOptions {
-  migrationLimit?: 6 | 7 | 8 | 9 | 10;
+  migrationLimit?: 6 | 7 | 8 | 9 | 10 | 11;
 }
 
 export function openGatewayDatabase(
@@ -1064,7 +1122,7 @@ export function openGatewayDatabase(
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
-  applyMigrations(db, options.migrationLimit ?? 10);
+  applyMigrations(db, options.migrationLimit ?? 11);
   return db;
 }
 

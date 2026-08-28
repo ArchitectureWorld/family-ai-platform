@@ -31,8 +31,14 @@ const migrationVersions = [
   { version: 7 },
   { version: 8 },
   { version: 9 },
-  { version: 10 }
+  { version: 10 },
+  { version: 11 }
 ];
+
+const openAtVersion = openGatewayDatabase as unknown as (
+  databasePath: string,
+  options: { migrationLimit: number }
+) => GatewayDatabase;
 
 const mobilePairingColumnNames = [
   "pairing_ref",
@@ -307,13 +313,111 @@ describe("gateway database", () => {
         applied_at TEXT NOT NULL
       );
       INSERT INTO schema_migrations(version, applied_at)
-      VALUES(11, '2026-07-25T00:00:00.000Z');
+      VALUES(12, '2026-07-25T00:00:00.000Z');
     `);
     legacy.close();
 
     expect(() => openGatewayDatabase(databasePath)).toThrow(
-      "Unsupported Gateway schema version: 11"
+      "Unsupported Gateway schema version: 12"
     );
+  });
+
+  it("creates V11 federation authority tables with only bounded metadata columns", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-schema-"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+
+    const expectedColumns = {
+      federation_services: [
+        "service_ref",
+        "product",
+        "token_hash",
+        "status",
+        "created_at",
+        "revoked_at"
+      ],
+      agent_discovery_observations: [
+        "agent_ref",
+        "kind",
+        "runtime",
+        "status",
+        "capabilities_json",
+        "observed_at"
+      ],
+      federation_actor_contexts: [
+        "context_ref",
+        "product",
+        "family_ref",
+        "person_ref",
+        "device_ref",
+        "entry_session_ref",
+        "assignment_version",
+        "expires_at",
+        "created_at"
+      ],
+      agent_invocation_audit: [
+        "invocation_ref",
+        "correlation_ref",
+        "product",
+        "person_ref",
+        "agent_ref",
+        "local_session_ref",
+        "status",
+        "error_code",
+        "started_at",
+        "completed_at"
+      ]
+    } as const;
+
+    expect(db.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table'
+         AND name IN (
+           'federation_services',
+           'agent_discovery_observations',
+           'federation_actor_contexts',
+           'agent_invocation_audit'
+         )
+       ORDER BY name`
+    ).all()).toEqual([
+      { name: "agent_discovery_observations" },
+      { name: "agent_invocation_audit" },
+      { name: "federation_actor_contexts" },
+      { name: "federation_services" }
+    ]);
+    for (const [table, columns] of Object.entries(expectedColumns)) {
+      expect(db.prepare(`PRAGMA table_info(${table})`).all().map(
+        (column) => String((column as { name: unknown }).name)
+      )).toEqual(columns);
+    }
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("upgrades V10 to V11 once and reopens V11 idempotently", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-v10-upgrade-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 10 });
+    expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
+      .toEqual({ version: 10 });
+    db.close();
+
+    db = openGatewayDatabase(databasePath);
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version").all())
+      .toEqual(migrationVersions);
+    const first = db.prepare(
+      `SELECT name, sql FROM sqlite_master
+       WHERE type = 'table' AND name LIKE 'federation_%'
+       ORDER BY name`
+    ).all();
+    db.close();
+
+    db = openGatewayDatabase(databasePath);
+    expect(db.prepare(
+      `SELECT name, sql FROM sqlite_master
+       WHERE type = 'table' AND name LIKE 'federation_%'
+       ORDER BY name`
+    ).all()).toEqual(first);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 11").get())
+      .toEqual({ count: 1 });
   });
 
   it("creates the formal Chat Work domain schema with thread-scoped uniqueness", () => {
