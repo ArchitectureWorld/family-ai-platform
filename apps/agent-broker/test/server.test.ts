@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readlink,
   rm,
   stat,
   symlink,
@@ -13,6 +14,7 @@ import {
   writeFile
 } from "node:fs/promises";
 import http from "node:http";
+import net, { type Server as NetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -191,6 +193,29 @@ async function processState(pid: number): Promise<"gone" | "running"> {
   }
 }
 
+function ownerMarkerDirectory(runtimeDirectory: string): string {
+  return join(runtimeDirectory, ".agent-broker.sock.owner");
+}
+
+async function writeSocketOwnerMarker(
+  runtimeDirectory: string,
+  socketPath: string
+): Promise<void> {
+  const socket = await lstat(socketPath, { bigint: true });
+  const markerDirectory = ownerMarkerDirectory(runtimeDirectory);
+  await mkdir(markerDirectory, { mode: 0o700 });
+  await writeFile(
+    join(markerDirectory, "metadata.json"),
+    JSON.stringify({
+      protocolVersion: 1,
+      uid: socket.uid.toString(),
+      device: socket.dev.toString(),
+      inode: socket.ino.toString()
+    }),
+    { encoding: "utf8", mode: 0o600 }
+  );
+}
+
 async function startBroker(
   options: AgentBrokerOptions
 ): Promise<AgentBroker> {
@@ -215,7 +240,7 @@ describe("Unix-socket Agent Broker", () => {
       clock: () => new Date("2026-08-28T12:00:00.000Z")
     });
 
-    expect(broker.server.address()).toBe(socketPath);
+    expect(typeof broker.server.address()).toBe("string");
     const runtimeStat = await stat(runtimeDirectory);
     const socketStat = await stat(socketPath);
     expect(runtimeStat.mode & 0o777).toBe(0o700);
@@ -552,7 +577,7 @@ describe("Unix-socket Agent Broker", () => {
     await expect.poll(() => processState(descendantPid)).toBe("gone");
   });
 
-  it("starts timeout at admission and never spawns a queued invocation after its deadline", async () => {
+  it("uses zero-wait admission and returns typed busy without spawning beyond maxConcurrency", async () => {
     const { root, runtimeDirectory, socketPath } = await fixture();
     const capturePath = join(root, "admission.jsonl");
     const script = join(root, "admission-hermes.mjs");
@@ -590,7 +615,7 @@ describe("Unix-socket Agent Broker", () => {
       requestFor("agent:hermes-jarvis", {
         invocationRef: "invocation:admission-holder",
         prompt: "hold admission",
-        timeoutMs: 2_500
+        timeoutMs: 1_200
       })
     );
     await expect.poll(() => readFile(capturePath, "utf8")).toContain("hold admission");
@@ -603,7 +628,7 @@ describe("Unix-socket Agent Broker", () => {
       requestFor("agent:hermes-jarvis", {
         invocationRef: "invocation:admission-queued",
         prompt: "must never spawn",
-        timeoutMs: 1_000
+        timeoutMs: 2_000
       })
     );
     const elapsed = Date.now() - startedAt;
@@ -611,13 +636,147 @@ describe("Unix-socket Agent Broker", () => {
     await first.response.catch(() => undefined);
 
     expect(queued).toMatchObject({
-      statusCode: 200,
-      body: { status: "timed_out" }
+      statusCode: 503,
+      body: {
+        error: {
+          code: "BROKER_BUSY",
+          category: "availability",
+          retryable: true
+        }
+      }
     });
-    expect(elapsed).toBeLessThan(1_800);
+    expect(elapsed).toBeLessThan(400);
     expect(await readFile(capturePath, "utf8")).toBe("hold admission\n");
     await broker.close();
     brokers.splice(brokers.indexOf(broker), 1);
+  });
+
+  it("starts the invocation deadline when the HTTP request is received", async () => {
+    const { root, runtimeDirectory, socketPath } = await fixture();
+    const script = join(root, "receipt-deadline-hermes.mjs");
+    await writeFile(
+      script,
+      `
+        process.on("SIGTERM", () => {});
+        setInterval(() => {}, 1000);
+      `,
+      "utf8"
+    );
+    await startBroker({
+      runtimeDirectory,
+      socketPath,
+      executable: process.execPath,
+      prefixArgs: [script],
+      processCwd: () => root,
+      runtimeProbe: async () => true,
+      terminationGraceMs: 30
+    });
+    const payload = JSON.stringify(
+      requestFor("agent:hermes-jarvis", {
+        invocationRef: "invocation:receipt-deadline",
+        timeoutMs: 1_000
+      })
+    );
+    const startedAt = Date.now();
+    const response = new Promise<{ statusCode: number; body: unknown }>(
+      (resolveResponse, rejectResponse) => {
+        const request = http.request(
+          {
+            socketPath,
+            method: "POST",
+            path: "/v1/invocations",
+            headers: {
+              "content-type": "application/json",
+              "content-length": Buffer.byteLength(payload)
+            }
+          },
+          (incoming) => {
+            const chunks: Buffer[] = [];
+            incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
+            incoming.once("end", () => {
+              resolveResponse({
+                statusCode: incoming.statusCode ?? 0,
+                body: JSON.parse(Buffer.concat(chunks).toString("utf8"))
+              });
+            });
+          }
+        );
+        request.once("error", rejectResponse);
+        request.write(payload.slice(0, -1));
+        setTimeout(() => request.end(payload.slice(-1)), 700);
+      }
+    );
+
+    const result = await response;
+
+    expect(result).toMatchObject({
+      statusCode: 200,
+      body: { status: "timed_out" }
+    });
+    expect(Date.now() - startedAt).toBeLessThan(1_400);
+  });
+
+  it("does not spawn when the request body completes after its receipt deadline", async () => {
+    const { root, runtimeDirectory, socketPath } = await fixture();
+    const spawnedPath = join(root, "unexpected-late-spawn");
+    const script = join(root, "expired-receipt-hermes.mjs");
+    await writeFile(
+      script,
+      `
+        import { writeFileSync } from "node:fs";
+        writeFileSync(process.argv[2], "spawned");
+        setInterval(() => {}, 1000);
+      `,
+      "utf8"
+    );
+    await startBroker({
+      runtimeDirectory,
+      socketPath,
+      executable: process.execPath,
+      prefixArgs: [script, spawnedPath],
+      processCwd: () => root,
+      runtimeProbe: async () => true,
+      terminationGraceMs: 30
+    });
+    const payload = JSON.stringify(
+      requestFor("agent:hermes-jarvis", {
+        invocationRef: "invocation:expired-on-receipt",
+        timeoutMs: 1_000
+      })
+    );
+    const response = new Promise<{ statusCode: number; body: unknown }>(
+      (resolveResponse, rejectResponse) => {
+        const request = http.request(
+          {
+            socketPath,
+            method: "POST",
+            path: "/v1/invocations",
+            headers: { "content-length": Buffer.byteLength(payload) }
+          },
+          (incoming) => {
+            const chunks: Buffer[] = [];
+            incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
+            incoming.once("end", () =>
+              resolveResponse({
+                statusCode: incoming.statusCode ?? 0,
+                body: JSON.parse(Buffer.concat(chunks).toString("utf8"))
+              })
+            );
+          }
+        );
+        request.once("error", rejectResponse);
+        request.write(payload.slice(0, -1));
+        setTimeout(() => request.end(payload.slice(-1)), 1_050);
+      }
+    );
+
+    const result = await response;
+
+    expect(result).toMatchObject({
+      statusCode: 200,
+      body: { status: "timed_out" }
+    });
+    await expect(access(spawnedPath)).rejects.toThrow();
   });
 
   it("aborts the fake Hermes process group when the HTTP client disconnects", async () => {
@@ -643,7 +802,7 @@ describe("Unix-socket Agent Broker", () => {
       prefixArgs: [script, descendantPath],
       processCwd: () => root,
       runtimeProbe: async () => true,
-      terminationGraceMs: 30
+      terminationGraceMs: 300
     });
     const invocation = openUdsInvocation(
       socketPath,
@@ -697,13 +856,20 @@ describe("Unix-socket Agent Broker", () => {
     const ignoredResponse = invocation.response.catch(() => undefined);
     await expect.poll(() => access(descendantPath).then(() => true, () => false)).toBe(true);
     const descendantPid = Number(await readFile(descendantPath, "utf8"));
-    const closing = broker.close();
-    let closeResult: "closed" | "late";
+    invocation.request.destroy();
+    await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 20));
+    const closing = broker.close().then(async () => ({
+      status: "closed" as const,
+      descendant: await processState(descendantPid)
+    }));
+    let closeResult:
+      | { status: "closed"; descendant: "gone" | "running" }
+      | { status: "late" };
     try {
       closeResult = await Promise.race([
-        closing.then(() => "closed" as const),
-        new Promise<"late">((resolveLate) =>
-          setTimeout(() => resolveLate("late"), 700)
+        closing,
+        new Promise<{ status: "late" }>((resolveLate) =>
+          setTimeout(() => resolveLate({ status: "late" }), 1_500)
         )
       ]);
     } finally {
@@ -713,8 +879,7 @@ describe("Unix-socket Agent Broker", () => {
       await ignoredResponse;
     }
 
-    expect(closeResult).toBe("closed");
-    await expect.poll(() => processState(descendantPid)).toBe("gone");
+    expect(closeResult).toEqual({ status: "closed", descendant: "gone" });
   });
 
   it("recreates a stale owned socket on restart but preserves a non-socket at the exact path", async () => {
@@ -738,6 +903,7 @@ describe("Unix-socket Agent Broker", () => {
     staleOwner.kill("SIGKILL");
     await new Promise<void>((resolve) => staleOwner.once("exit", () => resolve()));
     expect((await lstat(socketPath)).isSocket()).toBe(true);
+    await writeSocketOwnerMarker(runtimeDirectory, socketPath);
 
     const broker = await startBroker({
       runtimeDirectory,
@@ -746,7 +912,7 @@ describe("Unix-socket Agent Broker", () => {
       processCwd: () => root,
       runtimeProbe: async () => true
     });
-    expect(broker.server.address()).toBe(socketPath);
+    expect(typeof broker.server.address()).toBe("string");
     await broker.close();
     brokers.splice(brokers.indexOf(broker), 1);
 
@@ -757,7 +923,7 @@ describe("Unix-socket Agent Broker", () => {
       processCwd: () => root,
       runtimeProbe: async () => true
     });
-    expect(restarted.server.address()).toBe(socketPath);
+    expect(typeof restarted.server.address()).toBe("string");
     expect((await lstat(socketPath)).isSocket()).toBe(true);
     await restarted.close();
     brokers.splice(brokers.indexOf(restarted), 1);
@@ -847,7 +1013,127 @@ describe("Unix-socket Agent Broker", () => {
     expect(preserved.mode & 0o777n).toBe(0o666n);
   });
 
-  it("does not unlink a foreign replacement installed before Broker close", async () => {
+  it("publishes and removes an inode-bound owner marker with the public socket", async () => {
+    const { root, runtimeDirectory, socketPath } = await fixture();
+    const broker = await startBroker({
+      runtimeDirectory,
+      socketPath,
+      executable: process.execPath,
+      processCwd: () => root,
+      runtimeProbe: async () => true
+    });
+    const markerDirectory = ownerMarkerDirectory(runtimeDirectory);
+    const marker = JSON.parse(
+      await readFile(join(markerDirectory, "metadata.json"), "utf8")
+    ) as { protocolVersion: number; uid: string; device: string; inode: string };
+    const socket = await lstat(socketPath, { bigint: true });
+
+    expect((await lstat(markerDirectory)).mode & 0o777).toBe(0o700);
+    expect(marker).toEqual({
+      protocolVersion: 1,
+      uid: socket.uid.toString(),
+      device: socket.dev.toString(),
+      inode: socket.ino.toString()
+    });
+
+    await broker.close();
+    brokers.splice(brokers.indexOf(broker), 1);
+
+    await expect(access(markerDirectory)).rejects.toThrow();
+    await expect(access(socketPath)).rejects.toThrow();
+  });
+
+  it("refuses and preserves an unmarked stale socket instead of racing lstat to unlink", async () => {
+    const { root, runtimeDirectory, socketPath } = await fixture();
+    await mkdir(runtimeDirectory, { mode: 0o700 });
+    const staleOwner = spawn(
+      process.execPath,
+      [
+        "-e",
+        `require("node:net").createServer().listen(${JSON.stringify(socketPath)}, () => process.stdout.write("ready\\n"));`
+      ],
+      { stdio: ["ignore", "pipe", "ignore"] }
+    );
+    childProcesses.push(staleOwner);
+    await new Promise<void>((resolveListen, rejectListen) => {
+      staleOwner.stdout?.once("data", () => resolveListen());
+      staleOwner.once("error", rejectListen);
+    });
+    await chmod(socketPath, 0o660);
+    staleOwner.kill("SIGKILL");
+    await new Promise<void>((resolveExit) => staleOwner.once("exit", () => resolveExit()));
+    const original = await lstat(socketPath, { bigint: true });
+    const broker = createAgentBroker({
+      runtimeDirectory,
+      socketPath,
+      executable: process.execPath,
+      processCwd: () => root,
+      runtimeProbe: async () => true
+    });
+    brokers.push(broker);
+    let rejection: unknown;
+
+    try {
+      await broker.start();
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toMatch(/ownership marker/i);
+    const preserved = await lstat(socketPath, { bigint: true });
+    expect(preserved.dev).toBe(original.dev);
+    expect(preserved.ino).toBe(original.ino);
+  });
+
+  it("restores the marker path when a marked stale socket was replaced by a directory", async () => {
+    const { root, runtimeDirectory, socketPath } = await fixture();
+    await mkdir(runtimeDirectory, { mode: 0o700 });
+    const staleOwner = spawn(
+      process.execPath,
+      [
+        "-e",
+        `require("node:net").createServer().listen(${JSON.stringify(socketPath)}, () => process.stdout.write("ready\\n"));`
+      ],
+      { stdio: ["ignore", "pipe", "ignore"] }
+    );
+    childProcesses.push(staleOwner);
+    await new Promise<void>((resolveListen, rejectListen) => {
+      staleOwner.stdout?.once("data", () => resolveListen());
+      staleOwner.once("error", rejectListen);
+    });
+    await chmod(socketPath, 0o660);
+    staleOwner.kill("SIGKILL");
+    await new Promise<void>((resolveExit) => staleOwner.once("exit", () => resolveExit()));
+    await writeSocketOwnerMarker(runtimeDirectory, socketPath);
+    const markerPath = ownerMarkerDirectory(runtimeDirectory);
+    const markerBefore = await readFile(join(markerPath, "metadata.json"), "utf8");
+    await unlink(socketPath);
+    await mkdir(socketPath);
+    await writeFile(join(socketPath, "child"), "foreign directory", "utf8");
+    const broker = createAgentBroker({
+      runtimeDirectory,
+      socketPath,
+      executable: process.execPath,
+      processCwd: () => root,
+      runtimeProbe: async () => true
+    });
+    brokers.push(broker);
+
+    await expect(broker.start()).rejects.toThrow(/socket path/i);
+
+    expect((await lstat(socketPath)).isDirectory()).toBe(true);
+    expect(await readFile(join(socketPath, "child"), "utf8")).toBe(
+      "foreign directory"
+    );
+    expect(await readFile(join(markerPath, "metadata.json"), "utf8")).toBe(
+      markerBefore
+    );
+  });
+
+  it.each(["file", "symlink", "socket", "directory"] as const)(
+    "does not alter a foreign %s replacement installed before Broker close",
+    async (replacementType) => {
     const { root, runtimeDirectory, socketPath } = await fixture();
     const broker = await startBroker({
       runtimeDirectory,
@@ -857,12 +1143,51 @@ describe("Unix-socket Agent Broker", () => {
       runtimeProbe: async () => true
     });
     await unlink(socketPath);
-    await writeFile(socketPath, "foreign replacement", "utf8");
+    let foreignSocket: NetServer | undefined;
+    const symlinkTarget = join(root, "foreign-target");
+    if (replacementType === "file") {
+      await writeFile(socketPath, "foreign file", "utf8");
+    } else if (replacementType === "symlink") {
+      await writeFile(symlinkTarget, "foreign target", "utf8");
+      await symlink(symlinkTarget, socketPath);
+    } else if (replacementType === "socket") {
+      foreignSocket = net.createServer();
+      await new Promise<void>((resolveListen, rejectListen) => {
+        foreignSocket?.once("error", rejectListen);
+        foreignSocket?.listen(socketPath, resolveListen);
+      });
+    } else {
+      await mkdir(socketPath);
+      await writeFile(join(socketPath, "child"), "foreign directory", "utf8");
+    }
 
-    await broker.close();
-    brokers.splice(brokers.indexOf(broker), 1);
+    try {
+      await broker.close();
+      brokers.splice(brokers.indexOf(broker), 1);
 
-    expect(await readFile(socketPath, "utf8")).toBe("foreign replacement");
+      const replacement = await lstat(socketPath);
+      if (replacementType === "file") {
+        expect(replacement.isFile()).toBe(true);
+        expect(await readFile(socketPath, "utf8")).toBe("foreign file");
+      } else if (replacementType === "symlink") {
+        expect(replacement.isSymbolicLink()).toBe(true);
+        expect(await readlink(socketPath)).toBe(symlinkTarget);
+      } else if (replacementType === "socket") {
+        expect(replacement.isSocket()).toBe(true);
+        expect(foreignSocket?.listening).toBe(true);
+      } else {
+        expect(replacement.isDirectory()).toBe(true);
+        expect(await readFile(join(socketPath, "child"), "utf8")).toBe(
+          "foreign directory"
+        );
+      }
+    } finally {
+      if (foreignSocket?.listening) {
+        await new Promise<void>((resolveClose) =>
+          foreignSocket?.close(() => resolveClose())
+        );
+      }
+    }
   });
 
   it("classifies unexpected internal failures as retryable internal errors", async () => {

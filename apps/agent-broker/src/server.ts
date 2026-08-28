@@ -4,11 +4,14 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readFile,
   realpath,
   rename,
   rmdir,
-  unlink
+  unlink,
+  writeFile
 } from "node:fs/promises";
+import type { BigIntStats } from "node:fs";
 import http, {
   type IncomingMessage,
   type Server,
@@ -97,13 +100,26 @@ export interface AgentBroker {
 }
 
 interface OwnedSocket {
+  readonly uid: bigint;
   readonly dev: bigint;
   readonly ino: bigint;
 }
 
-interface PreservedReplacement {
+interface OwnershipRecord {
+  readonly protocolVersion: 1;
+  readonly uid: string;
+  readonly device: string;
+  readonly inode: string;
+}
+
+interface ClaimedMarker {
+  readonly parent: string;
   readonly directory: string;
-  readonly path: string;
+}
+
+interface ActiveInvocation {
+  readonly abortController: AbortController;
+  completion: Promise<void>;
 }
 
 interface ConnectorOptions {
@@ -173,7 +189,8 @@ export class HermesStdinConnector {
   async invoke(
     target: AgentTarget,
     request: AgentInvocationRequestV1,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    deadlineAt = Date.now() + request.timeoutMs
   ): Promise<AgentInvocationResultV1> {
     const continuationSession = request.externalSessionRef
       ? rawSessionId(target, request.externalSessionRef)
@@ -203,10 +220,17 @@ export class HermesStdinConnector {
     };
     if (abortSignal?.aborted) cancel();
     else abortSignal?.addEventListener("abort", cancel, { once: true });
-    const deadline = setTimeout(() => {
+    const remainingMs = Math.max(0, deadlineAt - Date.now());
+    let deadline: NodeJS.Timeout | undefined;
+    if (remainingMs === 0) {
       abortCause ??= "deadline";
       processAbort.abort();
-    }, request.timeoutMs);
+    } else {
+      deadline = setTimeout(() => {
+        abortCause ??= "deadline";
+        processAbort.abort();
+      }, remainingMs);
+    }
 
     try {
       const result = await runControlledProcess({
@@ -217,7 +241,7 @@ export class HermesStdinConnector {
         allowedEnvironment: [["HERMES_HOME", target.home]],
         stdin: `${JSON.stringify(frame)}\n`,
         abortSignal: processAbort.signal,
-        timeoutMs: request.timeoutMs,
+        timeoutMs: Math.max(1, remainingMs),
         terminationGraceMs: this.options.terminationGraceMs,
         maxStdoutBytes: this.options.maxStdoutBytes,
         maxStderrBytes: this.options.maxStderrBytes,
@@ -294,7 +318,7 @@ export class HermesStdinConnector {
           : "PROVIDER_UNAVAILABLE";
       return failedInvocation(target, request, this.options.clock, code);
     } finally {
-      clearTimeout(deadline);
+      if (deadline) clearTimeout(deadline);
       abortSignal?.removeEventListener("abort", cancel);
     }
   }
@@ -313,7 +337,7 @@ function sendJson(response: ServerResponse, statusCode: number, body: unknown): 
 function publicRequestError(
   code: string,
   message: string,
-  category: "validation" | "conflict" | "internal" = "validation",
+  category: "validation" | "availability" | "conflict" | "internal" = "validation",
   retryable = false
 ): object {
   return {
@@ -398,6 +422,119 @@ function validateSocketMetadata(
   }
 }
 
+function markerDirectory(runtimeDirectory: string, socketPath: string): string {
+  return join(runtimeDirectory, `.${basename(socketPath)}.owner`);
+}
+
+function metadataPath(directory: string): string {
+  return join(directory, "metadata.json");
+}
+
+function ownershipRecord(socket: {
+  uid: bigint;
+  dev: bigint;
+  ino: bigint;
+}): OwnershipRecord {
+  return {
+    protocolVersion: 1,
+    uid: socket.uid.toString(),
+    device: socket.dev.toString(),
+    inode: socket.ino.toString()
+  };
+}
+
+function recordMatchesSocket(
+  record: OwnershipRecord,
+  socket: { uid: bigint; dev: bigint; ino: bigint }
+): boolean {
+  return (
+    record.uid === socket.uid.toString() &&
+    record.device === socket.dev.toString() &&
+    record.inode === socket.ino.toString()
+  );
+}
+
+async function readOwnershipRecord(directory: string): Promise<OwnershipRecord> {
+  const marker = await lstat(directory, { bigint: true });
+  if (
+    !marker.isDirectory() ||
+    marker.isSymbolicLink() ||
+    marker.uid !== processUid() ||
+    (marker.mode & 0o777n) !== RUNTIME_DIRECTORY_MODE
+  ) {
+    throw new Error("socket ownership marker is not an owned mode-0700 directory");
+  }
+  const path = metadataPath(directory);
+  const metadata = await lstat(path, { bigint: true });
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    metadata.uid !== processUid() ||
+    (metadata.mode & 0o777n) !== 0o600n ||
+    metadata.size > 1024n
+  ) {
+    throw new Error("socket ownership marker metadata is invalid");
+  }
+  const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+  const candidate = value as {
+    protocolVersion?: unknown;
+    uid?: unknown;
+    device?: unknown;
+    inode?: unknown;
+  };
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Object.keys(value).sort().join(",") !==
+      "device,inode,protocolVersion,uid" ||
+    candidate.protocolVersion !== 1 ||
+    typeof candidate.uid !== "string" ||
+    typeof candidate.device !== "string" ||
+    typeof candidate.inode !== "string" ||
+    !/^[0-9]+$/.test(candidate.uid) ||
+    !/^[0-9]+$/.test(candidate.device) ||
+    !/^[0-9]+$/.test(candidate.inode) ||
+    BigInt(candidate.uid) !== processUid()
+  ) {
+    throw new Error("socket ownership marker record is invalid");
+  }
+  return value as OwnershipRecord;
+}
+
+async function removeMarkerDirectory(directory: string): Promise<void> {
+  await unlink(metadataPath(directory));
+  await rmdir(directory);
+}
+
+async function claimMarker(
+  runtimeDirectory: string,
+  publicMarker: string
+): Promise<ClaimedMarker | undefined> {
+  const parent = await mkdtemp(join(runtimeDirectory, ".socket-owner-claim-"));
+  const directory = join(parent, "owner");
+  try {
+    await rename(publicMarker, directory);
+    return { parent, directory };
+  } catch (error) {
+    await rmdir(parent);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+async function restoreClaim(
+  claim: ClaimedMarker,
+  publicMarker: string
+): Promise<void> {
+  await rename(claim.directory, publicMarker);
+  await rmdir(claim.parent);
+}
+
+async function discardClaim(claim: ClaimedMarker): Promise<void> {
+  await removeMarkerDirectory(claim.directory);
+  await rmdir(claim.parent);
+}
+
 async function prepareSocketPath(
   runtimeDirectory: string,
   socketPath: string
@@ -414,83 +551,169 @@ async function prepareSocketPath(
   if (runtimeRealPath !== parentRealPath) {
     throw new Error("socket path must be directly owned by RuntimeDirectory");
   }
-
+  const publicMarker = markerDirectory(runtimeDirectory, socketPath);
+  const claim = await claimMarker(runtimeDirectory, publicMarker);
+  let existing: BigIntStats | undefined;
   try {
-    const existing = await lstat(socketPath, { bigint: true });
+    existing = await lstat(socketPath, { bigint: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      if (claim) await restoreClaim(claim, publicMarker);
+      throw error;
+    }
+  }
+  if (!existing) {
+    if (claim) {
+      try {
+        await readOwnershipRecord(claim.directory);
+        await discardClaim(claim);
+      } catch (error) {
+        await restoreClaim(claim, publicMarker);
+        throw error;
+      }
+    }
+    return;
+  }
+  if (!claim) {
     validateSocketMetadata(existing, "socket path");
-    if (await socketIsActive(socketPath)) {
-      throw new Error("socket path is already active");
+    throw new Error("socket path has no ownership marker");
+  }
+  let record: OwnershipRecord;
+  try {
+    validateSocketMetadata(existing, "socket path");
+    record = await readOwnershipRecord(claim.directory);
+  } catch (error) {
+    await restoreClaim(claim, publicMarker);
+    throw error;
+  }
+  if (!recordMatchesSocket(record, existing)) {
+    await restoreClaim(claim, publicMarker);
+    throw new Error("socket ownership marker does not match socket path");
+  }
+  if (await socketIsActive(socketPath)) {
+    await restoreClaim(claim, publicMarker);
+    throw new Error("socket path is already active");
+  }
+
+  const quarantine = await mkdtemp(
+    join(runtimeDirectory, `.${basename(socketPath)}.stale-`)
+  );
+  const quarantinedSocket = join(quarantine, "socket");
+  let moved = false;
+  try {
+    await rename(socketPath, quarantinedSocket);
+    moved = true;
+    const quarantined = await lstat(quarantinedSocket, { bigint: true });
+    validateSocketMetadata(quarantined, "quarantined socket");
+    if (!recordMatchesSocket(record, quarantined)) {
+      throw new Error("socket path changed during atomic stale quarantine");
     }
-    const current = await lstat(socketPath, { bigint: true });
-    validateSocketMetadata(current, "socket path");
+    await unlink(quarantinedSocket);
+    moved = false;
+    await rmdir(quarantine);
+    await discardClaim(claim);
+  } catch (error) {
+    if (moved) {
+      try {
+        await rename(quarantinedSocket, socketPath);
+        moved = false;
+      } catch {
+        // Preserve the quarantined inode and fail closed.
+      }
+    }
+    if (!moved) {
+      try {
+        await rmdir(quarantine);
+      } catch {
+        // A retained inode keeps its quarantine directory non-empty.
+      }
+    }
+    try {
+      await restoreClaim(claim, publicMarker);
+    } catch {
+      // A claimed marker stays isolated rather than overwriting another path.
+    }
+    throw error;
+  }
+}
+
+async function publishSocket(
+  runtimeDirectory: string,
+  socketPath: string,
+  privateSocketPath: string
+): Promise<OwnedSocket> {
+  const socket = await lstat(privateSocketPath, { bigint: true });
+  validateSocketMetadata(socket, "private socket");
+  const publicMarker = markerDirectory(runtimeDirectory, socketPath);
+  await mkdir(publicMarker, { mode: 0o700 });
+  try {
+    await writeFile(
+      metadataPath(publicMarker),
+      JSON.stringify(ownershipRecord(socket)),
+      { encoding: "utf8", flag: "wx", mode: 0o600 }
+    );
+    await link(privateSocketPath, socketPath);
+    const published = await lstat(socketPath, { bigint: true });
+    validateSocketMetadata(published, "published socket");
+    if (published.dev !== socket.dev || published.ino !== socket.ino) {
+      throw new Error("published socket inode does not match private listener");
+    }
+    await unlink(privateSocketPath);
+    return { uid: published.uid, dev: published.dev, ino: published.ino };
+  } catch (error) {
+    try {
+      const published = await lstat(socketPath, { bigint: true });
+      if (published.dev === socket.dev && published.ino === socket.ino) {
+        await unlink(socketPath);
+      }
+    } catch {
+      // Never remove an unverified public path.
+    }
+    try {
+      await removeMarkerDirectory(publicMarker);
+    } catch {
+      // A partial marker is left fail-closed for operator inspection.
+    }
+    throw error;
+  }
+}
+
+async function removeOwnedPublication(
+  runtimeDirectory: string,
+  socketPath: string,
+  ownedSocket: OwnedSocket
+): Promise<void> {
+  try {
+    const published = await lstat(socketPath, { bigint: true });
     if (
-      current.dev !== existing.dev ||
-      current.ino !== existing.ino
+      published.isSocket() &&
+      published.uid === ownedSocket.uid &&
+      published.dev === ownedSocket.dev &&
+      published.ino === ownedSocket.ino
     ) {
-      throw new Error("socket path ownership changed during stale cleanup");
+      await unlink(socketPath);
     }
-    await unlink(socketPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-}
 
-async function preserveForeignReplacement(
-  runtimeDirectory: string,
-  socketPath: string,
-  ownedSocket: OwnedSocket | undefined
-): Promise<PreservedReplacement | undefined> {
-  if (!ownedSocket) return undefined;
-  let current: Awaited<ReturnType<typeof lstat>>;
+  const publicMarker = markerDirectory(runtimeDirectory, socketPath);
+  const claim = await claimMarker(runtimeDirectory, publicMarker);
+  if (!claim) throw new Error("owned socket marker disappeared during close");
   try {
-    current = await lstat(socketPath, { bigint: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  if (
-    current.isSocket() &&
-    current.dev === ownedSocket.dev &&
-    current.ino === ownedSocket.ino
-  ) {
-    return undefined;
-  }
-
-  const directory = await mkdtemp(
-    join(runtimeDirectory, `.${basename(socketPath)}.preserved-`)
-  );
-  const preservedPath = join(directory, "replacement");
-  try {
-    await rename(socketPath, preservedPath);
-    const preserved = await lstat(preservedPath, { bigint: true });
-    if (preserved.dev !== current.dev || preserved.ino !== current.ino) {
-      throw new Error("socket replacement changed during close protection");
+    const record = await readOwnershipRecord(claim.directory);
+    if (!recordMatchesSocket(record, ownedSocket)) {
+      throw new Error("owned socket marker changed during close");
     }
-    return { directory, path: preservedPath };
+    await discardClaim(claim);
   } catch (error) {
     try {
-      await link(preservedPath, socketPath);
-      await unlink(preservedPath);
+      await restoreClaim(claim, publicMarker);
     } catch {
-      // Keep the replacement in its private preservation directory.
-    }
-    try {
-      await rmdir(directory);
-    } catch {
-      // A non-empty directory is retained rather than deleting foreign data.
+      // Preserve the claimed marker without overwriting another path.
     }
     throw error;
   }
-}
-
-async function restoreForeignReplacement(
-  socketPath: string,
-  preserved: PreservedReplacement | undefined
-): Promise<void> {
-  if (!preserved) return;
-  await link(preserved.path, socketPath);
-  await unlink(preserved.path);
-  await rmdir(preserved.directory);
 }
 
 async function defaultServiceProbe(
@@ -522,6 +745,14 @@ async function defaultServiceProbe(
 
 export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
   const clock = options.clock ?? (() => new Date());
+  const maxConcurrency = options.maxConcurrency ?? 2;
+  if (
+    !Number.isInteger(maxConcurrency) ||
+    maxConcurrency < 1 ||
+    maxConcurrency > 16
+  ) {
+    throw new Error("Broker maxConcurrency must be between 1 and 16");
+  }
   const connector = new HermesStdinConnector({
     executable: options.executable,
     prefixArgs: options.prefixArgs ?? [],
@@ -529,7 +760,7 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
     clock,
     maxStdoutBytes: options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES,
     maxStderrBytes: options.maxStderrBytes ?? DEFAULT_MAX_STDERR_BYTES,
-    maxConcurrency: options.maxConcurrency ?? 2,
+    maxConcurrency,
     terminationGraceMs:
       options.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS
   });
@@ -552,8 +783,11 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
     return new Map(results);
   };
 
-  const activeInvocations = new Set<AbortController>();
+  const activeInvocations = new Set<ActiveInvocation>();
+  let admittedInvocations = 0;
+  let acceptingInvocations = false;
   const server = http.createServer(async (request, response) => {
+    const receivedAt = Date.now();
     try {
       if (request.method === "GET" && request.url === "/v1/health") {
         const descriptors = agentDescriptors(await statuses(), clock());
@@ -641,31 +875,68 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
           return;
         }
 
+        if (!acceptingInvocations) {
+          sendJson(
+            response,
+            503,
+            publicRequestError(
+              "BROKER_UNAVAILABLE",
+              "本机个人助理服务正在关闭。",
+              "availability",
+              true
+            )
+          );
+          return;
+        }
+        if (admittedInvocations >= maxConcurrency) {
+          sendJson(
+            response,
+            503,
+            publicRequestError(
+              "BROKER_BUSY",
+              "本机个人助理当前繁忙，请稍后重试。",
+              "availability",
+              true
+            )
+          );
+          return;
+        }
+        admittedInvocations += 1;
+
         const invocationAbort = new AbortController();
-        activeInvocations.add(invocationAbort);
+        const active: ActiveInvocation = {
+          abortController: invocationAbort,
+          completion: Promise.resolve()
+        };
+        activeInvocations.add(active);
         const abortInvocation = () => invocationAbort.abort();
         const abortDisconnectedResponse = () => {
           if (!response.writableEnded) abortInvocation();
         };
         request.once("aborted", abortInvocation);
         response.once("close", abortDisconnectedResponse);
-        try {
-          const result = await connector.invoke(
-            target,
-            invocation,
-            invocationAbort.signal
-          );
-          safeLog(options.logger, {
-            event: "invocation_completed",
-            agentRef: target.agentRef,
-            status: result.status
-          });
-          if (!response.destroyed) sendJson(response, 200, result);
-        } finally {
-          activeInvocations.delete(invocationAbort);
-          request.off("aborted", abortInvocation);
-          response.off("close", abortDisconnectedResponse);
-        }
+        active.completion = (async () => {
+          try {
+            const result = await connector.invoke(
+              target,
+              invocation,
+              invocationAbort.signal,
+              receivedAt + invocation.timeoutMs
+            );
+            safeLog(options.logger, {
+              event: "invocation_completed",
+              agentRef: target.agentRef,
+              status: result.status
+            });
+            if (!response.destroyed) sendJson(response, 200, result);
+          } finally {
+            admittedInvocations -= 1;
+            activeInvocations.delete(active);
+            request.off("aborted", abortInvocation);
+            response.off("close", abortDisconnectedResponse);
+          }
+        })();
+        await active.completion;
         return;
       }
 
@@ -695,66 +966,96 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
     async start(): Promise<void> {
       if (started) return;
       await prepareSocketPath(options.runtimeDirectory, options.socketPath);
-      await new Promise<void>((resolveListen, rejectListen) => {
-        const onError = (error: Error) => {
-          server.off("listening", onListening);
-          rejectListen(error);
-        };
-        const onListening = () => {
-          server.off("error", onError);
-          resolveListen();
-        };
-        server.once("error", onError);
-        server.once("listening", onListening);
-        server.listen({ path: options.socketPath });
-      });
-      await chmod(options.socketPath, 0o660);
-      const socket = await lstat(options.socketPath, { bigint: true });
+      const privateDirectory = await mkdtemp(
+        join(options.runtimeDirectory, `.${basename(options.socketPath)}.listen-`)
+      );
+      const privateSocketPath = join(privateDirectory, "socket");
+      let listening = false;
       try {
-        validateSocketMetadata(socket, "socket path");
+        await new Promise<void>((resolveListen, rejectListen) => {
+          const onError = (error: Error) => {
+            server.off("listening", onListening);
+            rejectListen(error);
+          };
+          const onListening = () => {
+            server.off("error", onError);
+            resolveListen();
+          };
+          server.once("error", onError);
+          server.once("listening", onListening);
+          server.listen({ path: privateSocketPath });
+        });
+        listening = true;
+        await chmod(privateSocketPath, 0o660);
+        ownedSocket = await publishSocket(
+          options.runtimeDirectory,
+          options.socketPath,
+          privateSocketPath
+        );
+        await rmdir(privateDirectory);
       } catch (error) {
-        await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+        if (listening) {
+          await new Promise<void>((resolveClose) =>
+            server.close(() => resolveClose())
+          );
+        }
+        if (ownedSocket) {
+          try {
+            await removeOwnedPublication(
+              options.runtimeDirectory,
+              options.socketPath,
+              ownedSocket
+            );
+          } catch {
+            // Preserve any uncertain publication fail-closed.
+          }
+          ownedSocket = undefined;
+        }
+        try {
+          await unlink(privateSocketPath);
+        } catch (cleanupError) {
+          if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw cleanupError;
+          }
+        }
+        try {
+          await rmdir(privateDirectory);
+        } catch {
+          // A non-empty private directory is retained fail-closed.
+        }
         throw error;
       }
-      ownedSocket = { dev: socket.dev, ino: socket.ino };
       started = true;
+      acceptingInvocations = true;
       safeLog(options.logger, { event: "broker_started" });
     },
     async close(): Promise<void> {
       if (closing) return closing;
       if (!started) return;
-      for (const invocation of activeInvocations) invocation.abort();
+      acceptingInvocations = false;
+      for (const invocation of activeInvocations) {
+        invocation.abortController.abort();
+      }
       closing = (async () => {
-        const preserved = await preserveForeignReplacement(
-          options.runtimeDirectory,
-          options.socketPath,
-          ownedSocket
-        );
-        try {
-          await new Promise<void>((resolveClose, rejectClose) => {
-            server.close((error) => {
-              if (error) rejectClose(error);
-              else resolveClose();
-            });
-            server.closeAllConnections();
+        const serverClosed = new Promise<void>((resolveClose, rejectClose) => {
+          server.close((error) => {
+            if (error) rejectClose(error);
+            else resolveClose();
           });
-          started = false;
-          if (!preserved && ownedSocket) {
-            try {
-              const socket = await lstat(options.socketPath, { bigint: true });
-              if (
-                socket.isSocket() &&
-                socket.dev === ownedSocket.dev &&
-                socket.ino === ownedSocket.ino
-              ) {
-                await unlink(options.socketPath);
-              }
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-            }
-          }
-        } finally {
-          await restoreForeignReplacement(options.socketPath, preserved);
+          server.closeAllConnections();
+        });
+        const completions = [...activeInvocations].map(
+          (invocation) => invocation.completion
+        );
+        await Promise.allSettled(completions);
+        await serverClosed;
+        started = false;
+        if (ownedSocket) {
+          await removeOwnedPublication(
+            options.runtimeDirectory,
+            options.socketPath,
+            ownedSocket
+          );
         }
         ownedSocket = undefined;
         safeLog(options.logger, { event: "broker_stopped" });

@@ -82,6 +82,7 @@ def main(**kwargs):
         "kwargs": kwargs,
         "argv": sys.argv,
         "hermesHome": os.environ.get("HERMES_HOME"),
+        "sessionSource": os.environ.get("HERMES_SESSION_SOURCE"),
     }), encoding="utf-8")
     print("safe bridge reply")
     print("session_id: resumed-safe-session", file=sys.stderr)
@@ -103,6 +104,7 @@ def main(**kwargs):
       kwargs: { query: string; resume: string; quiet: boolean };
       argv: string[];
       hermesHome: string;
+      sessionSource: string;
     };
 
     expect(result).toMatchObject({ exitCode: 0, stdout: "safe bridge reply\n" });
@@ -110,6 +112,7 @@ def main(**kwargs):
     expect(capture.kwargs).toEqual({ query, resume, quiet: true });
     expect(capture.argv).toEqual([bridge]);
     expect(capture.hermesHome).toBe(join(home, "profiles", "zzh"));
+    expect(capture.sessionSource).toBe("tool");
     expect(capture.argv.join(" ")).not.toMatch(/exit|model|touch|resumed-safe-session|personal-home/);
   });
 

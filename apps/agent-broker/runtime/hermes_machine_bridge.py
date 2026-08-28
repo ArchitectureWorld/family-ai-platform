@@ -74,6 +74,7 @@ def main() -> int:
     frame = _read_frame()
     if frame is None or not _scope_home(frame["profile"]):
         return _fail()
+    os.environ["HERMES_SESSION_SOURCE"] = "tool"
     try:
         import cli
 
