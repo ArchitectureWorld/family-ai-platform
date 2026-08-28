@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createAgentBroker } from "./server.js";
 
 export * from "./catalog.js";
@@ -14,6 +14,9 @@ const HERMES_PYTHON = join(
   "bin",
   "python"
 );
+const HERMES_MACHINE_BRIDGE = fileURLToPath(
+  new URL("../runtime/hermes_machine_bridge.py", import.meta.url)
+);
 
 export async function startAgentBrokerFromEnvironment(): Promise<void> {
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
@@ -24,7 +27,7 @@ export async function startAgentBrokerFromEnvironment(): Promise<void> {
     runtimeDirectory,
     socketPath: join(runtimeDirectory, "agent-broker.sock"),
     executable: HERMES_PYTHON,
-    prefixArgs: ["-m", "hermes_cli.main"],
+    prefixArgs: [HERMES_MACHINE_BRIDGE],
     logger: (entry) => {
       process.stderr.write(`${JSON.stringify(entry)}\n`);
     }

@@ -1,8 +1,12 @@
 import {
   chmod,
+  link,
   lstat,
   mkdir,
+  mkdtemp,
   realpath,
+  rename,
+  rmdir,
   unlink
 } from "node:fs/promises";
 import http, {
@@ -11,7 +15,7 @@ import http, {
   type ServerResponse
 } from "node:http";
 import net from "node:net";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
   agentInvocationRequestV1Schema,
   agentInvocationResultV1Schema,
@@ -35,6 +39,8 @@ const MAX_REQUEST_BYTES = 64 * 1024;
 const DEFAULT_MAX_STDOUT_BYTES = 16 * 1024;
 const DEFAULT_MAX_STDERR_BYTES = 16 * 1024;
 const DEFAULT_TERMINATION_GRACE_MS = 250;
+const RUNTIME_DIRECTORY_MODE = 0o700n;
+const SOCKET_MODE = 0o660n;
 const HERMES_SESSION_LINE = /^session_id:\s*([a-z0-9][a-z0-9_-]{1,99})$/gm;
 const HERMES_SESSION_NOT_FOUND =
   /\bsession(?:\s+id)?\s+(?:was\s+)?not\s+found\b/i;
@@ -45,12 +51,14 @@ const HERMES_UPSTREAM_FAILURE =
 
 type InvocationFailureCode =
   | "PROVIDER_TIMEOUT"
+  | "PROVIDER_CANCELLED"
   | "PROVIDER_SESSION_NOT_FOUND"
   | "PROVIDER_RESPONSE_INVALID"
   | "PROVIDER_UNAVAILABLE";
 
 const PUBLIC_FAILURE_OUTPUT: Record<InvocationFailureCode, string> = {
   PROVIDER_TIMEOUT: "个人助理响应超时，请稍后重试。",
+  PROVIDER_CANCELLED: "个人助理请求已取消。",
   PROVIDER_SESSION_NOT_FOUND: "原个人助理会话已失效，请重新开始会话。",
   PROVIDER_RESPONSE_INVALID: "个人助理返回了无效响应，请稍后重试。",
   PROVIDER_UNAVAILABLE: "个人助理暂时不可用，请稍后重试。"
@@ -91,6 +99,11 @@ export interface AgentBroker {
 interface OwnedSocket {
   readonly dev: bigint;
   readonly ino: bigint;
+}
+
+interface PreservedReplacement {
+  readonly directory: string;
+  readonly path: string;
 }
 
 interface ConnectorOptions {
@@ -138,7 +151,12 @@ function failedInvocation(
     protocolVersion: 1,
     invocationRef: request.invocationRef,
     correlationRef: request.correlationRef,
-    status: code === "PROVIDER_TIMEOUT" ? "timed_out" : "failed",
+    status:
+      code === "PROVIDER_TIMEOUT"
+        ? "timed_out"
+        : code === "PROVIDER_CANCELLED"
+          ? "cancelled"
+          : "failed",
     output: PUBLIC_FAILURE_OUTPUT[code],
     completedAt: clock().toISOString(),
     externalSessionRef: placeholderSessionRef(target, request)
@@ -154,7 +172,8 @@ export class HermesStdinConnector {
 
   async invoke(
     target: AgentTarget,
-    request: AgentInvocationRequestV1
+    request: AgentInvocationRequestV1,
+    abortSignal?: AbortSignal
   ): Promise<AgentInvocationResultV1> {
     const continuationSession = request.externalSessionRef
       ? rawSessionId(target, request.externalSessionRef)
@@ -168,19 +187,36 @@ export class HermesStdinConnector {
       );
     }
 
-    const args: string[] = [];
-    if (target.profile !== "default") args.push("-p", target.profile);
-    args.push("chat", "--cli", "--quiet", "--source", "tool");
-    if (continuationSession) args.push("--resume", continuationSession);
+    const frame = {
+      protocolVersion: 1,
+      profile: target.profile,
+      query: request.prompt,
+      ...(continuationSession === undefined
+        ? {}
+        : { resume: continuationSession })
+    };
+    const processAbort = new AbortController();
+    let abortCause: "deadline" | "cancelled" | undefined;
+    const cancel = () => {
+      abortCause ??= "cancelled";
+      processAbort.abort();
+    };
+    if (abortSignal?.aborted) cancel();
+    else abortSignal?.addEventListener("abort", cancel, { once: true });
+    const deadline = setTimeout(() => {
+      abortCause ??= "deadline";
+      processAbort.abort();
+    }, request.timeoutMs);
 
     try {
       const result = await runControlledProcess({
         executable: this.options.executable,
         prefixArgs: this.options.prefixArgs,
-        args,
+        args: [],
         cwd: this.options.processCwd(target),
         allowedEnvironment: [["HERMES_HOME", target.home]],
-        stdin: `${request.prompt}\n/exit\n`,
+        stdin: `${JSON.stringify(frame)}\n`,
+        abortSignal: processAbort.signal,
         timeoutMs: request.timeoutMs,
         terminationGraceMs: this.options.terminationGraceMs,
         maxStdoutBytes: this.options.maxStdoutBytes,
@@ -193,7 +229,9 @@ export class HermesStdinConnector {
           target,
           request,
           this.options.clock,
-          "PROVIDER_TIMEOUT"
+          result.timedOut || abortCause === "deadline"
+            ? "PROVIDER_TIMEOUT"
+            : "PROVIDER_CANCELLED"
         );
       }
 
@@ -221,7 +259,7 @@ export class HermesStdinConnector {
           "PROVIDER_SESSION_NOT_FOUND"
         );
       }
-      if (result.exitCode !== 0 && (result.exitCode !== 1 || !validResponse)) {
+      if (result.exitCode !== 0) {
         return failedInvocation(
           target,
           request,
@@ -255,6 +293,9 @@ export class HermesStdinConnector {
           ? "PROVIDER_RESPONSE_INVALID"
           : "PROVIDER_UNAVAILABLE";
       return failedInvocation(target, request, this.options.clock, code);
+    } finally {
+      clearTimeout(deadline);
+      abortSignal?.removeEventListener("abort", cancel);
     }
   }
 }
@@ -269,13 +310,18 @@ function sendJson(response: ServerResponse, statusCode: number, body: unknown): 
   response.end(payload);
 }
 
-function publicRequestError(code: string, message: string): object {
+function publicRequestError(
+  code: string,
+  message: string,
+  category: "validation" | "conflict" | "internal" = "validation",
+  retryable = false
+): object {
   return {
     error: {
       code,
-      category: "validation",
+      category,
       message,
-      retryable: false
+      retryable
     }
   };
 }
@@ -319,6 +365,39 @@ async function socketIsActive(socketPath: string): Promise<boolean> {
   });
 }
 
+function processUid(): bigint {
+  if (typeof process.getuid !== "function") {
+    throw new Error("RuntimeDirectory UID validation is unavailable");
+  }
+  return BigInt(process.getuid());
+}
+
+async function validateRuntimeDirectory(runtimeDirectory: string): Promise<void> {
+  const runtime = await lstat(runtimeDirectory, { bigint: true });
+  if (!runtime.isDirectory() || runtime.isSymbolicLink()) {
+    throw new Error("RuntimeDirectory must be a real directory");
+  }
+  if (runtime.uid !== processUid()) {
+    throw new Error("RuntimeDirectory owner UID does not match Broker UID");
+  }
+  if ((runtime.mode & 0o777n) !== RUNTIME_DIRECTORY_MODE) {
+    throw new Error("RuntimeDirectory mode must be 0700");
+  }
+}
+
+function validateSocketMetadata(
+  socket: Awaited<ReturnType<typeof lstat>>,
+  label: string
+): void {
+  if (!socket.isSocket()) throw new Error(`${label} is not an owned socket`);
+  if (BigInt(socket.uid) !== processUid()) {
+    throw new Error(`${label} owner UID does not match Broker UID`);
+  }
+  if ((BigInt(socket.mode) & 0o777n) !== SOCKET_MODE) {
+    throw new Error(`${label} mode must be 0660`);
+  }
+}
+
 async function prepareSocketPath(
   runtimeDirectory: string,
   socketPath: string
@@ -327,6 +406,7 @@ async function prepareSocketPath(
     throw new Error("socket path must be inside RuntimeDirectory");
   }
   await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
+  await validateRuntimeDirectory(runtimeDirectory);
   const [runtimeRealPath, parentRealPath] = await Promise.all([
     realpath(runtimeDirectory),
     realpath(dirname(socketPath))
@@ -337,15 +417,13 @@ async function prepareSocketPath(
 
   try {
     const existing = await lstat(socketPath, { bigint: true });
-    if (!existing.isSocket()) {
-      throw new Error("socket path exists and is not an owned socket");
-    }
+    validateSocketMetadata(existing, "socket path");
     if (await socketIsActive(socketPath)) {
       throw new Error("socket path is already active");
     }
     const current = await lstat(socketPath, { bigint: true });
+    validateSocketMetadata(current, "socket path");
     if (
-      !current.isSocket() ||
       current.dev !== existing.dev ||
       current.ino !== existing.ino
     ) {
@@ -355,6 +433,64 @@ async function prepareSocketPath(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+}
+
+async function preserveForeignReplacement(
+  runtimeDirectory: string,
+  socketPath: string,
+  ownedSocket: OwnedSocket | undefined
+): Promise<PreservedReplacement | undefined> {
+  if (!ownedSocket) return undefined;
+  let current: Awaited<ReturnType<typeof lstat>>;
+  try {
+    current = await lstat(socketPath, { bigint: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (
+    current.isSocket() &&
+    current.dev === ownedSocket.dev &&
+    current.ino === ownedSocket.ino
+  ) {
+    return undefined;
+  }
+
+  const directory = await mkdtemp(
+    join(runtimeDirectory, `.${basename(socketPath)}.preserved-`)
+  );
+  const preservedPath = join(directory, "replacement");
+  try {
+    await rename(socketPath, preservedPath);
+    const preserved = await lstat(preservedPath, { bigint: true });
+    if (preserved.dev !== current.dev || preserved.ino !== current.ino) {
+      throw new Error("socket replacement changed during close protection");
+    }
+    return { directory, path: preservedPath };
+  } catch (error) {
+    try {
+      await link(preservedPath, socketPath);
+      await unlink(preservedPath);
+    } catch {
+      // Keep the replacement in its private preservation directory.
+    }
+    try {
+      await rmdir(directory);
+    } catch {
+      // A non-empty directory is retained rather than deleting foreign data.
+    }
+    throw error;
+  }
+}
+
+async function restoreForeignReplacement(
+  socketPath: string,
+  preserved: PreservedReplacement | undefined
+): Promise<void> {
+  if (!preserved) return;
+  await link(preserved.path, socketPath);
+  await unlink(preserved.path);
+  await rmdir(preserved.directory);
 }
 
 async function defaultServiceProbe(
@@ -416,6 +552,7 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
     return new Map(results);
   };
 
+  const activeInvocations = new Set<AbortController>();
   const server = http.createServer(async (request, response) => {
     try {
       if (request.method === "GET" && request.url === "/v1/health") {
@@ -497,34 +634,61 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
             409,
             publicRequestError(
               "SESSION_SCOPE_MISMATCH",
-              "个人助理会话范围不匹配。"
+              "个人助理会话范围不匹配。",
+              "conflict"
             )
           );
           return;
         }
 
-        const result = await connector.invoke(target, invocation);
-        safeLog(options.logger, {
-          event: "invocation_completed",
-          agentRef: target.agentRef,
-          status: result.status
-        });
-        sendJson(response, 200, result);
+        const invocationAbort = new AbortController();
+        activeInvocations.add(invocationAbort);
+        const abortInvocation = () => invocationAbort.abort();
+        const abortDisconnectedResponse = () => {
+          if (!response.writableEnded) abortInvocation();
+        };
+        request.once("aborted", abortInvocation);
+        response.once("close", abortDisconnectedResponse);
+        try {
+          const result = await connector.invoke(
+            target,
+            invocation,
+            invocationAbort.signal
+          );
+          safeLog(options.logger, {
+            event: "invocation_completed",
+            agentRef: target.agentRef,
+            status: result.status
+          });
+          if (!response.destroyed) sendJson(response, 200, result);
+        } finally {
+          activeInvocations.delete(invocationAbort);
+          request.off("aborted", abortInvocation);
+          response.off("close", abortDisconnectedResponse);
+        }
         return;
       }
 
       sendJson(response, 404, publicRequestError("NOT_FOUND", "接口不存在。"));
     } catch {
-      sendJson(
-        response,
-        500,
-        publicRequestError("BROKER_INTERNAL", "本机个人助理服务暂时不可用。")
-      );
+      if (!response.destroyed) {
+        sendJson(
+          response,
+          500,
+          publicRequestError(
+            "BROKER_INTERNAL",
+            "本机个人助理服务暂时不可用。",
+            "internal",
+            true
+          )
+        );
+      }
     }
   });
 
   let ownedSocket: OwnedSocket | undefined;
   let started = false;
+  let closing: Promise<void> | undefined;
 
   return {
     server,
@@ -546,39 +710,60 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
       });
       await chmod(options.socketPath, 0o660);
       const socket = await lstat(options.socketPath, { bigint: true });
-      if (!socket.isSocket()) {
+      try {
+        validateSocketMetadata(socket, "socket path");
+      } catch (error) {
         await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-        throw new Error("socket path did not become a Unix socket");
+        throw error;
       }
       ownedSocket = { dev: socket.dev, ino: socket.ino };
       started = true;
       safeLog(options.logger, { event: "broker_started" });
     },
     async close(): Promise<void> {
+      if (closing) return closing;
       if (!started) return;
-      await new Promise<void>((resolveClose, rejectClose) => {
-        server.close((error) => {
-          if (error) rejectClose(error);
-          else resolveClose();
-        });
-      });
-      started = false;
-      if (ownedSocket) {
+      for (const invocation of activeInvocations) invocation.abort();
+      closing = (async () => {
+        const preserved = await preserveForeignReplacement(
+          options.runtimeDirectory,
+          options.socketPath,
+          ownedSocket
+        );
         try {
-          const socket = await lstat(options.socketPath, { bigint: true });
-          if (
-            socket.isSocket() &&
-            socket.dev === ownedSocket.dev &&
-            socket.ino === ownedSocket.ino
-          ) {
-            await unlink(options.socketPath);
+          await new Promise<void>((resolveClose, rejectClose) => {
+            server.close((error) => {
+              if (error) rejectClose(error);
+              else resolveClose();
+            });
+            server.closeAllConnections();
+          });
+          started = false;
+          if (!preserved && ownedSocket) {
+            try {
+              const socket = await lstat(options.socketPath, { bigint: true });
+              if (
+                socket.isSocket() &&
+                socket.dev === ownedSocket.dev &&
+                socket.ino === ownedSocket.ino
+              ) {
+                await unlink(options.socketPath);
+              }
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
           }
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        } finally {
+          await restoreForeignReplacement(options.socketPath, preserved);
         }
+        ownedSocket = undefined;
+        safeLog(options.logger, { event: "broker_stopped" });
+      })();
+      try {
+        await closing;
+      } finally {
+        closing = undefined;
       }
-      ownedSocket = undefined;
-      safeLog(options.logger, { event: "broker_stopped" });
     }
   };
 }
