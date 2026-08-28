@@ -25,6 +25,10 @@ export interface WebEntryCookieSecrets {
 
 const authenticationSources =
   new WeakMap<FastifyRequest, WebAuthenticationSource>();
+const federationEntryCredentials = new WeakMap<
+  FastifyRequest,
+  { entrySessionRef: string; entryToken: string }
+>();
 
 export function webAuthenticationSource(
   request: FastifyRequest
@@ -211,6 +215,22 @@ export function applyWebEntryCookieHeaders(request: FastifyRequest): boolean {
   request.headers.authorization = `Bearer ${entryToken}`;
   request.headers["x-entry-session-ref"] = entrySessionRef;
   return true;
+}
+
+export function useFederationEntryCookies(request: FastifyRequest): {
+  entrySessionRef: string;
+  entryToken: string;
+} | null {
+  const existing = federationEntryCredentials.get(request);
+  if (existing) return existing;
+  const cookies = parseCookieHeader(request.headers.cookie);
+  const entrySessionRef = cookies[WEB_COOKIE_NAMES.entrySessionRef];
+  const entryToken = cookies[WEB_COOKIE_NAMES.entryToken];
+  if (!entrySessionRef || !entryToken) return null;
+  const credentials = { entrySessionRef, entryToken };
+  federationEntryCredentials.set(request, credentials);
+  authenticationSources.set(request, "entry_cookie");
+  return credentials;
 }
 
 function readWebDeviceCookies(request: FastifyRequest): {

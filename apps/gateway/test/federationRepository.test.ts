@@ -404,4 +404,61 @@ describe("FederationRepository", () => {
       expect(serialized).not.toContain(sensitive);
     }
   });
+
+  it("binds one external session to one exact product Person Agent and local session", () => {
+    const key = {
+      product: "canvas" as const,
+      familyRef,
+      personRef,
+      agentRef: "agent:personal-assistant",
+      localSessionRef: "local-session:canvas-1"
+    };
+    expect(repository.validateExternalSessionBinding(key)).toBeNull();
+    const bound = repository.bindExternalSession({
+      ...key,
+      externalSessionRef: "external-session:hermes-zzh-session-1"
+    });
+    expect(bound).toMatchObject({
+      ...key,
+      externalSessionRef: "external-session:hermes-zzh-session-1"
+    });
+    expect(repository.validateExternalSessionBinding({
+      ...key,
+      externalSessionRef: bound.externalSessionRef
+    })).toEqual(bound);
+    expect(() => repository.validateExternalSessionBinding(key)).toThrow(
+      "FEDERATION_SESSION_REQUIRED"
+    );
+    expect(() => repository.validateExternalSessionBinding({
+      ...key,
+      externalSessionRef: "external-session:hermes-zzh-session-2"
+    })).toThrow("FEDERATION_SESSION_MISMATCH");
+    expect(() => repository.validateExternalSessionBinding({
+      ...key,
+      product: "me",
+      externalSessionRef: bound.externalSessionRef
+    })).toThrow("FEDERATION_SESSION_SCOPE_CONFLICT");
+  });
+
+  it("does not persist prompt output token Cookie path or raw Hermes material in V12", () => {
+    repository.bindExternalSession({
+      product: "me",
+      familyRef,
+      personRef,
+      agentRef: "agent:personal-assistant",
+      localSessionRef: "local-session:me-safe",
+      externalSessionRef: "external-session:hermes-nsy-safe",
+      prompt: SENSITIVE_VALUES[1],
+      output: SENSITIVE_VALUES[2],
+      token: SENSITIVE_VALUES[0],
+      cookie: "family_ai_web_entry_token=private",
+      path: SENSITIVE_VALUES[5]
+    } as Parameters<FederationRepository["bindExternalSession"]>[0] & Record<string, string>);
+    const serialized = JSON.stringify(
+      db.prepare("SELECT * FROM federation_session_bindings").all()
+    );
+    for (const sensitive of [...SENSITIVE_VALUES, "family_ai_web_entry_token"]) {
+      expect(serialized).not.toContain(sensitive);
+    }
+  });
 });

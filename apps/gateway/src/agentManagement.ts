@@ -318,6 +318,7 @@ export class AgentManagementRepository {
         active,
         this.now().toISOString()
       );
+      this.advanceAssignmentVersion(input.personRef);
       return {
         assignmentRef,
         agentRef: input.agentRef,
@@ -354,6 +355,7 @@ export class AgentManagementRepository {
         runtime.providerProfileRef,
         active
       );
+      this.advanceAssignmentVersion(input.personRef);
     })();
   }
 
@@ -371,6 +373,11 @@ export class AgentManagementRepository {
           runtime.providerProfileRef
         );
       }
+      const current = this.db.prepare(
+        `SELECT agent_ref FROM assistant_assignments
+         WHERE person_ref = ? AND status = ? AND is_default = 1`
+      ).get(input.personRef, active) as { agent_ref: string } | undefined;
+      if ((current?.agent_ref ?? null) === input.agentRef) return;
       this.db.prepare(
         "UPDATE assistant_assignments SET is_default = 0 WHERE person_ref = ? AND status = ?"
       ).run(input.personRef, active);
@@ -380,6 +387,7 @@ export class AgentManagementRepository {
            WHERE person_ref = ? AND agent_ref = ? AND status = ?`
         ).run(input.personRef, input.agentRef, active);
       }
+      this.advanceAssignmentVersion(input.personRef);
     })();
   }
 
@@ -425,6 +433,16 @@ export class AgentManagementRepository {
          AND fm.status = ? AND p.status = ?`
     ).get(familyRef, personRef, active, active);
     if (!member) throw this.memberNotFound();
+  }
+
+  private advanceAssignmentVersion(personRef: string): void {
+    this.db.prepare(
+      `INSERT INTO person_event_sequences(person_ref, last_sequence, updated_at)
+       VALUES(?, 1, ?)
+       ON CONFLICT(person_ref) DO UPDATE SET
+         last_sequence = person_event_sequences.last_sequence + 1,
+         updated_at = excluded.updated_at`
+    ).run(personRef, this.now().toISOString());
   }
 
   private requireConfigurableMember(familyRef: string, personRef: string): void {

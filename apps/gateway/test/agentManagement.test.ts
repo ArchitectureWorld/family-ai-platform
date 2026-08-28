@@ -10,6 +10,7 @@ import {
 } from "../src/agentManagement.js";
 import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
 import { FamilyDomainRepository } from "../src/familyDomain.js";
+import { DomainEventStore } from "../src/domainEvents.js";
 
 const configuredAgents: readonly ConfiguredAgentRuntime[] = [
   { agentRef: "agent:shared", displayName: "共享助理", providerProfileRef: "provider-profile:shared", providerKind: "fake" },
@@ -88,6 +89,7 @@ describe("Agent management repository", () => {
     familyRef = onboarding.family.familyRef;
     alice = onboarding.owner.personRef;
     bob = family.createMember({ familyRef, displayName: "Bob", familyRole: "adult" }).personRef;
+    new DomainEventStore(db, () => new Date("2026-07-28T10:00:00.000Z"));
     repository = new AgentManagementRepository(db, () => new Date("2026-07-28T10:00:00.000Z"));
     repository.reconcileRuntimeCatalog(configuredAgents);
   });
@@ -219,6 +221,26 @@ describe("Agent management repository", () => {
     repository.unmountMemberAgent({ familyRef, personRef: alice, agentRef: "agent:shared" });
     expect(repository.listMemberMounts(familyRef, alice).defaultAgentRef).toBeNull();
     expect(db.prepare(`SELECT COUNT(*) AS count FROM assistant_assignments WHERE person_ref = ? AND agent_ref = ? AND status = ?`).get(alice, "agent:shared", "ended")).toEqual({ count: 1 });
+  });
+
+  it("advances the Person assignment version only for actual mount default and unmount changes", () => {
+    const version = () => (db.prepare(
+      "SELECT last_sequence FROM person_event_sequences WHERE person_ref = ?"
+    ).get(bob) as { last_sequence: number } | undefined)?.last_sequence ?? 0;
+
+    expect(version()).toBe(0);
+    repository.mountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    expect(version()).toBe(1);
+    repository.mountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    expect(version()).toBe(1);
+    repository.setDefaultAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    expect(version()).toBe(2);
+    repository.setDefaultAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    expect(version()).toBe(2);
+    repository.setDefaultAgent({ familyRef, personRef: bob, agentRef: null });
+    expect(version()).toBe(3);
+    repository.unmountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    expect(version()).toBe(4);
   });
 
   it("creates missing owner Admin assignments without overwriting them", () => {

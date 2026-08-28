@@ -71,6 +71,19 @@ export interface BrokerProviderOptions {
 
 type TransportFailure = "timeout" | "invalid" | "unavailable";
 
+export type BrokerFederationErrorCode =
+  | "BROKER_FEDERATION_REQUEST_INVALID"
+  | "BROKER_FEDERATION_TIMEOUT"
+  | "BROKER_FEDERATION_RESPONSE_INVALID"
+  | "BROKER_FEDERATION_UNAVAILABLE";
+
+export class BrokerFederationError extends Error {
+  constructor(readonly code: BrokerFederationErrorCode) {
+    super(code);
+    this.name = "BrokerFederationError";
+  }
+}
+
 class BrokerTransportError extends Error {
   constructor(readonly kind: TransportFailure) {
     super(kind);
@@ -492,6 +505,80 @@ export class BrokerProviderAdapter implements ProviderAdapter {
       providerProfiles: [this.options.providerProfileRef],
       checkedAt: this.clock().toISOString()
     };
+  }
+
+  async invokeFederated(
+    request: AgentInvocationRequestV1
+  ): Promise<AgentInvocationResultV1> {
+    const parsedRequest = agentInvocationRequestV1Schema.safeParse(request);
+    if (
+      !parsedRequest.success ||
+      parsedRequest.data.agentRef !== this.options.targetAgentRef ||
+      (parsedRequest.data.externalSessionRef !== undefined &&
+        !validExternalSessionRef(
+          parsedRequest.data.externalSessionRef,
+          this.externalSessionPrefix
+        ))
+    ) {
+      throw new BrokerFederationError("BROKER_FEDERATION_REQUEST_INVALID");
+    }
+
+    let response: BrokerHttpResponse;
+    try {
+      response = await requestJson({
+        socketPath: this.options.socketPath,
+        method: "POST",
+        path: "/v1/invocations",
+        body: JSON.stringify(parsedRequest.data),
+        deadlineMs: Math.min(parsedRequest.data.timeoutMs, this.maxDeadlineMs),
+        maxRequestBytes: this.maxRequestBytes,
+        maxResponseBytes: this.maxResponseBytes
+      });
+    } catch (error) {
+      const kind = error instanceof BrokerTransportError
+        ? error.kind
+        : "unavailable";
+      throw new BrokerFederationError(
+        kind === "timeout"
+          ? "BROKER_FEDERATION_TIMEOUT"
+          : kind === "invalid"
+            ? "BROKER_FEDERATION_RESPONSE_INVALID"
+            : "BROKER_FEDERATION_UNAVAILABLE"
+      );
+    }
+    if (response.statusCode !== 200) {
+      throw new BrokerFederationError("BROKER_FEDERATION_UNAVAILABLE");
+    }
+    if (!jsonMediaType(response.headers["content-type"])) {
+      throw new BrokerFederationError("BROKER_FEDERATION_RESPONSE_INVALID");
+    }
+
+    let result: AgentInvocationResultV1;
+    try {
+      const parsedResult = agentInvocationResultV1Schema.safeParse(
+        parseStrictJson(response.body)
+      );
+      if (!parsedResult.success) {
+        throw new BrokerFederationError("BROKER_FEDERATION_RESPONSE_INVALID");
+      }
+      result = parsedResult.data;
+    } catch (error) {
+      if (error instanceof BrokerFederationError) throw error;
+      throw new BrokerFederationError("BROKER_FEDERATION_RESPONSE_INVALID");
+    }
+    if (
+      result.invocationRef !== parsedRequest.data.invocationRef ||
+      result.correlationRef !== parsedRequest.data.correlationRef ||
+      !validExternalSessionRef(
+        result.externalSessionRef,
+        this.externalSessionPrefix
+      ) ||
+      (parsedRequest.data.externalSessionRef !== undefined &&
+        result.externalSessionRef !== parsedRequest.data.externalSessionRef)
+    ) {
+      throw new BrokerFederationError("BROKER_FEDERATION_RESPONSE_INVALID");
+    }
+    return result;
   }
 
   async invoke(

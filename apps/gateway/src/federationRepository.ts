@@ -42,6 +42,24 @@ export interface InvocationAuditRecord {
   completedAt: string | null;
 }
 
+export interface FederationSessionBinding {
+  product: FederationServiceProduct;
+  familyRef: string;
+  personRef: string;
+  agentRef: string;
+  localSessionRef: string;
+  externalSessionRef: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthorizedFederationAgent {
+  agentRef: string;
+  displayName: string;
+  providerProfileRef: string;
+  system: boolean;
+}
+
 const SAFE_IDENTIFIER = /^[a-z][a-z0-9._:-]{0,99}$/;
 const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
 const PRODUCT_IDS = new Set<ProductId>(["family", "canvas", "me"]);
@@ -57,6 +75,11 @@ const DISCOVERY_STATUSES = new Set<DiscoveryStatus>([
   "available",
   "unavailable",
   "disabled"
+]);
+const FEDERATION_AGENT_PROFILES = new Map<string, string>([
+  ["agent:hermes-jarvis", "provider-profile:broker-jarvis"],
+  ["agent:hermes-zzh", "provider-profile:broker-zzh"],
+  ["agent:hermes-nsy", "provider-profile:broker-nsy"]
 ]);
 
 function sha256(value: string): string {
@@ -116,6 +139,19 @@ function mapAudit(row: Record<string, unknown>): InvocationAuditRecord {
     errorCode: row.error_code === null ? null : String(row.error_code),
     startedAt: String(row.started_at),
     completedAt: row.completed_at === null ? null : String(row.completed_at)
+  };
+}
+
+function mapSessionBinding(row: Record<string, unknown>): FederationSessionBinding {
+  return {
+    product: row.product as FederationServiceProduct,
+    familyRef: String(row.family_ref),
+    personRef: String(row.person_ref),
+    agentRef: String(row.agent_ref),
+    localSessionRef: String(row.local_session_ref),
+    externalSessionRef: String(row.external_session_ref),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
   };
 }
 
@@ -360,6 +396,139 @@ export class FederationRepository {
     return row ? this.mapActorContext(row) : null;
   }
 
+  listAuthorizedAgents(
+    actor: FederationActorContextV1
+  ): AuthorizedFederationAgent[] {
+    const rows = this.db.prepare(
+      `SELECT a.agent_ref, a.display_name, rb.provider_profile_ref,
+              CASE WHEN a.agent_ref = 'agent:hermes-jarvis' THEN 1 ELSE 0 END AS system
+       FROM agents a
+       JOIN agent_runtime_bindings rb
+         ON rb.agent_ref = a.agent_ref AND rb.status = 'active'
+       WHERE (
+         a.agent_ref = 'agent:hermes-jarvis'
+         AND ? = 1
+       ) OR EXISTS (
+         SELECT 1 FROM assistant_assignments aa
+         WHERE aa.person_ref = ?
+           AND aa.agent_ref = a.agent_ref
+           AND aa.provider_profile_ref = rb.provider_profile_ref
+           AND aa.status = 'active'
+           AND aa.agent_ref IN ('agent:hermes-zzh', 'agent:hermes-nsy')
+       )
+       ORDER BY a.agent_ref`
+    ).all(
+      actor.roles.includes("family_admin") ? 1 : 0,
+      actor.personRef
+    ) as Array<Record<string, unknown>>;
+    return rows.flatMap((row) => {
+      const agentRef = String(row.agent_ref);
+      const providerProfileRef = String(row.provider_profile_ref);
+      if (FEDERATION_AGENT_PROFILES.get(agentRef) !== providerProfileRef) {
+        return [];
+      }
+      return [{
+        agentRef,
+        displayName: String(row.display_name),
+        providerProfileRef,
+        system: Number(row.system) === 1
+      }];
+    });
+  }
+
+  requireAuthorizedAgent(
+    actor: FederationActorContextV1,
+    agentRef: string
+  ): AuthorizedFederationAgent {
+    const authorized = this.listAuthorizedAgents(actor).find(
+      (candidate) => candidate.agentRef === agentRef
+    );
+    if (!authorized) throw new Error("FEDERATION_AGENT_FORBIDDEN");
+    return authorized;
+  }
+
+  validateExternalSessionBinding(input: {
+    product: FederationServiceProduct;
+    familyRef: string;
+    personRef: string;
+    agentRef: string;
+    localSessionRef: string;
+    externalSessionRef?: string;
+  }): FederationSessionBinding | null {
+    this.validateSessionBindingInput(input);
+    const exact = this.db.prepare(
+      `SELECT * FROM federation_session_bindings
+       WHERE product = ? AND family_ref = ? AND person_ref = ?
+         AND agent_ref = ? AND local_session_ref = ?`
+    ).get(
+      input.product,
+      input.familyRef,
+      input.personRef,
+      input.agentRef,
+      input.localSessionRef
+    ) as Record<string, unknown> | undefined;
+    if (exact) {
+      const binding = mapSessionBinding(exact);
+      if (input.externalSessionRef === undefined) {
+        throw new Error("FEDERATION_SESSION_REQUIRED");
+      }
+      if (input.externalSessionRef !== binding.externalSessionRef) {
+        throw new Error("FEDERATION_SESSION_MISMATCH");
+      }
+      return binding;
+    }
+    if (input.externalSessionRef !== undefined) {
+      const occupied = this.db.prepare(
+        `SELECT 1 FROM federation_session_bindings
+         WHERE external_session_ref = ?`
+      ).get(input.externalSessionRef);
+      if (occupied) throw new Error("FEDERATION_SESSION_SCOPE_CONFLICT");
+    }
+    return null;
+  }
+
+  bindExternalSession(input: {
+    product: FederationServiceProduct;
+    familyRef: string;
+    personRef: string;
+    agentRef: string;
+    localSessionRef: string;
+    externalSessionRef: string;
+  }): FederationSessionBinding {
+    const bind = this.db.transaction(() => {
+      const existing = this.validateExternalSessionBinding(input);
+      if (existing) return existing;
+      const timestamp = this.now().toISOString();
+      this.db.prepare(
+        `INSERT INTO federation_session_bindings(
+           product, family_ref, person_ref, agent_ref, local_session_ref,
+           external_session_ref, created_at, updated_at
+         ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        input.product,
+        input.familyRef,
+        input.personRef,
+        input.agentRef,
+        input.localSessionRef,
+        input.externalSessionRef,
+        timestamp,
+        timestamp
+      );
+      return mapSessionBinding(this.db.prepare(
+        `SELECT * FROM federation_session_bindings
+         WHERE product = ? AND family_ref = ? AND person_ref = ?
+           AND agent_ref = ? AND local_session_ref = ?`
+      ).get(
+        input.product,
+        input.familyRef,
+        input.personRef,
+        input.agentRef,
+        input.localSessionRef
+      ) as Record<string, unknown>);
+    });
+    return bind.immediate();
+  }
+
   acceptInvocation(input: {
     invocationRef: string;
     correlationRef: string;
@@ -379,6 +548,10 @@ export class FederationRepository {
       throw new Error("FEDERATION_AUDIT_INVALID");
     }
     const accept = this.db.transaction(() => {
+      const duplicate = this.db.prepare(
+        "SELECT 1 FROM agent_invocation_audit WHERE invocation_ref = ?"
+      ).get(input.invocationRef);
+      if (duplicate) throw new Error("FEDERATION_INVOCATION_DUPLICATE");
       const subject = this.db.prepare(
         `SELECT 1
          FROM persons p, agents a
@@ -471,6 +644,27 @@ export class FederationRepository {
          AND es.expires_at > ?`
     ).get(entrySessionRef, now) as LiveActorRow | undefined;
     return row ?? null;
+  }
+
+  private validateSessionBindingInput(input: {
+    product: FederationServiceProduct;
+    familyRef: string;
+    personRef: string;
+    agentRef: string;
+    localSessionRef: string;
+    externalSessionRef?: string;
+  }): void {
+    if (
+      !SERVICE_PRODUCTS.has(input.product) ||
+      !hasRefPrefix(input.familyRef, "family") ||
+      !hasRefPrefix(input.personRef, "person") ||
+      !hasRefPrefix(input.agentRef, "agent") ||
+      !hasRefPrefix(input.localSessionRef, "local-session") ||
+      (input.externalSessionRef !== undefined &&
+        !hasRefPrefix(input.externalSessionRef, "external-session"))
+    ) {
+      throw new Error("FEDERATION_SESSION_INVALID");
+    }
   }
 
   private mapActorContext(row: LiveActorRow): FederationActorContextV1 {

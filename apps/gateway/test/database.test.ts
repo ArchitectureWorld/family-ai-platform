@@ -32,7 +32,8 @@ const migrationVersions = [
   { version: 8 },
   { version: 9 },
   { version: 10 },
-  { version: 11 }
+  { version: 11 },
+  { version: 12 }
 ];
 
 const openAtVersion = openGatewayDatabase as unknown as (
@@ -313,12 +314,12 @@ describe("gateway database", () => {
         applied_at TEXT NOT NULL
       );
       INSERT INTO schema_migrations(version, applied_at)
-      VALUES(12, '2026-07-25T00:00:00.000Z');
+      VALUES(13, '2026-07-25T00:00:00.000Z');
     `);
     legacy.close();
 
     expect(() => openGatewayDatabase(databasePath)).toThrow(
-      "Unsupported Gateway schema version: 12"
+      "Unsupported Gateway schema version: 13"
     );
   });
 
@@ -418,6 +419,31 @@ describe("gateway database", () => {
     ).all()).toEqual(first);
     expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 11").get())
       .toEqual({ count: 1 });
+  });
+
+  it("adds only opaque durable external-session bindings in V12", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-session-schema-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 11 });
+    db.close();
+
+    db = openGatewayDatabase(databasePath);
+    expect(db.prepare("PRAGMA table_info(federation_session_bindings)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual([
+      "product",
+      "family_ref",
+      "person_ref",
+      "agent_ref",
+      "local_session_ref",
+      "external_session_ref",
+      "created_at",
+      "updated_at"
+    ]);
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 12"
+    ).get()).toEqual({ count: 1 });
+    expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
   it("creates the formal Chat Work domain schema with thread-scoped uniqueness", () => {

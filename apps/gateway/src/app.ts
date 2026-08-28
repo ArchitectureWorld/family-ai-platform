@@ -53,6 +53,9 @@ import {
   registerEventStreamRoutes
 } from "./eventStream.js";
 import { FamilyDomainRepository } from "./familyDomain.js";
+import { FederationRepository, type FederationServiceProduct } from "./federationRepository.js";
+import { FederationService } from "./federationService.js";
+import { registerFederationRoutes } from "./federationRoutes.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
 import { registerAgentRoutes, type AgentStatusLookup } from "./agentRoutes.js";
 import { registerAdminWeb } from "./adminWeb.js";
@@ -84,6 +87,11 @@ export interface BuildGatewayAppOptions {
   configuredAgentRuntimes?: readonly ConfiguredAgentRuntime[];
   providerAdapter?: ProviderAdapter;
   providerRouter?: ProviderAdapterResolver;
+  federationServices?: readonly {
+    serviceRef: string;
+    product: FederationServiceProduct;
+    token: string;
+  }[];
   authoritativeAgentRuntimeCatalog?: boolean;
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
   previewAdminEntryPath?: string;
@@ -353,6 +361,15 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     (options.mode === "production" ? null : new FakeProviderAdapter());
   const providerRouter = options.providerRouter ??
     ProviderAdapterRouter.single("provider-profile:fake-local", providerAdapter!);
+  const federationRepository = new FederationRepository(db, { now });
+  for (const service of options.federationServices ?? []) {
+    federationRepository.provisionService(service);
+  }
+  const federationService = new FederationService(
+    federationRepository,
+    providerRouter,
+    now
+  );
   const agentStatus: AgentStatusLookup = new AgentStatusService(
     db,
     providerRouter,
@@ -416,6 +433,10 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     repository: agentManagementRepository,
     entryAuthenticator,
     agentStatus
+  });
+  registerFederationRoutes(app, {
+    service: federationService,
+    entryAuthenticator
   });
   registerAdminPreviewPersistence(app, {
     mode: options.mode,

@@ -7,7 +7,10 @@ import http, {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ProviderInvocationRequest } from "@family-ai/contracts";
+import type {
+  AgentInvocationRequestV1,
+  ProviderInvocationRequest
+} from "@family-ai/contracts";
 import { BrokerProviderAdapter } from "../src/brokerProvider.js";
 
 const temporaryDirectories: string[] = [];
@@ -26,6 +29,18 @@ const providerRequest: ProviderInvocationRequest = {
     { type: "text", text: "SENTINEL_PRIVATE_PROMPT?token=never-in-url" },
     { type: "text", text: "第二段" }
   ],
+  timeoutMs: 2_000
+};
+
+const federatedRequest: AgentInvocationRequestV1 = {
+  protocolVersion: 1,
+  invocationRef: "invocation:federated-adapter-1",
+  correlationRef: "correlation:federated-adapter-1",
+  product: "canvas",
+  actorContextRef: "actor-context:federated-adapter-1",
+  agentRef: "agent:hermes-zzh",
+  localSessionRef: "local-session:canvas-federated-1",
+  prompt: "FEDERATED_PRIVATE_PROMPT",
   timeoutMs: 2_000
 };
 
@@ -121,6 +136,44 @@ afterEach(async () => {
 });
 
 describe("BrokerProviderAdapter", () => {
+  it("sends an already-authorized federation request unchanged over UDS", async () => {
+    let capturedBody: unknown;
+    const socketPath = await startUdsServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        capturedBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        sendJson(response, 200, brokerResult({
+          invocationRef: federatedRequest.invocationRef,
+          correlationRef: federatedRequest.correlationRef
+        }));
+      });
+    });
+
+    const result = await adapter(socketPath).invokeFederated(federatedRequest);
+
+    expect(capturedBody).toEqual(federatedRequest);
+    expect(result).toMatchObject({
+      invocationRef: federatedRequest.invocationRef,
+      correlationRef: federatedRequest.correlationRef,
+      status: "succeeded"
+    });
+  });
+
+  it("rejects a federation request for another Agent before opening UDS", async () => {
+    let calls = 0;
+    const socketPath = await startUdsServer((_request, response) => {
+      calls += 1;
+      sendJson(response, 200, brokerResult());
+    });
+
+    await expect(adapter(socketPath).invokeFederated({
+      ...federatedRequest,
+      agentRef: "agent:hermes-nsy"
+    })).rejects.toMatchObject({ code: "BROKER_FEDERATION_REQUEST_INVALID" });
+    expect(calls).toBe(0);
+  });
+
   it("sends only the strict bounded Family projection in the UDS body", async () => {
     let capturedUrl = "";
     let capturedBody: unknown;

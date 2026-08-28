@@ -958,6 +958,20 @@ CREATE TABLE agent_invocation_audit (
 );
 `;
 
+const MIGRATION_V12 = `
+CREATE TABLE federation_session_bindings (
+  product TEXT NOT NULL CHECK(product IN ('canvas', 'me')),
+  family_ref TEXT NOT NULL REFERENCES families(family_ref),
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref),
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  local_session_ref TEXT NOT NULL,
+  external_session_ref TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(product, family_ref, person_ref, agent_ref, local_session_ref)
+);
+`;
+
 function applyMigrationV8(db: GatewayDatabase): void {
   db.pragma("foreign_keys = OFF");
   try {
@@ -1012,6 +1026,15 @@ function applyMigrationV11(db: GatewayDatabase): void {
   })();
 }
 
+function applyMigrationV12(db: GatewayDatabase): void {
+  db.transaction(() => {
+    db.exec(MIGRATION_V12);
+    db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(12, ?)"
+    ).run(new Date().toISOString());
+  })();
+}
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -1021,7 +1044,7 @@ function latestMigrationVersion(db: GatewayDatabase): number {
 
 function applyMigrations(
   db: GatewayDatabase,
-  migrationLimit: 6 | 7 | 8 | 9 | 10 | 11
+  migrationLimit: 6 | 7 | 8 | 9 | 10 | 11 | 12
 ): void {
   const ledgerExists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
@@ -1104,13 +1127,17 @@ function applyMigrations(
     applyMigrationV11(db);
     latest = 11;
   }
+  if (latest === 11 && migrationLimit >= 12) {
+    applyMigrationV12(db);
+    latest = 12;
+  }
   if (latest !== migrationLimit) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
 
 export interface GatewayDatabaseOpenOptions {
-  migrationLimit?: 6 | 7 | 8 | 9 | 10 | 11;
+  migrationLimit?: 6 | 7 | 8 | 9 | 10 | 11 | 12;
 }
 
 export function openGatewayDatabase(
@@ -1122,7 +1149,7 @@ export function openGatewayDatabase(
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
-  applyMigrations(db, options.migrationLimit ?? 11);
+  applyMigrations(db, options.migrationLimit ?? 12);
   return db;
 }
 

@@ -9,6 +9,7 @@ import {
   parseCookieHeader,
   setWebEntryCookieHeaders,
   useWebDeviceCookies,
+  useFederationEntryCookies,
   webAuthenticationSource,
   webErrorCookieHeaders
 } from "../src/webEntryCookies.js";
@@ -96,6 +97,25 @@ describe("Web Entry Cookie helpers", () => {
     expect(applyWebEntryCookieHeaders(unrelated)).toBe(false);
     expect(unrelated.headers.authorization).toBeUndefined();
     expect(webAuthenticationSource(unrelated)).toBe("none");
+  });
+
+  it("reads federation Entry cookies privately without replacing service Authorization", () => {
+    const cookie = [
+      `${WEB_COOKIE_NAMES.entrySessionRef}=entry-session%3Aweb-alice`,
+      `${WEB_COOKIE_NAMES.entryToken}=${"B".repeat(43)}`
+    ].join("; ");
+    const federated = request({
+      url: "/api/v1/federation/session",
+      headers: { cookie, authorization: "Bearer canvas-service-token" }
+    });
+
+    expect(useFederationEntryCookies(federated)).toEqual({
+      entrySessionRef: "entry-session:web-alice",
+      entryToken: "B".repeat(43)
+    });
+    expect(federated.headers.authorization).toBe("Bearer canvas-service-token");
+    expect(federated.headers["x-entry-session-ref"]).toBeUndefined();
+    expect(webAuthenticationSource(federated)).toBe("entry_cookie");
   });
 
   it("records Device Cookie provenance only when a route deliberately uses the credentials", () => {
