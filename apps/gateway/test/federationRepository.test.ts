@@ -160,6 +160,29 @@ describe("FederationRepository", () => {
     })).toThrow("FEDERATION_CONTEXT_TTL_INVALID");
   });
 
+  it("rejects a path-shaped generated Actor context ref without persisting the sentinel", () => {
+    const pathSentinel = ["", "home", "youran", "private-context"].join("/");
+    const malicious = new FederationRepository(db, {
+      now: () => now,
+      uuid: () => pathSentinel
+    });
+
+    expect(() => malicious.issueActorContext({
+      product: "canvas",
+      entrySessionRef,
+      lifetimeSeconds: 60
+    })).toThrow("FEDERATION_CONTEXT_REF_INVALID");
+
+    const persisted = [
+      "federation_services",
+      "agent_discovery_observations",
+      "federation_actor_contexts",
+      "agent_invocation_audit"
+    ].flatMap((table) => db.prepare(`SELECT * FROM ${table}`).all());
+    expect(persisted).toEqual([]);
+    expect(JSON.stringify(persisted)).not.toContain(pathSentinel);
+  });
+
   it("invalidates Actor lookup after context expiry, Entry revocation, Device revocation, or version drift", () => {
     const issue = () => repository.issueActorContext({
       product: "me",
@@ -195,6 +218,79 @@ describe("FederationRepository", () => {
       occurredAt: now.toISOString()
     });
     expect(repository.getActorContext(staleVersion.contextRef)).toBeNull();
+  });
+
+  it("fails Actor lookup closed when any live authority relation becomes inactive", () => {
+    const refs = db.prepare(
+      `SELECT es.entry_binding_ref, db.device_binding_ref
+       FROM entry_sessions es
+       JOIN entry_bindings eb ON eb.entry_binding_ref = es.entry_binding_ref
+       JOIN device_bindings db
+         ON db.device_ref = eb.device_ref
+        AND db.family_ref = eb.family_ref
+        AND db.person_ref = eb.person_ref
+        AND db.owner_scope = 'person'
+        AND db.status = 'active'
+       WHERE es.entry_session_ref = ?`
+    ).get(entrySessionRef) as {
+      entry_binding_ref: string;
+      device_binding_ref: string;
+    };
+    const cases = [
+      {
+        mutate: () => db.prepare(
+          "UPDATE entry_bindings SET status = 'revoked' WHERE entry_binding_ref = ?"
+        ).run(refs.entry_binding_ref),
+        restore: () => db.prepare(
+          "UPDATE entry_bindings SET status = 'active' WHERE entry_binding_ref = ?"
+        ).run(refs.entry_binding_ref)
+      },
+      {
+        mutate: () => db.prepare(
+          "UPDATE families SET status = 'archived' WHERE family_ref = ?"
+        ).run(familyRef),
+        restore: () => db.prepare(
+          "UPDATE families SET status = 'active' WHERE family_ref = ?"
+        ).run(familyRef)
+      },
+      {
+        mutate: () => db.prepare(
+          "UPDATE persons SET status = 'suspended' WHERE person_ref = ?"
+        ).run(personRef),
+        restore: () => db.prepare(
+          "UPDATE persons SET status = 'active' WHERE person_ref = ?"
+        ).run(personRef)
+      },
+      {
+        mutate: () => db.prepare(
+          `UPDATE family_memberships SET status = 'inactive'
+           WHERE family_ref = ? AND person_ref = ?`
+        ).run(familyRef, personRef),
+        restore: () => db.prepare(
+          `UPDATE family_memberships SET status = 'active'
+           WHERE family_ref = ? AND person_ref = ?`
+        ).run(familyRef, personRef)
+      },
+      {
+        mutate: () => db.prepare(
+          "UPDATE device_bindings SET status = 'revoked' WHERE device_binding_ref = ?"
+        ).run(refs.device_binding_ref),
+        restore: () => db.prepare(
+          "UPDATE device_bindings SET status = 'active' WHERE device_binding_ref = ?"
+        ).run(refs.device_binding_ref)
+      }
+    ];
+
+    for (const testCase of cases) {
+      const actor = repository.issueActorContext({
+        product: "canvas",
+        entrySessionRef,
+        lifetimeSeconds: 60
+      });
+      testCase.mutate();
+      expect(repository.getActorContext(actor.contextRef)).toBeNull();
+      testCase.restore();
+    }
   });
 
   it("allows only accepted to succeeded or failed audit transitions", () => {

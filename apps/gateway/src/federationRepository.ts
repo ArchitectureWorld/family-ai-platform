@@ -284,6 +284,9 @@ export class FederationRepository {
         throw new Error("FEDERATION_ASSIGNMENT_VERSION_UNAVAILABLE");
       }
       const contextRef = `actor-context:${this.uuid()}`;
+      if (!hasRefPrefix(contextRef, "actor-context")) {
+        throw new Error("FEDERATION_CONTEXT_REF_INVALID");
+      }
       const expiresAt = new Date(
         createdAt.getTime() + lifetimeSeconds * 1_000
       ).toISOString();
