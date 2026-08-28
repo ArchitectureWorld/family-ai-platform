@@ -225,10 +225,20 @@ describe("Agent management repository", () => {
 
   it("advances the Person assignment version only for actual mount default and unmount changes", () => {
     const version = () => (db.prepare(
-      "SELECT last_sequence FROM person_event_sequences WHERE person_ref = ?"
-    ).get(bob) as { last_sequence: number } | undefined)?.last_sequence ?? 0;
+      `SELECT assignment_version
+       FROM person_agent_assignment_versions WHERE person_ref = ?`
+    ).get(bob) as { assignment_version: number } | undefined)?.assignment_version ?? 0;
+    const syncFacts = () => ({
+      sequence: db.prepare(
+        "SELECT last_sequence FROM person_event_sequences WHERE person_ref = ?"
+      ).get(bob) ?? null,
+      events: db.prepare(
+        "SELECT event_sequence FROM domain_events WHERE person_ref = ? ORDER BY event_sequence"
+      ).all(bob)
+    });
 
     expect(version()).toBe(0);
+    const beforeSync = syncFacts();
     repository.mountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
     expect(version()).toBe(1);
     repository.mountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
@@ -241,6 +251,7 @@ describe("Agent management repository", () => {
     expect(version()).toBe(3);
     repository.unmountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
     expect(version()).toBe(4);
+    expect(syncFacts()).toEqual(beforeSync);
   });
 
   it("creates missing owner Admin assignments without overwriting them", () => {

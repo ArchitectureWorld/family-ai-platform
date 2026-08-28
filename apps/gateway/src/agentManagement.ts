@@ -437,10 +437,13 @@ export class AgentManagementRepository {
 
   private advanceAssignmentVersion(personRef: string): void {
     this.db.prepare(
-      `INSERT INTO person_event_sequences(person_ref, last_sequence, updated_at)
+      `INSERT INTO person_agent_assignment_versions(
+         person_ref, assignment_version, updated_at
+       )
        VALUES(?, 1, ?)
        ON CONFLICT(person_ref) DO UPDATE SET
-         last_sequence = person_event_sequences.last_sequence + 1,
+         assignment_version =
+           person_agent_assignment_versions.assignment_version + 1,
          updated_at = excluded.updated_at`
     ).run(personRef, this.now().toISOString());
   }

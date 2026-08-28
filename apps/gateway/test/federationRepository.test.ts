@@ -131,6 +131,20 @@ describe("FederationRepository", () => {
       "chat",
       "session-resume"
     ]);
+    for (const observedAt of [
+      "2026-08-28 12:00:00",
+      "2026-08-28T20:00:00.000+08:00",
+      "2026-08-28T12:00:00Z"
+    ]) {
+      expect(() => repository.recordDiscoveryObservation({
+        agentRef,
+        kind: "agent",
+        runtime: "hermes-local",
+        status: "available",
+        capabilities: ["chat"],
+        observedAt
+      })).toThrow("FEDERATION_DISCOVERY_INVALID");
+    }
   });
 
   it("issues Actor contexts for at most 60 seconds from live Entry and Person sequence", () => {
@@ -149,7 +163,7 @@ describe("FederationRepository", () => {
       deviceRef,
       entrySessionRef,
       roles: ["owner", "family_admin"],
-      assignmentVersion: 7,
+      assignmentVersion: 1,
       expiresAt: new Date(now.getTime() + 60_000).toISOString()
     });
     expect(repository.getActorContext(actor.contextRef)).toEqual(actor);
@@ -177,7 +191,10 @@ describe("FederationRepository", () => {
       "federation_services",
       "agent_discovery_observations",
       "federation_actor_contexts",
-      "agent_invocation_audit"
+      "agent_invocation_audit",
+      "person_agent_assignment_versions",
+      "federation_session_bindings",
+      "federation_session_invocation_claims"
     ].flatMap((table) => db.prepare(`SELECT * FROM ${table}`).all());
     expect(persisted).toEqual([]);
     expect(JSON.stringify(persisted)).not.toContain(pathSentinel);
@@ -209,14 +226,11 @@ describe("FederationRepository", () => {
       .run(deviceRef);
 
     const staleVersion = issue();
-    new DomainEventStore(db, () => now).append({
-      personRef,
-      eventType: "test.federation.assignment.changed",
-      aggregateType: "work",
-      aggregateRef: "work:federation-version-change",
-      payload: {},
-      occurredAt: now.toISOString()
-    });
+    db.prepare(
+      `UPDATE person_agent_assignment_versions
+       SET assignment_version = assignment_version + 1, updated_at = ?
+       WHERE person_ref = ?`
+    ).run(now.toISOString(), personRef);
     expect(repository.getActorContext(staleVersion.contextRef)).toBeNull();
   });
 
@@ -397,7 +411,10 @@ describe("FederationRepository", () => {
       "federation_services",
       "agent_discovery_observations",
       "federation_actor_contexts",
-      "agent_invocation_audit"
+      "agent_invocation_audit",
+      "person_agent_assignment_versions",
+      "federation_session_bindings",
+      "federation_session_invocation_claims"
     ].flatMap((table) => db.prepare(`SELECT * FROM ${table}`).all());
     const serialized = JSON.stringify(persisted);
     for (const sensitive of SENSITIVE_VALUES) {
@@ -414,10 +431,26 @@ describe("FederationRepository", () => {
       localSessionRef: "local-session:canvas-1"
     };
     expect(repository.validateExternalSessionBinding(key)).toBeNull();
-    const bound = repository.bindExternalSession({
+    repository.provisionService({
+      serviceRef: "service:canvas",
+      product: "canvas",
+      token: SENSITIVE_VALUES[0]
+    });
+    repository.claimInvocation({
       ...key,
+      serviceRef: "service:canvas",
+      invocationRef: "invocation:bind-first",
+      correlationRef: "correlation:bind-first",
+      timeoutMs: 2_000
+    });
+    repository.finalizeInvocationSuccess({
+      invocationRef: "invocation:bind-first",
       externalSessionRef: "external-session:hermes-zzh-session-1"
     });
+    const bound = repository.validateExternalSessionBinding({
+      ...key,
+      externalSessionRef: "external-session:hermes-zzh-session-1"
+    })!;
     expect(bound).toMatchObject({
       ...key,
       externalSessionRef: "external-session:hermes-zzh-session-1"
@@ -437,26 +470,151 @@ describe("FederationRepository", () => {
       ...key,
       product: "me",
       externalSessionRef: bound.externalSessionRef
-    })).toThrow("FEDERATION_SESSION_SCOPE_CONFLICT");
+    })).toThrow("FEDERATION_SESSION_UNBOUND");
+    expect(() => repository.validateExternalSessionBinding({
+      ...key,
+      localSessionRef: "local-session:brand-new",
+      externalSessionRef: "external-session:hermes-zzh-never-seen"
+    })).toThrow("FEDERATION_SESSION_UNBOUND");
+  });
+
+  it("claims one durable session invocation and recovers only after deadline plus grace", () => {
+    repository.provisionService({
+      serviceRef: "service:canvas",
+      product: "canvas",
+      token: SENSITIVE_VALUES[0]
+    });
+    const claim = (invocationRef: string) => repository.claimInvocation({
+      serviceRef: "service:canvas",
+      product: "canvas",
+      familyRef,
+      personRef,
+      agentRef: "agent:personal-assistant",
+      localSessionRef: "local-session:durable-claim",
+      invocationRef,
+      correlationRef: `correlation:${invocationRef.split(":")[1]}`,
+      timeoutMs: 1_000
+    });
+
+    expect(claim("invocation:lease-first")).toMatchObject({
+      invocationRef: "invocation:lease-first",
+      leaseExpiresAt: new Date(now.getTime() + 31_000).toISOString()
+    });
+    now = new Date(now.getTime() + 30_999);
+    expect(() => claim("invocation:lease-too-early")).toThrow(
+      "FEDERATION_INVOCATION_BUSY"
+    );
+    expect(repository.getInvocationAudit("invocation:lease-first")?.status)
+      .toBe("accepted");
+
+    now = new Date(now.getTime() + 1);
+    expect(() => claim("invocation:lease-at-deadline")).toThrow(
+      "FEDERATION_INVOCATION_BUSY"
+    );
+    now = new Date(now.getTime() + 1);
+    expect(claim("invocation:lease-recovered")).toMatchObject({
+      invocationRef: "invocation:lease-recovered"
+    });
+    expect(repository.getInvocationAudit("invocation:lease-first")).toMatchObject({
+      status: "failed",
+      errorCode: "AGENT_INVOCATION_ABANDONED"
+    });
+  });
+
+  it("atomically finalizes success or failure and preserves a recoverable claim on DB failure", () => {
+    repository.provisionService({
+      serviceRef: "service:me",
+      product: "me",
+      token: "me-service-token-private-value"
+    });
+    const claimInput = {
+      serviceRef: "service:me",
+      product: "me" as const,
+      familyRef,
+      personRef,
+      agentRef: "agent:personal-assistant",
+      localSessionRef: "local-session:atomic-finalize",
+      invocationRef: "invocation:atomic-finalize",
+      correlationRef: "correlation:atomic-finalize",
+      timeoutMs: 2_000
+    };
+    repository.claimInvocation(claimInput);
+    db.exec(`
+      CREATE TRIGGER fail_federation_audit_success
+      BEFORE UPDATE OF status ON agent_invocation_audit
+      WHEN NEW.invocation_ref = 'invocation:atomic-finalize'
+       AND NEW.status = 'succeeded'
+      BEGIN
+        SELECT RAISE(ABORT, 'INJECTED_AUDIT_FAILURE');
+      END;
+    `);
+
+    expect(() => repository.finalizeInvocationSuccess({
+      invocationRef: claimInput.invocationRef,
+      externalSessionRef: "external-session:fake-atomic"
+    })).toThrow("INJECTED_AUDIT_FAILURE");
+    expect(repository.getInvocationAudit(claimInput.invocationRef)?.status)
+      .toBe("accepted");
+    expect(repository.getInvocationClaim(claimInput.invocationRef)).not.toBeNull();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM federation_session_bindings").get())
+      .toEqual({ count: 0 });
+
+    db.exec("DROP TRIGGER fail_federation_audit_success");
+    repository.finalizeInvocationSuccess({
+      invocationRef: claimInput.invocationRef,
+      externalSessionRef: "external-session:fake-atomic"
+    });
+    expect(repository.getInvocationAudit(claimInput.invocationRef)?.status)
+      .toBe("succeeded");
+    expect(repository.getInvocationClaim(claimInput.invocationRef)).toBeNull();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM federation_session_bindings").get())
+      .toEqual({ count: 1 });
+
+    repository.claimInvocation({
+      ...claimInput,
+      localSessionRef: "local-session:atomic-failure",
+      invocationRef: "invocation:atomic-failure",
+      correlationRef: "correlation:atomic-failure"
+    });
+    repository.finalizeInvocationFailure({
+      invocationRef: "invocation:atomic-failure",
+      errorCode: "AGENT_RUNTIME_UNAVAILABLE"
+    });
+    expect(repository.getInvocationAudit("invocation:atomic-failure")?.status)
+      .toBe("failed");
+    expect(repository.getInvocationClaim("invocation:atomic-failure")).toBeNull();
   });
 
   it("does not persist prompt output token Cookie path or raw Hermes material in V12", () => {
-    repository.bindExternalSession({
+    repository.provisionService({
+      serviceRef: "service:me",
+      product: "me",
+      token: SENSITIVE_VALUES[0]
+    });
+    repository.claimInvocation({
+      serviceRef: "service:me",
       product: "me",
       familyRef,
       personRef,
       agentRef: "agent:personal-assistant",
       localSessionRef: "local-session:me-safe",
-      externalSessionRef: "external-session:hermes-nsy-safe",
+      invocationRef: "invocation:sensitive-v12",
+      correlationRef: "correlation:sensitive-v12",
+      timeoutMs: 2_000,
       prompt: SENSITIVE_VALUES[1],
       output: SENSITIVE_VALUES[2],
       token: SENSITIVE_VALUES[0],
       cookie: "family_ai_web_entry_token=private",
       path: SENSITIVE_VALUES[5]
-    } as Parameters<FederationRepository["bindExternalSession"]>[0] & Record<string, string>);
-    const serialized = JSON.stringify(
-      db.prepare("SELECT * FROM federation_session_bindings").all()
-    );
+    } as Parameters<FederationRepository["claimInvocation"]>[0] & Record<string, string>);
+    repository.finalizeInvocationSuccess({
+      invocationRef: "invocation:sensitive-v12",
+      externalSessionRef: "external-session:hermes-nsy-safe"
+    });
+    const serialized = JSON.stringify([
+      ...db.prepare("SELECT * FROM federation_session_bindings").all(),
+      ...db.prepare("SELECT * FROM federation_session_invocation_claims").all()
+    ]);
     for (const sensitive of [...SENSITIVE_VALUES, "family_ai_web_entry_token"]) {
       expect(serialized).not.toContain(sensitive);
     }

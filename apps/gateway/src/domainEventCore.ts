@@ -547,6 +547,7 @@ export class DomainEventStore {
       coreVersion?.version !== 8 &&
       coreVersion?.version !== 9 &&
       coreVersion?.version !== 10 &&
+      coreVersion?.version !== 11 &&
       coreVersion?.version !== 12
     ) {
       throw new Error(

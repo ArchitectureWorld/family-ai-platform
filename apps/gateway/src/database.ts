@@ -959,6 +959,12 @@ CREATE TABLE agent_invocation_audit (
 `;
 
 const MIGRATION_V12 = `
+CREATE TABLE person_agent_assignment_versions (
+  person_ref TEXT PRIMARY KEY REFERENCES persons(person_ref) ON DELETE CASCADE,
+  assignment_version INTEGER NOT NULL CHECK(assignment_version > 0),
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE federation_session_bindings (
   product TEXT NOT NULL CHECK(product IN ('canvas', 'me')),
   family_ref TEXT NOT NULL REFERENCES families(family_ref),
@@ -970,6 +976,22 @@ CREATE TABLE federation_session_bindings (
   updated_at TEXT NOT NULL,
   PRIMARY KEY(product, family_ref, person_ref, agent_ref, local_session_ref)
 );
+
+CREATE TABLE federation_session_invocation_claims (
+  product TEXT NOT NULL CHECK(product IN ('canvas', 'me')),
+  family_ref TEXT NOT NULL REFERENCES families(family_ref),
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref),
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  local_session_ref TEXT NOT NULL,
+  invocation_ref TEXT NOT NULL UNIQUE
+    REFERENCES agent_invocation_audit(invocation_ref) ON DELETE CASCADE,
+  service_ref TEXT NOT NULL REFERENCES federation_services(service_ref),
+  claimed_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  PRIMARY KEY(product, family_ref, person_ref, agent_ref, local_session_ref)
+);
+CREATE INDEX federation_session_claim_expiry_idx
+  ON federation_session_invocation_claims(lease_expires_at);
 `;
 
 function applyMigrationV8(db: GatewayDatabase): void {

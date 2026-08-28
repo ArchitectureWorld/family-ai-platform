@@ -16,6 +16,8 @@ import { buildGatewayApp } from "../src/app.js";
 import { AgentManagementRepository } from "../src/agentManagement.js";
 import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
 import { DomainEventStore } from "../src/domainEvents.js";
+import { FederationRepository } from "../src/federationRepository.js";
+import { FederationService } from "../src/federationService.js";
 
 const NOW = "2026-08-28T12:00:00.000Z";
 const DEVICE_TOKEN = "federation-routes-bootstrap-device-token-long-enough";
@@ -90,6 +92,8 @@ describe("Family federation routes", () => {
   let socketPath = "";
   let broker: Server;
   let app: Awaited<ReturnType<typeof buildGatewayApp>>;
+  let secondApp: Awaited<ReturnType<typeof buildGatewayApp>> | undefined;
+  let providerRouter: ProviderAdapterRouter;
   let databasePath = "";
   let db: GatewayDatabase;
   let now = new Date(NOW);
@@ -227,7 +231,7 @@ describe("Family federation routes", () => {
     });
 
     databasePath = join(directory, "gateway.sqlite");
-    const router = new ProviderAdapterRouter(agents.map((agent) => [
+    providerRouter = new ProviderAdapterRouter(agents.map((agent) => [
       agent.providerProfileRef,
       new BrokerProviderAdapter({
         socketPath,
@@ -241,7 +245,7 @@ describe("Family federation routes", () => {
       deviceToken: DEVICE_TOKEN,
       mode: "test",
       configuredAgentRuntimes: agents,
-      providerRouter: router,
+      providerRouter,
       authoritativeAgentRuntimeCatalog: true,
       federationServices: [
         { serviceRef: "service:canvas", product: "canvas", token: CANVAS_TOKEN },
@@ -323,6 +327,7 @@ describe("Family federation routes", () => {
 
   afterEach(async () => {
     db?.close();
+    await secondApp?.close();
     await app?.close();
     await new Promise<void>((resolve) => broker?.close(() => resolve()));
     if (directory) await rm(directory, { recursive: true, force: true });
@@ -473,6 +478,25 @@ describe("Family federation routes", () => {
 
   it("rejects service product body context mismatches and every external-session scope reuse before Broker", async () => {
     const canvasContext = await actorRef("canvas", admin);
+    const unboundBefore = brokerCalls;
+    const unbound = await app.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload: invocation({
+        invocationRef: "invocation:unbound-external",
+        correlationRef: "correlation:unbound-external",
+        actorContextRef: canvasContext,
+        localSessionRef: "local-session:unbound-external",
+        externalSessionRef: "external-session:hermes-zzh-never-issued"
+      })
+    });
+    expect(unbound.statusCode).toBe(409);
+    expect(brokerCalls).toBe(unboundBefore);
+    expect(db.prepare(
+      "SELECT 1 FROM agent_invocation_audit WHERE invocation_ref = ?"
+    ).get("invocation:unbound-external")).toBeUndefined();
+
     const first = await app.inject({
       method: "POST",
       url: "/api/v1/federation/invocations",
@@ -586,6 +610,161 @@ describe("Family federation routes", () => {
     }
   });
 
+  it("uses a durable claim to stop a second Gateway instance before Broker", async () => {
+    secondApp = await buildGatewayApp({
+      databasePath,
+      deviceToken: DEVICE_TOKEN,
+      mode: "test",
+      configuredAgentRuntimes: agents,
+      providerRouter: new ProviderAdapterRouter(agents.map((agent) => [
+        agent.providerProfileRef,
+        new BrokerProviderAdapter({
+          socketPath,
+          targetAgentRef: agent.agentRef,
+          providerProfileRef: agent.providerProfileRef,
+          clock: () => now
+        })
+      ] as const)),
+      authoritativeAgentRuntimeCatalog: true,
+      federationServices: [
+        { serviceRef: "service:canvas", product: "canvas", token: CANVAS_TOKEN },
+        { serviceRef: "service:me", product: "me", token: ME_TOKEN }
+      ],
+      now: () => now
+    });
+    const contextRef = await actorRef("canvas", admin);
+    brokerDelayMs = 500;
+    const before = brokerCalls;
+    const first = app.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload: invocation({
+        invocationRef: "invocation:gateway-one",
+        correlationRef: "correlation:gateway-one",
+        actorContextRef: contextRef,
+        localSessionRef: "local-session:cross-gateway"
+      })
+    });
+    await expect.poll(() => brokerCalls).toBe(before + 1);
+    const second = await secondApp.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload: invocation({
+        invocationRef: "invocation:gateway-two",
+        correlationRef: "correlation:gateway-two",
+        actorContextRef: contextRef,
+        localSessionRef: "local-session:cross-gateway"
+      })
+    });
+    expect(second.statusCode).toBe(409);
+    expect(brokerCalls).toBe(before + 1);
+    expect((await first).statusCode).toBe(200);
+  });
+
+  it("rechecks service activity after claim and releases the failed audit before Broker", async () => {
+    const federationRepository = new FederationRepository(db, { now: () => now });
+    const adapter = providerRouter.resolve("provider-profile:broker-zzh");
+    let resolves = 0;
+    const service = new FederationService(
+      federationRepository,
+      {
+        resolve() {
+          resolves += 1;
+          if (resolves === 2) {
+            federationRepository.revokeService("service:canvas");
+          }
+          return adapter;
+        }
+      },
+      () => now
+    );
+    const authenticated = service.authenticateService(CANVAS_TOKEN);
+    const actor = federationRepository.issueActorContext({
+      product: "canvas",
+      entrySessionRef: admin.entrySessionRef,
+      lifetimeSeconds: 60
+    });
+    const before = brokerCalls;
+
+    await expect(service.invoke(authenticated, invocation({
+      invocationRef: "invocation:revoked-after-claim",
+      correlationRef: "correlation:revoked-after-claim",
+      actorContextRef: actor.contextRef,
+      localSessionRef: "local-session:revoked-after-claim"
+    }))).rejects.toMatchObject({ code: "FEDERATION_SERVICE_UNAUTHORIZED" });
+    expect(brokerCalls).toBe(before);
+    expect(federationRepository.getInvocationAudit(
+      "invocation:revoked-after-claim"
+    )).toMatchObject({
+      status: "failed",
+      errorCode: "FEDERATION_SERVICE_REVOKED"
+    });
+    expect(federationRepository.getInvocationClaim(
+      "invocation:revoked-after-claim"
+    )).toBeNull();
+  });
+
+  it("rejects a queued invocation when its service is revoked before dequeue", async () => {
+    const contextRef = await actorRef("canvas", admin);
+    const initial = await app.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload: invocation({
+        invocationRef: "invocation:queued-initial",
+        correlationRef: "correlation:queued-initial",
+        actorContextRef: contextRef,
+        localSessionRef: "local-session:queued-revocation"
+      })
+    });
+    expect(initial.statusCode).toBe(200);
+    const externalSessionRef = agentInvocationResultV1Schema.parse(
+      initial.json()
+    ).externalSessionRef;
+    brokerDelayMs = 400;
+    const before = brokerCalls;
+    const first = app.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload: invocation({
+        invocationRef: "invocation:queued-first",
+        correlationRef: "correlation:queued-first",
+        actorContextRef: contextRef,
+        localSessionRef: "local-session:queued-revocation",
+        externalSessionRef
+      })
+    });
+    await expect.poll(() => brokerCalls).toBe(before + 1);
+    const queued = app.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload: invocation({
+        invocationRef: "invocation:queued-revoked",
+        correlationRef: "correlation:queued-revoked",
+        actorContextRef: contextRef,
+        localSessionRef: "local-session:queued-revocation",
+        externalSessionRef
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    db.prepare(
+      `UPDATE federation_services
+       SET status = 'revoked', revoked_at = ? WHERE service_ref = ?`
+    ).run(now.toISOString(), "service:canvas");
+
+    expect((await first).statusCode).toBe(200);
+    const rejected = await queued;
+    expect(rejected.statusCode).toBe(401);
+    expect(brokerCalls).toBe(before + 1);
+    expect(db.prepare(
+      "SELECT 1 FROM agent_invocation_audit WHERE invocation_ref = ?"
+    ).get("invocation:queued-revoked")).toBeUndefined();
+  });
+
   it("invalidates contexts for every live authority relation and assignment-version drift", async () => {
     const refs = db.prepare(
       `SELECT es.entry_session_ref, eb.entry_binding_ref, eb.device_ref,
@@ -651,14 +830,11 @@ describe("Family federation routes", () => {
     expect(brokerCalls).toBe(beforeAllocationChange);
 
     const stale = await actorRef("canvas", admin);
-    new DomainEventStore(db, () => now).append({
-      personRef: ownerPersonRef,
-      eventType: "test.federation.assignment.changed",
-      aggregateType: "work",
-      aggregateRef: "work:federation-drift",
-      payload: {},
-      occurredAt: now.toISOString()
-    });
+    db.prepare(
+      `UPDATE person_agent_assignment_versions
+       SET assignment_version = assignment_version + 1, updated_at = ?
+       WHERE person_ref = ?`
+    ).run(now.toISOString(), ownerPersonRef);
     const before = brokerCalls;
     const response = await app.inject({
       method: "POST",

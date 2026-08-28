@@ -440,10 +440,40 @@ describe("gateway database", () => {
       "created_at",
       "updated_at"
     ]);
+    expect(db.prepare("PRAGMA table_info(person_agent_assignment_versions)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual([
+      "person_ref",
+      "assignment_version",
+      "updated_at"
+    ]);
+    expect(db.prepare("PRAGMA table_info(federation_session_invocation_claims)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual([
+      "product",
+      "family_ref",
+      "person_ref",
+      "agent_ref",
+      "local_session_ref",
+      "invocation_ref",
+      "service_ref",
+      "claimed_at",
+      "lease_expires_at"
+    ]);
     expect(db.prepare(
       "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 12"
     ).get()).toEqual({ count: 1 });
     expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("keeps Domain Event schema installation compatible with both V11 and V12", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-domain-event-version-compat-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 11 });
+    expect(() => new DomainEventStore(db!)).not.toThrow();
+    db.close();
+    db = openGatewayDatabase(databasePath);
+    expect(() => new DomainEventStore(db!)).not.toThrow();
   });
 
   it("creates the formal Chat Work domain schema with thread-scoped uniqueness", () => {

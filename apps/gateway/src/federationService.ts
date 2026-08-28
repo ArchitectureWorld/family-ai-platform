@@ -88,7 +88,8 @@ function repositoryError(error: unknown): GatewayDomainError {
   }
   if (
     code === "FEDERATION_SESSION_MISMATCH" ||
-    code === "FEDERATION_SESSION_SCOPE_CONFLICT"
+    code === "FEDERATION_SESSION_SCOPE_CONFLICT" ||
+    code === "FEDERATION_SESSION_UNBOUND"
   ) {
     return domainError(
       "AGENT_SESSION_SCOPE_MISMATCH",
@@ -105,6 +106,24 @@ function repositoryError(error: unknown): GatewayDomainError {
       "conflict",
       false,
       "这次 Agent 请求已经处理过。"
+    );
+  }
+  if (code === "FEDERATION_INVOCATION_BUSY") {
+    return domainError(
+      "AGENT_INVOCATION_BUSY",
+      409,
+      "conflict",
+      true,
+      "这个 Agent 会话正在处理另一项请求，请稍后重试。"
+    );
+  }
+  if (code === "FEDERATION_SERVICE_INACTIVE") {
+    return domainError(
+      "FEDERATION_SERVICE_UNAUTHORIZED",
+      401,
+      "permission",
+      false,
+      "产品服务身份无效。"
     );
   }
   return domainError(
@@ -222,20 +241,15 @@ export class FederationService {
       request.localSessionRef
     ].join("\u0000");
     return this.queue.run(key, async () => {
+      try {
+        this.repository.requireActiveService(service);
+      } catch (error) {
+        throw repositoryError(error);
+      }
       const actor = this.liveActor(service, request);
       let authorized;
       try {
         authorized = this.repository.requireAuthorizedAgent(actor, request.agentRef);
-        this.repository.validateExternalSessionBinding({
-          product: service.product,
-          familyRef: actor.familyRef,
-          personRef: actor.personRef,
-          agentRef: request.agentRef,
-          localSessionRef: request.localSessionRef,
-          ...(request.externalSessionRef === undefined
-            ? {}
-            : { externalSessionRef: request.externalSessionRef })
-        });
       } catch (error) {
         throw repositoryError(error);
       }
@@ -256,71 +270,107 @@ export class FederationService {
       }
 
       try {
-        this.repository.acceptInvocation({
+        this.repository.claimInvocation({
+          serviceRef: service.serviceRef,
           invocationRef: request.invocationRef,
           correlationRef: request.correlationRef,
           product: service.product,
+          familyRef: actor.familyRef,
           personRef: actor.personRef,
           agentRef: request.agentRef,
-          localSessionRef: request.localSessionRef
+          localSessionRef: request.localSessionRef,
+          ...(request.externalSessionRef === undefined
+            ? {}
+            : { externalSessionRef: request.externalSessionRef }),
+          timeoutMs: request.timeoutMs
         });
       } catch (error) {
         throw repositoryError(error);
       }
 
-      let completed = false;
-      const failAudit = (errorCode: string) => {
-        if (completed) return;
-        completed = true;
-        this.repository.completeInvocation({
-          invocationRef: request.invocationRef,
-          status: "failed",
-          errorCode
-        });
-      };
-      try {
-        const result = await adapter.invokeFederated(request);
-        if (result.status === "succeeded") {
-          try {
-            this.repository.bindExternalSession({
-              product: service.product,
-              familyRef: actor.familyRef,
-              personRef: actor.personRef,
-              agentRef: request.agentRef,
-              localSessionRef: request.localSessionRef,
-              externalSessionRef: result.externalSessionRef
-            });
-          } catch (error) {
-            failAudit("AGENT_SESSION_CONFLICT");
-            throw repositoryError(error);
-          }
-          completed = true;
-          this.repository.completeInvocation({
+      const finalizeFailure = (errorCode: string) => {
+        try {
+          this.repository.finalizeInvocationFailure({
             invocationRef: request.invocationRef,
-            status: "succeeded"
+            errorCode
           });
-        } else {
-          failAudit(
-            result.status === "timed_out"
-              ? "AGENT_INVOCATION_TIMEOUT"
-              : result.status === "cancelled"
-                ? "AGENT_INVOCATION_CANCELLED"
-                : "AGENT_INVOCATION_FAILED"
+        } catch {
+          throw domainError(
+            "FEDERATION_PERSISTENCE_UNAVAILABLE",
+            503,
+            "internal",
+            true,
+            "Family AI 暂时无法保存 Agent 调用状态。"
           );
         }
-        return result;
+      };
+
+      try {
+        const resolved = this.providers.resolve(authorized.providerProfileRef);
+        if (!(resolved instanceof BrokerProviderAdapter) || resolved !== adapter) {
+          throw domainError(
+            "AGENT_RUNTIME_UNAVAILABLE",
+            503,
+            "availability",
+            true,
+            "Agent 暂时不可用，请稍后重试。"
+          );
+        }
+        this.repository.requireActiveService(service);
+        const currentActor = this.liveActor(service, request);
+        this.repository.requireAuthorizedAgent(currentActor, request.agentRef);
       } catch (error) {
-        if (error instanceof GatewayDomainError) throw error;
+        const mapped = error instanceof GatewayDomainError
+          ? error
+          : repositoryError(error);
+        finalizeFailure(
+          mapped.code === "FEDERATION_SERVICE_UNAUTHORIZED"
+            ? "FEDERATION_SERVICE_REVOKED"
+            : "FEDERATION_AUTHORIZATION_REVOKED"
+        );
+        throw mapped;
+      }
+
+      let result: AgentInvocationResultV1;
+      try {
+        result = await adapter.invokeFederated(request);
+      } catch (error) {
         const federationError = error instanceof BrokerFederationError
           ? error
           : new BrokerFederationError("BROKER_FEDERATION_UNAVAILABLE");
-        failAudit(
+        finalizeFailure(
           federationError.code === "BROKER_FEDERATION_TIMEOUT"
             ? "AGENT_INVOCATION_TIMEOUT"
             : "AGENT_RUNTIME_UNAVAILABLE"
         );
         throw brokerError(federationError);
       }
+
+      if (result.status === "succeeded") {
+        try {
+          this.repository.finalizeInvocationSuccess({
+            invocationRef: request.invocationRef,
+            externalSessionRef: result.externalSessionRef
+          });
+        } catch {
+          throw domainError(
+            "FEDERATION_PERSISTENCE_UNAVAILABLE",
+            503,
+            "internal",
+            true,
+            "Family AI 暂时无法保存 Agent 调用状态。"
+          );
+        }
+      } else {
+        finalizeFailure(
+          result.status === "timed_out"
+            ? "AGENT_INVOCATION_TIMEOUT"
+            : result.status === "cancelled"
+              ? "AGENT_INVOCATION_CANCELLED"
+              : "AGENT_INVOCATION_FAILED"
+        );
+      }
+      return result;
     });
   }
 

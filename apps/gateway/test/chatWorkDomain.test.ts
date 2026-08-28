@@ -6,7 +6,6 @@ import { AgentManagementRepository } from "../src/agentManagement.js";
 import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
 import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
 import { FamilyDomainRepository } from "../src/familyDomain.js";
-import { DomainEventStore } from "../src/domainEvents.js";
 
 const initialNow = "2026-07-23T12:00:00.000Z";
 
@@ -41,7 +40,6 @@ describe("Chat Work domain foundation", () => {
       familyRole: "adult"
     }).personRef;
     currentNow = new Date(initialNow);
-    new DomainEventStore(db, () => currentNow);
     repository = new ChatWorkDomainRepository(db, () => currentNow);
   });
 
