@@ -144,6 +144,112 @@ describe("Admin system workspace routes", () => {
     expect(jarvis.chat.threadRef).not.toBe(codex.chat.threadRef);
   });
 
+  it("provisions only Jarvis from the Broker catalog for new and restarted owner workspaces", async () => {
+    await app.close();
+    databasePath = join(directory, "broker-owner.sqlite");
+    const brokerRuntimes: readonly ConfiguredAgentRuntime[] = [
+      {
+        agentRef: "agent:hermes-jarvis",
+        displayName: "Jarvis",
+        providerProfileRef: "provider-profile:broker-jarvis",
+        providerKind: "hermes"
+      },
+      {
+        agentRef: "agent:hermes-zzh",
+        displayName: "于途",
+        providerProfileRef: "provider-profile:broker-zzh",
+        providerKind: "hermes"
+      },
+      {
+        agentRef: "agent:hermes-nsy",
+        displayName: "乔晶晶",
+        providerProfileRef: "provider-profile:broker-nsy",
+        providerKind: "hermes"
+      }
+    ];
+    const openBrokerApp = () => buildGatewayApp({
+      databasePath,
+      deviceToken,
+      mode: "test" as const,
+      configuredAgentRuntimes: brokerRuntimes,
+      providerRouter: new ProviderAdapterRouter(
+        brokerRuntimes.map((runtime) => [
+          runtime.providerProfileRef,
+          new FakeProviderAdapter()
+        ] as const)
+      ),
+      authoritativeAgentRuntimeCatalog: true
+    });
+    app = await openBrokerApp();
+    const initialized = await app.inject({
+      method: "POST",
+      url: "/api/v1/onboarding/family",
+      headers: bootstrapHeaders,
+      payload: {
+        familyName: "Broker 家庭",
+        ownerName: "Broker Owner",
+        deviceName: "Broker Device"
+      }
+    });
+    expect(initialized.statusCode).toBe(201);
+    admin = initialized.json().entries.admin as Entry;
+    ownerPersonRef = initialized.json().owner.personRef as string;
+
+    const dirty = openGatewayDatabase(databasePath);
+    dirty.prepare(
+      `INSERT INTO admin_agent_assignments(
+         assignment_ref, family_ref, person_ref, agent_ref, provider_profile_ref,
+         status, effective_from, effective_to
+       ) SELECT 'assignment:historical-personal-admin', fm.family_ref, ?,
+                'agent:hermes-zzh', 'provider-profile:broker-zzh',
+                'active', ?, NULL
+         FROM family_memberships fm
+        WHERE fm.person_ref = ? AND fm.status = 'active'`
+    ).run(ownerPersonRef, new Date().toISOString(), ownerPersonRef);
+    dirty.close();
+
+    for (let restart = 0; restart < 2; restart += 1) {
+      await app.close();
+      app = await openBrokerApp();
+    }
+    const summary = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/system-workspace",
+      headers: entryHeaders(admin)
+    });
+    expect(summary.statusCode).toBe(200);
+    expect(summary.json()).toEqual({
+      protocolVersion: 1,
+      agents: [{ agentRef: "agent:hermes-jarvis", displayName: "Jarvis" }]
+    });
+    const jarvis = await getChat("agent:hermes-jarvis");
+    expect(jarvis.chat.agentRef).toBe("agent:hermes-jarvis");
+
+    const db = openGatewayDatabase(databasePath);
+    try {
+      expect(db.prepare(
+        `SELECT agent_ref, provider_profile_ref, status
+         FROM admin_agent_assignments WHERE status = 'active' ORDER BY agent_ref`
+      ).all()).toEqual([{
+        agent_ref: "agent:hermes-jarvis",
+        provider_profile_ref: "provider-profile:broker-jarvis",
+        status: "active"
+      }]);
+      expect(db.prepare(
+        `SELECT status FROM admin_agent_assignments
+         WHERE assignment_ref = 'assignment:historical-personal-admin'`
+      ).get()).toEqual({ status: "ended" });
+      expect(db.prepare(
+        `SELECT COUNT(*) AS count FROM assistant_assignments
+         WHERE person_ref = ? AND agent_ref IN (
+           'agent:hermes-jarvis', 'agent:codex-cli'
+         ) AND status = 'active'`
+      ).get(ownerPersonRef)).toEqual({ count: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps Jarvis and Codex Provider Threads, actors, and Sessions isolated", async () => {
     const jarvis = await getChat("agent:hermes-jarvis");
     const codex = await getChat("agent:codex-cli");

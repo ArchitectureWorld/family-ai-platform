@@ -262,6 +262,92 @@ describe("Agent management repository", () => {
     expect(first).toHaveLength(2);
   });
 
+  it("allows an active owner to receive a non-system personal Agent", () => {
+    const mounted = repository.mountMemberAgent(
+      { familyRef, personRef: alice, agentRef: "agent:shared" },
+      { configurableOnly: true }
+    );
+    expect(mounted.agentRef).toBe("agent:shared");
+    expect(repository.listConfigurableMemberMounts(familyRef, alice).mountedAgents)
+      .toContainEqual(expect.objectContaining({ agentRef: "agent:shared" }));
+  });
+
+  it("rejects every personal mutation for fixed system Agents without changing version", () => {
+    repository.mountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    const beforeVersion = db.prepare(
+      `SELECT assignment_version FROM person_agent_assignment_versions
+       WHERE person_ref = ?`
+    ).get(bob);
+    for (const agentRef of ["agent:hermes-jarvis", "agent:codex-cli"]) {
+      expect(() => repository.mountMemberAgent({ familyRef, personRef: bob, agentRef }))
+        .toThrow(expect.objectContaining({ code: "SYSTEM_AGENT_PERSONAL_FORBIDDEN" }));
+      expect(() => repository.unmountMemberAgent({ familyRef, personRef: bob, agentRef }))
+        .toThrow(expect.objectContaining({ code: "SYSTEM_AGENT_PERSONAL_FORBIDDEN" }));
+      expect(() => repository.setDefaultAgent({ familyRef, personRef: bob, agentRef }))
+        .toThrow(expect.objectContaining({ code: "SYSTEM_AGENT_PERSONAL_FORBIDDEN" }));
+    }
+    expect(db.prepare(
+      `SELECT assignment_version FROM person_agent_assignment_versions
+       WHERE person_ref = ?`
+    ).get(bob)).toEqual(beforeVersion);
+    expect(db.prepare(
+      `SELECT COUNT(*) AS count FROM assistant_assignments
+       WHERE person_ref = ? AND agent_ref IN ('agent:hermes-jarvis', 'agent:codex-cli')`
+    ).get(bob)).toEqual({ count: 0 });
+  });
+
+  it("cleans historical system personal mounts once and advances only affected Persons", () => {
+    const now = "2026-07-28T10:00:00.000Z";
+    db.prepare(
+      `INSERT INTO person_agent_assignment_versions(person_ref, assignment_version, updated_at)
+       VALUES(?, 7, ?), (?, 4, ?)`
+    ).run(alice, now, bob, now);
+    db.prepare(
+      `UPDATE assistant_assignments SET is_default = 0
+       WHERE person_ref = ? AND status = 'active'`
+    ).run(alice);
+    for (const [agentRef, profileRef, isDefault] of [
+      ["agent:hermes-jarvis", "provider-profile:hermes-jarvis", 1],
+      ["agent:codex-cli", "provider-profile:codex-cli", 0]
+    ] as const) {
+      db.prepare(
+        `INSERT INTO assistant_assignments(
+           assignment_ref, person_ref, agent_ref, provider_profile_ref,
+           status, effective_from, effective_to, is_default
+         ) VALUES(?, ?, ?, ?, 'active', ?, NULL, ?)`
+      ).run(`assignment:historical-${agentRef.split(":")[1]}`, alice, agentRef, profileRef, now, isDefault);
+    }
+
+    repository.reconcileRuntimeCatalog(configuredAgents, { authoritative: true });
+    repository.reconcileRuntimeCatalog(configuredAgents, { authoritative: true });
+
+    expect(db.prepare(
+      `SELECT agent_ref, status, is_default FROM assistant_assignments
+       WHERE person_ref = ? AND agent_ref IN ('agent:hermes-jarvis', 'agent:codex-cli')
+       ORDER BY agent_ref`
+    ).all(alice)).toEqual([
+      { agent_ref: "agent:codex-cli", status: "ended", is_default: 0 },
+      { agent_ref: "agent:hermes-jarvis", status: "ended", is_default: 0 }
+    ]);
+    expect(db.prepare(
+      `SELECT person_ref, assignment_version FROM person_agent_assignment_versions
+       WHERE person_ref IN (?, ?) ORDER BY person_ref`
+    ).all(alice, bob)).toEqual([
+      { person_ref: alice, assignment_version: 8 },
+      { person_ref: bob, assignment_version: 4 }
+    ].sort((left, right) => left.person_ref.localeCompare(right.person_ref)));
+    expect(repository.listMemberMounts(familyRef, alice).mountedAgents)
+      .not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ agentRef: "agent:hermes-jarvis" }),
+        expect.objectContaining({ agentRef: "agent:codex-cli" })
+      ]));
+    for (const agentRef of ["agent:hermes-jarvis", "agent:codex-cli"]) {
+      expect(() => repository.requireActiveMount(alice, agentRef)).toThrow(
+        expect.objectContaining({ code: "SYSTEM_AGENT_PERSONAL_FORBIDDEN" })
+      );
+    }
+  });
+
   it("rejects a runtime remap without hiding an existing mount", () => {
     const mount = repository.mountMemberAgent({ familyRef, personRef: alice, agentRef: "agent:shared" });
     const beforeBinding = db.prepare("SELECT agent_ref, provider_profile_ref, status FROM agent_runtime_bindings WHERE agent_ref = ?").get("agent:shared");

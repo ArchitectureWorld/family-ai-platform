@@ -14,6 +14,7 @@ import {
 } from "@family-ai/contracts";
 import {
   AgentManagementRepository,
+  isSystemAgentRef,
   type ConfiguredAgentRuntime
 } from "./agentManagement.js";
 import {
@@ -277,13 +278,10 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   agentManagementRepository.reconcileRuntimeCatalog(configuredAgentRuntimes, {
     authoritative: options.authoritativeAgentRuntimeCatalog ?? false
   });
-  const configuredAgentRefs = new Set(
-    configuredAgentRuntimes.map(runtime => runtime.agentRef)
-  );
-  if (
-    configuredAgentRefs.has("agent:hermes-jarvis") &&
-    configuredAgentRefs.has("agent:codex-cli")
-  ) {
+  const configuredSystemAgentRefs = configuredAgentRuntimes
+    .map((runtime) => runtime.agentRef)
+    .filter(isSystemAgentRef);
+  if (configuredSystemAgentRefs.length > 0) {
     const owners = db.prepare(
       `SELECT fm.family_ref, fm.person_ref
        FROM family_memberships fm
@@ -296,7 +294,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
       agentManagementRepository.ensureOwnerAdminAssignments({
         familyRef: owner.family_ref,
         personRef: owner.person_ref,
-        agentRefs: ["agent:hermes-jarvis", "agent:codex-cli"]
+        agentRefs: configuredSystemAgentRefs
       });
     }
   }

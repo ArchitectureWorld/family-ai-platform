@@ -159,6 +159,53 @@ describe("Chat Work domain foundation", () => {
     })).toEqual(second);
   });
 
+  it("rejects historical direct system mounts from every personal Chat entry", () => {
+    const agents = new AgentManagementRepository(db, () => currentNow);
+    agents.reconcileRuntimeCatalog([
+      {
+        agentRef: "agent:hermes-jarvis",
+        displayName: "Jarvis",
+        providerProfileRef: "provider-profile:hermes-jarvis",
+        providerKind: "hermes"
+      },
+      {
+        agentRef: "agent:codex-cli",
+        displayName: "Codex",
+        providerProfileRef: "provider-profile:codex-cli",
+        providerKind: "codex"
+      }
+    ]);
+    for (const [agentRef, providerProfileRef] of [
+      ["agent:hermes-jarvis", "provider-profile:hermes-jarvis"],
+      ["agent:codex-cli", "provider-profile:codex-cli"]
+    ] as const) {
+      db.prepare(
+        `INSERT INTO assistant_assignments(
+           assignment_ref, person_ref, agent_ref, provider_profile_ref,
+           status, effective_from, effective_to, is_default
+         ) VALUES(?, ?, ?, ?, 'active', ?, NULL, 0)`
+      ).run(
+        `assignment:direct-${agentRef.split(":")[1]}`,
+        ownerPersonRef,
+        agentRef,
+        providerProfileRef,
+        currentNow.toISOString()
+      );
+      expect(() => repository.ensureHomeChat({
+        personRef: ownerPersonRef,
+        agentRef,
+        timezone: "UTC",
+        localDate: "2026-07-23"
+      })).toThrow(expect.objectContaining({
+        code: "SYSTEM_AGENT_PERSONAL_FORBIDDEN"
+      }));
+    }
+    expect(db.prepare(
+      `SELECT COUNT(*) AS count FROM interaction_threads
+       WHERE person_ref = ? AND agent_ref IN ('agent:hermes-jarvis', 'agent:codex-cli')`
+    ).get(ownerPersonRef)).toEqual({ count: 0 });
+  });
+
   it("keeps Home Chat and Work ownership isolated by Person", () => {
     const ownerChat = repository.ensureHomeChat({
       personRef: ownerPersonRef,
