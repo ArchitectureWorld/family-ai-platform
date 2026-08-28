@@ -55,6 +55,43 @@ grep -Fq 'RUN chmod -R a+rX /app' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image does not normalize exact-worktree file modes'
 grep -Fq 'await import("@family-ai/contracts")' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image does not verify internal package resolution'
+
+BROKER_INPUT_REPO="$FIXTURE_ROOT/broker-input-repo"
+mkdir -p "$BROKER_INPUT_REPO/scripts" "$BROKER_INPUT_REPO/apps/agent-broker/src" \
+  "$BROKER_INPUT_REPO/apps/agent-broker/runtime" "$BROKER_INPUT_REPO/apps/agent-broker/test"
+chmod 700 "$BROKER_INPUT_REPO" "$BROKER_INPUT_REPO/scripts" "$BROKER_INPUT_REPO/apps" \
+  "$BROKER_INPUT_REPO/apps/agent-broker" "$BROKER_INPUT_REPO/apps/agent-broker/src" \
+  "$BROKER_INPUT_REPO/apps/agent-broker/runtime" "$BROKER_INPUT_REPO/apps/agent-broker/test"
+cp "$ROOT_DIR/scripts/release-build-inputs.mjs" "$BROKER_INPUT_REPO/validator.mjs"
+cp "$ROOT_DIR/scripts/release-build-inputs.json" "$BROKER_INPUT_REPO/scripts/release-build-inputs.json"
+printf '{"name":"@family-ai/agent-broker"}\n' > "$BROKER_INPUT_REPO/apps/agent-broker/package.json"
+printf '{}\n' > "$BROKER_INPUT_REPO/apps/agent-broker/tsconfig.json"
+printf 'export {};\n' > "$BROKER_INPUT_REPO/apps/agent-broker/src/index.ts"
+printf 'def main(): pass\n' > "$BROKER_INPUT_REPO/apps/agent-broker/runtime/hermes_machine_bridge.py"
+printf 'test fixture\n' > "$BROKER_INPUT_REPO/apps/agent-broker/test/server.test.ts"
+git -C "$BROKER_INPUT_REPO" init -q
+git -C "$BROKER_INPUT_REPO" config user.email fixture@family-ai.invalid
+git -C "$BROKER_INPUT_REPO" config user.name 'Family AI Fixture'
+git -C "$BROKER_INPUT_REPO" add scripts/release-build-inputs.json apps/agent-broker
+git -C "$BROKER_INPUT_REPO" commit -qm broker-inputs
+BROKER_INPUT_COMMIT="$(git -C "$BROKER_INPUT_REPO" rev-parse HEAD)"
+node "$BROKER_INPUT_REPO/validator.mjs" validate \
+  --repository "$BROKER_INPUT_REPO" --source-commit "$BROKER_INPUT_COMMIT" \
+  --manifest "$BROKER_INPUT_REPO/scripts/release-build-inputs.json" \
+  --output "$BROKER_INPUT_REPO/receipt.json" >/dev/null
+[[ "$(node -e 'const v=require(process.argv[1]);process.stdout.write(String(v.classificationCounts["runtime-build"]))' "$BROKER_INPUT_REPO/receipt.json")" == 5 ]] \
+  || fail 'Broker package, tsconfig, src, and runtime are not exact runtime-build inputs'
+[[ "$(node -e 'const v=require(process.argv[1]);process.stdout.write(String(v.classificationCounts["quality-tool"]))' "$BROKER_INPUT_REPO/receipt.json")" == 1 ]] \
+  || fail 'Broker tests are not isolated as quality-tool inputs'
+printf 'future input\n' > "$BROKER_INPUT_REPO/apps/agent-broker/future-unknown.txt"
+git -C "$BROKER_INPUT_REPO" add apps/agent-broker/future-unknown.txt
+git -C "$BROKER_INPUT_REPO" commit -qm broker-unknown-input
+expect_failure UNCLASSIFIED_PATH:apps/agent-broker/future-unknown.txt \
+  node "$BROKER_INPUT_REPO/validator.mjs" validate \
+    --repository "$BROKER_INPUT_REPO" --source-commit "$(git -C "$BROKER_INPUT_REPO" rev-parse HEAD)" \
+    --manifest "$BROKER_INPUT_REPO/scripts/release-build-inputs.json" \
+    --output "$BROKER_INPUT_REPO/receipt-unknown.json"
+
 UNPRIVILEGED_LINE="$(grep -n 'USER 65532:65532' "$ROOT_DIR/Dockerfile" | head -n1 | cut -d: -f1)"
 IMPORT_CHECK_LINE="$(grep -n 'await import("@family-ai/contracts")' "$ROOT_DIR/Dockerfile" | head -n1 | cut -d: -f1)"
 [[ -n "$UNPRIVILEGED_LINE" && "$UNPRIVILEGED_LINE" -lt "$IMPORT_CHECK_LINE" ]] \
