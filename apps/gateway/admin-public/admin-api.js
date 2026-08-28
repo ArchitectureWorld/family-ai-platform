@@ -309,6 +309,7 @@ function safeAgentStatus(value, code) {
     !AGENT_REF.test(value.agentRef ?? "") ||
     typeof value.displayName !== "string" ||
     value.displayName.trim() === "" ||
+    !AGENT_STATUS_LABELS.has(value.status) ||
     AGENT_STATUS_LABELS.get(value.status) !== value.statusLabel
   ) {
     throw new AdminApiError(code, 502);

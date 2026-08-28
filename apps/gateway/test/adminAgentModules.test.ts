@@ -701,6 +701,78 @@ describe("Admin member Agent controls", () => {
 });
 
 describe("Admin Agent API client", () => {
+  it.each(["catalog", "mounts"])(
+    "fails the %s boundary closed for an unknown status with no label",
+    async (boundary) => {
+      const { createAdminApi } = await apiModule();
+      const { renderMemberAgentControls } = await agentsModule();
+      const hostileCatalog = structuredClone(rawCatalog);
+      hostileCatalog.agents[0]!.status = "unknown";
+      delete (hostileCatalog.agents[0] as { statusLabel?: string }).statusLabel;
+      const hostileMounts = {
+        protocolVersion: 1,
+        personRef: "person:alice",
+        defaultAgentRef: null,
+        mountedAgents: [{
+          agentRef: "agent:hermes-zzh",
+          displayName: "于途",
+          isDefault: false,
+          status: "unknown"
+        }]
+      };
+      const api = createAdminApi({
+        credential: {
+          kind: "entry",
+          entrySessionRef: "entry-session:preview-admin",
+          token
+        },
+        fetchImpl: async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "/api/v1/admin/agents") {
+            return Response.json(
+              boundary === "catalog" ? hostileCatalog : rawCatalog
+            );
+          }
+          if (url === "/api/v1/admin/members/person%3Aalice/agent-mounts") {
+            return Response.json(
+              boundary === "mounts" ? hostileMounts : mounted
+            );
+          }
+          return Response.json({ code: "UNEXPECTED" }, { status: 500 });
+        }
+      });
+
+      if (boundary === "catalog") {
+        await expect(api.agents()).rejects.toMatchObject({
+          code: "ADMIN_AGENTS_INVALID",
+          status: 502
+        });
+      } else {
+        await expect(api.memberAgentMounts("person:alice")).rejects.toMatchObject({
+          code: "ADMIN_AGENT_MOUNTS_INVALID",
+          status: 502
+        });
+      }
+
+      const documentRef = new TestDocument();
+      const root = documentRef.createElement("article");
+      const controller = renderMemberAgentControls({
+        documentRef,
+        root,
+        personRef: "person:alice",
+        api
+      });
+      await controller.ready;
+
+      expect(root.textContent).toContain("无法确认当前 Agent 配置");
+      expect(root.textContent).not.toContain("运行状态：可用");
+      expect(root.querySelector("[data-mount-agent]")).toBeNull();
+      expect(root.querySelector("[data-remove-agent]")).toBeNull();
+      expect(root.querySelector("[data-save-default-agent]")).toBeNull();
+      expect(root.querySelector('[role="alert"]')).not.toBeNull();
+    }
+  );
+
   it("uses encoded POST, DELETE, and PUT paths without sending private Provider data", async () => {
     const { createAdminApi } = await apiModule();
     const requests: Array<{ url: string; init: RequestInit }> = [];
