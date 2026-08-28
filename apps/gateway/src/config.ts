@@ -5,8 +5,9 @@ import {
   lstatSync,
   realpathSync
 } from "node:fs";
-import { parse, resolve, sep } from "node:path";
+import { isAbsolute, parse, resolve, sep } from "node:path";
 import {
+  BrokerProviderAdapter,
   CodexCliProviderAdapter,
   FakeProviderAdapter,
   HermesCliProviderAdapter,
@@ -36,8 +37,14 @@ export interface RealGatewayProviderRuntimeConfig {
   };
 }
 
+export interface BrokerGatewayProviderRuntimeConfig {
+  mode: "broker";
+  socketPath: string;
+}
+
 export type GatewayProviderRuntimeConfig =
   | FakeGatewayProviderRuntimeConfig
+  | BrokerGatewayProviderRuntimeConfig
   | RealGatewayProviderRuntimeConfig;
 
 export interface GatewayProviderRuntime {
@@ -145,6 +152,23 @@ function existingDirectory(raw: string | undefined): string {
   }
 }
 
+function existingUnixSocket(raw: string | undefined): string {
+  if (!raw || !isAbsolute(raw) || resolve(raw) !== raw) {
+    throw runtimeConfigurationError();
+  }
+  try {
+    const information = lstatSync(raw);
+    if (!information.isSocket() || information.isSymbolicLink()) {
+      throw runtimeConfigurationError();
+    }
+    const real = realpathSync(raw);
+    if (real !== raw) throw runtimeConfigurationError();
+    return real;
+  } catch {
+    throw runtimeConfigurationError();
+  }
+}
+
 function profileNames(raw: string | undefined): readonly string[] {
   if (!raw) throw runtimeConfigurationError();
   const profiles = raw.split(",").map(value => value.trim().toLowerCase());
@@ -172,6 +196,17 @@ function hermesPrivateInputMode(
 function providerRuntimeConfig(env: NodeJS.ProcessEnv): GatewayProviderRuntimeConfig {
   const mode = env.FAMILY_AI_PROVIDER_MODE ?? "fake";
   if (mode === "fake") return { mode };
+  if (mode === "broker") {
+    const runtime: BrokerGatewayProviderRuntimeConfig = {
+      mode,
+      socketPath: existingUnixSocket(env.FAMILY_AI_AGENT_BROKER_SOCKET)
+    };
+    Object.defineProperty(runtime, "toJSON", {
+      value: () => ({ mode: "broker" }),
+      enumerable: false
+    });
+    return runtime;
+  }
   if (mode !== "real") throw runtimeConfigurationError();
   const runtime: RealGatewayProviderRuntimeConfig = {
     mode,
@@ -222,6 +257,43 @@ export function buildProviderRuntime(
       ),
       agents: [],
       authoritative: false
+    };
+  }
+
+  if (config.mode === "broker") {
+    const catalog = [
+      {
+        agentRef: "agent:hermes-jarvis",
+        providerProfileRef: "provider-profile:broker-jarvis",
+        providerKind: "hermes" as const,
+        displayName: "Jarvis"
+      },
+      {
+        agentRef: "agent:hermes-zzh",
+        providerProfileRef: "provider-profile:broker-zzh",
+        providerKind: "hermes" as const,
+        displayName: "于途"
+      },
+      {
+        agentRef: "agent:hermes-nsy",
+        providerProfileRef: "provider-profile:broker-nsy",
+        providerKind: "hermes" as const,
+        displayName: "乔晶晶"
+      }
+    ] satisfies readonly ConfiguredAgentRuntime[];
+    return {
+      router: new ProviderAdapterRouter(
+        catalog.map((agent) => [
+          agent.providerProfileRef,
+          new BrokerProviderAdapter({
+            socketPath: config.socketPath,
+            targetAgentRef: agent.agentRef,
+            providerProfileRef: agent.providerProfileRef
+          })
+        ] as const)
+      ),
+      agents: catalog,
+      authoritative: true
     };
   }
 
@@ -300,9 +372,9 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     throw new Error("GATEWAY_MODE must be test, development, or production");
   }
   const providerRuntime = providerRuntimeConfig(env);
-  if (mode === "production" && providerRuntime.mode !== "real") {
+  if (mode === "production" && providerRuntime.mode === "fake") {
     throw new Error(
-      "GATEWAY_MODE=production requires an explicit real Provider runtime"
+      "GATEWAY_MODE=production requires an explicit non-Fake Provider runtime"
     );
   }
 
