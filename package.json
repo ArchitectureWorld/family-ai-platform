@@ -14,8 +14,9 @@
   "scripts": {
     "build:contracts": "npm run build -w @family-ai/contracts",
     "build:adapter-sdk": "npm run build:contracts && npm run build -w @family-ai/provider-adapter-sdk",
+    "build:agent-broker": "npm run build:adapter-sdk && npm run build -w @family-ai/agent-broker",
     "build:gateway": "npm run build:adapter-sdk && npm run build -w @family-ai/gateway",
-    "build": "npm run build:gateway",
+    "build": "npm run build:gateway && npm run build:agent-broker",
     "test:workspaces": "npm run build:adapter-sdk && npm run test --workspaces --if-present",
     "test:scripts": "node --test scripts/report-current-runtime.test.mjs && bash scripts/test-static-check-secret-pattern.sh && bash scripts/static-check.sh",
     "test": "npm run test:workspaces && npm run test:scripts",
