@@ -14,8 +14,8 @@ import {
 import type { ProviderAdapter } from "./index.js";
 import { providerPromptFrom } from "./providerPrompt.js";
 
-const DEFAULT_MAX_REQUEST_BYTES = 16 * 1024;
-const DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024;
+const DEFAULT_MAX_REQUEST_BYTES = 64 * 1024;
+const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024;
 const DEFAULT_MAX_DEADLINE_MS = 300_000;
 const DEFAULT_HEALTH_DEADLINE_MS = 3_000;
 
@@ -119,56 +119,105 @@ function validExternalSessionRef(value: string, prefix: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{1,99}$/.test(value.slice(prefix.length));
 }
 
-function topLevelObjectHasDuplicateKeys(json: string): boolean {
-  const keys = new Set<string>();
-  let depth = 0;
+function assertStrictJsonStructure(json: string): void {
   let index = 0;
-  while (index < json.length) {
-    const character = json[index];
-    if (character === "{") {
-      depth += 1;
-      index += 1;
-      continue;
-    }
-    if (character === "}") {
-      depth -= 1;
-      index += 1;
-      continue;
-    }
-    if (character !== '"') {
-      index += 1;
-      continue;
-    }
-
+  const invalid = (): never => {
+    throw new BrokerTransportError("invalid");
+  };
+  const skipWhitespace = () => {
+    while (/\s/.test(json[index] ?? "")) index += 1;
+  };
+  const parseString = (): string => {
+    if (json[index] !== '"') return invalid();
     const start = index;
     index += 1;
     let escaped = false;
     while (index < json.length) {
-      const current = json[index];
+      const character = json[index]!;
+      index += 1;
       if (escaped) {
         escaped = false;
-      } else if (current === "\\") {
-        escaped = true;
-      } else if (current === '"') {
-        index += 1;
-        break;
+        continue;
       }
+      if (character === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (character === '"') {
+        try {
+          const value = JSON.parse(json.slice(start, index)) as unknown;
+          if (typeof value !== "string") return invalid();
+          return value;
+        } catch {
+          return invalid();
+        }
+      }
+    }
+    return invalid();
+  };
+  const parseValue = (): void => {
+    skipWhitespace();
+    const character = json[index];
+    if (character === "{") {
       index += 1;
+      skipWhitespace();
+      const keys = new Set<string>();
+      if (json[index] === "}") {
+        index += 1;
+        return;
+      }
+      while (index < json.length) {
+        const key = parseString();
+        if (keys.has(key)) invalid();
+        keys.add(key);
+        skipWhitespace();
+        if (json[index] !== ":") invalid();
+        index += 1;
+        parseValue();
+        skipWhitespace();
+        if (json[index] === "}") {
+          index += 1;
+          return;
+        }
+        if (json[index] !== ",") invalid();
+        index += 1;
+        skipWhitespace();
+      }
+      return invalid();
     }
-    if (depth !== 1) continue;
-    let cursor = index;
-    while (/\s/.test(json[cursor] ?? "")) cursor += 1;
-    if (json[cursor] !== ":") continue;
-    let key: unknown;
-    try {
-      key = JSON.parse(json.slice(start, index));
-    } catch {
-      return true;
+    if (character === "[") {
+      index += 1;
+      skipWhitespace();
+      if (json[index] === "]") {
+        index += 1;
+        return;
+      }
+      while (index < json.length) {
+        parseValue();
+        skipWhitespace();
+        if (json[index] === "]") {
+          index += 1;
+          return;
+        }
+        if (json[index] !== ",") invalid();
+        index += 1;
+      }
+      return invalid();
     }
-    if (typeof key !== "string" || keys.has(key)) return true;
-    keys.add(key);
-  }
-  return false;
+    if (character === '"') {
+      parseString();
+      return;
+    }
+    const remaining = json.slice(index);
+    const primitive = /^(?:true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/
+      .exec(remaining)?.[0];
+    if (!primitive) return invalid();
+    index += primitive.length;
+  };
+
+  parseValue();
+  skipWhitespace();
+  if (index !== json.length) invalid();
 }
 
 function exactObjectKeys(value: unknown, expected: readonly string[]): boolean {
@@ -180,10 +229,79 @@ function exactObjectKeys(value: unknown, expected: readonly string[]): boolean {
     actual.every((key, index) => key === [...expected].sort()[index]);
 }
 
-function parseStrictJson(body: string): unknown {
-  if (topLevelObjectHasDuplicateKeys(body)) {
-    throw new BrokerTransportError("invalid");
+function jsonMediaType(value: string | string[] | undefined): boolean {
+  if (typeof value !== "string") return false;
+  const token = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+/;
+  let index = 0;
+  const skipWhitespace = () => {
+    while (value[index] === " " || value[index] === "\t") index += 1;
+  };
+  const readToken = (): string | undefined => {
+    const match = token.exec(value.slice(index));
+    if (!match?.[0]) return undefined;
+    index += match[0].length;
+    return match[0];
+  };
+  const readQuotedString = (): boolean => {
+    if (value[index] !== '"') return false;
+    index += 1;
+    while (index < value.length) {
+      const character = value[index]!;
+      const code = character.charCodeAt(0);
+      if (character === '"') {
+        index += 1;
+        return true;
+      }
+      if (character === "\\") {
+        index += 1;
+        if (index >= value.length || /[\r\n]/.test(value[index]!)) return false;
+        index += 1;
+        continue;
+      }
+      if (
+        code !== 0x09 &&
+        !(code >= 0x20 && code <= 0x21) &&
+        !(code >= 0x23 && code <= 0x5b) &&
+        !(code >= 0x5d && code <= 0xff)
+      ) {
+        return false;
+      }
+      index += 1;
+    }
+    return false;
+  };
+
+  skipWhitespace();
+  const type = readToken()?.toLowerCase();
+  if (value[index] !== "/") return false;
+  index += 1;
+  const subtype = readToken()?.toLowerCase();
+  if (type !== "application" || subtype !== "json") return false;
+
+  const parameters = new Set<string>();
+  while (true) {
+    skipWhitespace();
+    if (index === value.length) return true;
+    if (value[index] !== ";") return false;
+    index += 1;
+    skipWhitespace();
+    const name = readToken()?.toLowerCase();
+    if (!name || parameters.has(name)) return false;
+    parameters.add(name);
+    skipWhitespace();
+    if (value[index] !== "=") return false;
+    index += 1;
+    skipWhitespace();
+    if (value[index] === '"') {
+      if (!readQuotedString()) return false;
+    } else if (!readToken()) {
+      return false;
+    }
   }
+}
+
+function parseStrictJson(body: string): unknown {
+  assertStrictJsonStructure(body);
   try {
     return JSON.parse(body) as unknown;
   } catch {
@@ -329,13 +447,17 @@ export class BrokerProviderAdapter implements ProviderAdapter {
         maxResponseBytes: this.maxResponseBytes
       });
       if (
-        response.statusCode === 200 &&
-        response.headers["content-type"]?.startsWith("application/json")
+        (response.statusCode === 200 || response.statusCode === 503) &&
+        jsonMediaType(response.headers["content-type"])
       ) {
         const value = parseStrictJson(response.body);
+        const aggregateStatus = (value as { status?: unknown }).status;
+        const validAggregate =
+          (response.statusCode === 200 && aggregateStatus === "ok") ||
+          (response.statusCode === 503 && aggregateStatus === "degraded");
         if (
+          validAggregate &&
           exactObjectKeys(value, ["agents", "status"]) &&
-          (value as { status?: unknown }).status === "ok" &&
           Array.isArray((value as { agents?: unknown }).agents)
         ) {
           const descriptors = (value as { agents: unknown[] }).agents
@@ -429,7 +551,7 @@ export class BrokerProviderAdapter implements ProviderAdapter {
     if (response.statusCode !== 200) {
       return failure(request, this.clock, "PROVIDER_UNAVAILABLE");
     }
-    if (!response.headers["content-type"]?.startsWith("application/json")) {
+    if (!jsonMediaType(response.headers["content-type"])) {
       return failure(request, this.clock, "PROVIDER_RESPONSE_INVALID");
     }
 

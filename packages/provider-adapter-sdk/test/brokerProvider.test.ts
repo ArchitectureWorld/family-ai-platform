@@ -44,6 +44,23 @@ function brokerResult(
   };
 }
 
+function healthDescriptor(
+  agentRef: "agent:hermes-zzh" | "agent:hermes-nsy",
+  status: "available" | "unavailable"
+): Record<string, unknown> {
+  return {
+    protocolVersion: 1,
+    agentRef,
+    displayName: agentRef === "agent:hermes-zzh" ? "于途" : "乔晶晶",
+    kind: "agent",
+    runtime: "hermes-local",
+    status,
+    capabilities: ["chat"],
+    system: false,
+    observedAt: "2026-08-28T12:00:00.000Z"
+  };
+}
+
 async function startUdsServer(
   handler: (request: IncomingMessage, response: ServerResponse) => void
 ): Promise<string> {
@@ -59,10 +76,15 @@ async function startUdsServer(
   return socketPath;
 }
 
-function sendJson(response: ServerResponse, statusCode: number, body: unknown): void {
+function sendJson(
+  response: ServerResponse,
+  statusCode: number,
+  body: unknown,
+  contentType = "application/json"
+): void {
   const payload = JSON.stringify(body);
   response.writeHead(statusCode, {
-    "content-type": "application/json",
+    "content-type": contentType,
     "content-length": Buffer.byteLength(payload)
   });
   response.end(payload);
@@ -70,7 +92,11 @@ function sendJson(response: ServerResponse, statusCode: number, body: unknown): 
 
 function adapter(
   socketPath: string,
-  options: { maxResponseBytes?: number; maxDeadlineMs?: number } = {}
+  options: {
+    maxRequestBytes?: number;
+    maxResponseBytes?: number;
+    maxDeadlineMs?: number;
+  } = {}
 ): BrokerProviderAdapter {
   return new BrokerProviderAdapter({
     socketPath,
@@ -131,6 +157,34 @@ describe("BrokerProviderAdapter", () => {
       completedAt: "2026-08-28T12:00:01.000Z",
       output: [{ type: "text", text: "来自于途的回复" }],
       externalSessionRef: "external-session:hermes-zzh-session-42"
+    });
+  });
+
+  it("accepts contract-maximal CJK prompt and result within default byte bounds", async () => {
+    const legalCjkText = "界".repeat(12_000);
+    let capturedPrompt = "";
+    const socketPath = await startUdsServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        capturedPrompt = (
+          JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+            prompt: string;
+          }
+        ).prompt;
+        sendJson(response, 200, brokerResult({ output: legalCjkText }));
+      });
+    });
+
+    const result = await adapter(socketPath).invoke({
+      ...providerRequest,
+      content: [{ type: "text", text: legalCjkText }]
+    });
+
+    expect(Buffer.byteLength(capturedPrompt)).toBe(36_000);
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: [{ type: "text", text: legalCjkText }]
     });
   });
 
@@ -229,6 +283,54 @@ describe("BrokerProviderAdapter", () => {
       error: { code: "PROVIDER_RESPONSE_INVALID" }
     });
     expect(JSON.stringify(result)).not.toContain("SSSSSSSS");
+  });
+
+  it("still rejects a request that exceeds an explicitly tighter byte cap", async () => {
+    let calls = 0;
+    const socketPath = await startUdsServer((_request, response) => {
+      calls += 1;
+      sendJson(response, 200, brokerResult());
+    });
+
+    const result = await adapter(socketPath, { maxRequestBytes: 1024 }).invoke({
+      ...providerRequest,
+      content: [{ type: "text", text: "界".repeat(1_000) }]
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { code: "PROVIDER_RESPONSE_INVALID" }
+    });
+    expect(calls).toBe(0);
+  });
+
+  it("accepts exact application/json media type case and legal parameters", async () => {
+    const socketPath = await startUdsServer((_request, response) => {
+      sendJson(
+        response,
+        200,
+        brokerResult(),
+        'Application/JSON; Charset="UTF-8"; profile=v1'
+      );
+    });
+
+    await expect(adapter(socketPath).invoke(providerRequest)).resolves
+      .toMatchObject({ status: "succeeded" });
+  });
+
+  it.each([
+    "application/jsonp",
+    "application/json; invalid"
+  ])("rejects invalid JSON media type %s", async (contentType) => {
+    const socketPath = await startUdsServer((_request, response) => {
+      sendJson(response, 200, brokerResult(), contentType);
+    });
+
+    await expect(adapter(socketPath).invoke(providerRequest)).resolves
+      .toMatchObject({
+        status: "failed",
+        error: { code: "PROVIDER_RESPONSE_INVALID" }
+      });
   });
 
   it.each([
@@ -336,6 +438,66 @@ describe("BrokerProviderAdapter", () => {
         observedAt: "2026-08-28T12:00:00.000Z"
       }]
     };
+    await expect(broker.health()).resolves.toMatchObject({ status: "offline" });
+  });
+
+  it("uses the configured Agent status from a valid degraded aggregate health", async () => {
+    let statusCode = 503;
+    let healthBody: unknown = {
+      status: "degraded",
+      agents: [
+        healthDescriptor("agent:hermes-zzh", "available"),
+        healthDescriptor("agent:hermes-nsy", "unavailable")
+      ]
+    };
+    const socketPath = await startUdsServer((_request, response) => {
+      sendJson(response, statusCode, healthBody);
+    });
+    const broker = adapter(socketPath);
+
+    await expect(broker.health()).resolves.toMatchObject({ status: "online" });
+
+    healthBody = {
+      status: "degraded",
+      agents: [
+        healthDescriptor("agent:hermes-zzh", "unavailable"),
+        healthDescriptor("agent:hermes-nsy", "available")
+      ]
+    };
+    await expect(broker.health()).resolves.toMatchObject({ status: "offline" });
+
+    statusCode = 200;
+    healthBody = {
+      status: "degraded",
+      agents: [healthDescriptor("agent:hermes-zzh", "available")]
+    };
+    await expect(broker.health()).resolves.toMatchObject({ status: "offline" });
+
+    statusCode = 503;
+    healthBody = {
+      status: "ok",
+      agents: [healthDescriptor("agent:hermes-zzh", "available")]
+    };
+    await expect(broker.health()).resolves.toMatchObject({ status: "offline" });
+  });
+
+  it("rejects duplicate keys inside descriptors but allows repeated keys in separate array objects", async () => {
+    let rawBody = JSON.stringify({
+      status: "degraded",
+      agents: [
+        healthDescriptor("agent:hermes-zzh", "available"),
+        healthDescriptor("agent:hermes-nsy", "unavailable")
+      ]
+    });
+    const socketPath = await startUdsServer((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(rawBody);
+    });
+    const broker = adapter(socketPath);
+
+    await expect(broker.health()).resolves.toMatchObject({ status: "online" });
+
+    rawBody = `{"status":"degraded","agents":[{"protocolVersion":1,"agentRef":"agent:hermes-zzh","displayName":"于途","kind":"agent","runtime":"hermes-local","status":"unavailable","status":"available","capabilities":["chat"],"system":false,"observedAt":"2026-08-28T12:00:00.000Z"}]}`;
     await expect(broker.health()).resolves.toMatchObject({ status: "offline" });
   });
 });
