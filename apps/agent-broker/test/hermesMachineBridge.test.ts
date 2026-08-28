@@ -117,6 +117,54 @@ def main(**kwargs):
   });
 
   it.each([
+    ["escaped controls", "\u0001"],
+    ["isolated surrogates", "\ud800"]
+  ])("admits one contract-maximal %s query frame", async (_label, unit) => {
+    const root = await mkdtemp(join(tmpdir(), "hermes-machine-bridge-max-"));
+    temporaryDirectories.push(root);
+    const bridge = join(root, "hermes_machine_bridge.py");
+    const sourceBridge = fileURLToPath(
+      new URL("../runtime/hermes_machine_bridge.py", import.meta.url)
+    );
+    const home = join(root, "family-home");
+    await mkdir(home, { recursive: true });
+    await copyFile(sourceBridge, bridge);
+    await writeFile(
+      join(root, "cli.py"),
+      `
+import json
+from pathlib import Path
+
+def main(**kwargs):
+    Path(__file__).with_name("capture.json").write_text(
+        json.dumps(kwargs, ensure_ascii=True), encoding="utf-8"
+    )
+    print("safe bridge reply")
+    print("session_id: bridge-max-session", file=__import__("sys").stderr)
+`,
+      "utf8"
+    );
+    const query = unit.repeat(12_000);
+
+    const result = await runBridge(bridge, home, {
+      protocolVersion: 1,
+      profile: "default",
+      query
+    });
+    const capture = JSON.parse(
+      await readFile(join(root, "capture.json"), "utf8")
+    ) as { query: string; quiet: boolean; resume: null };
+
+    expect(Buffer.byteLength(JSON.stringify({
+      protocolVersion: 1,
+      profile: "default",
+      query
+    }))).toBeGreaterThan(64 * 1024);
+    expect(result).toMatchObject({ exitCode: 0, stdout: "safe bridge reply\n" });
+    expect(capture).toEqual({ query, quiet: true, resume: null });
+  });
+
+  it.each([
     ["oversized", JSON.stringify({ protocolVersion: 1, profile: "default", query: "SENTINEL_SECRET".repeat(8_000) })],
     [
       "multiple",

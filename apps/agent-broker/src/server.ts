@@ -39,8 +39,8 @@ import {
   type AgentTarget
 } from "./catalog.js";
 
-const MAX_REQUEST_BYTES = 64 * 1024;
-const DEFAULT_MAX_STDOUT_BYTES = 16 * 1024;
+const MAX_REQUEST_BYTES = 128 * 1024;
+const DEFAULT_MAX_STDOUT_BYTES = 64 * 1024;
 const DEFAULT_MAX_STDERR_BYTES = 16 * 1024;
 const DEFAULT_TERMINATION_GRACE_MS = 250;
 const RUNTIME_DIRECTORY_MODE = 0o700n;

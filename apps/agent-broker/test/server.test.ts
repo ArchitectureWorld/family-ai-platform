@@ -398,6 +398,101 @@ describe("Unix-socket Agent Broker", () => {
     expect(JSON.stringify(logs)).not.toMatch(/SENTINEL_PRIVATE_PROMPT|SENTINEL_STDERR_SECRET/);
   });
 
+  it("carries a contract-maximal escaped query through HTTP and the process stdin frame", async () => {
+    const { root, runtimeDirectory, socketPath } = await fixture();
+    const capturePath = join(root, "capture.jsonl");
+    const script = await writeFakeHermes(root, capturePath);
+    await startBroker({
+      runtimeDirectory,
+      socketPath,
+      executable: process.execPath,
+      prefixArgs: [script, capturePath],
+      processCwd: () => root,
+      runtimeProbe: async () => true
+    });
+    const prompt = "\u0001".repeat(12_000);
+
+    const response = await udsRequest(
+      socketPath,
+      "POST",
+      "/v1/invocations",
+      requestFor("agent:hermes-zzh", { prompt })
+    );
+    const record = JSON.parse(
+      (await readFile(capturePath, "utf8")).trim()
+    ) as { frame: { query: string } };
+
+    expect(Buffer.byteLength(JSON.stringify(requestFor(
+      "agent:hermes-zzh",
+      { prompt }
+    )))).toBeGreaterThan(64 * 1024);
+    expect(response).toMatchObject({
+      statusCode: 200,
+      body: { status: "succeeded" }
+    });
+    expect(record.frame.query).toBe(prompt);
+  });
+
+  it("carries a contract-maximal UTF-8 output through the default stdout bound", async () => {
+    const { root, runtimeDirectory, socketPath } = await fixture();
+    const script = join(root, "max-output-hermes.mjs");
+    await writeFile(
+      script,
+      `
+        process.stdout.write("界".repeat(12_000));
+        process.stderr.write("session_id: max-output-session\\n");
+      `,
+      "utf8"
+    );
+    await startBroker({
+      runtimeDirectory,
+      socketPath,
+      executable: process.execPath,
+      prefixArgs: [script],
+      processCwd: () => root,
+      runtimeProbe: async () => true
+    });
+
+    const response = await udsRequest(
+      socketPath,
+      "POST",
+      "/v1/invocations",
+      requestFor("agent:hermes-jarvis")
+    );
+
+    expect(response).toMatchObject({
+      statusCode: 200,
+      body: { status: "succeeded", output: "界".repeat(12_000) }
+    });
+  });
+
+  it("rejects an HTTP invocation body above 128 KiB", async () => {
+    const { root, runtimeDirectory, socketPath } = await fixture();
+    const capturePath = join(root, "capture.jsonl");
+    const script = await writeFakeHermes(root, capturePath);
+    await startBroker({
+      runtimeDirectory,
+      socketPath,
+      executable: process.execPath,
+      prefixArgs: [script, capturePath],
+      processCwd: () => root,
+      runtimeProbe: async () => true
+    });
+
+    const response = await udsRequest(
+      socketPath,
+      "POST",
+      "/v1/invocations",
+      { padding: "S".repeat(128 * 1024) }
+    );
+
+    expect(response).toMatchObject({
+      statusCode: 400,
+      body: { error: { code: "INVALID_REQUEST" } }
+    });
+    await expect(readFile(capturePath, "utf8")).resolves.toBe("");
+  });
+
   it.each([
     "/exit",
     "/model forged-model",

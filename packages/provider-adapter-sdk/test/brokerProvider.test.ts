@@ -188,6 +188,37 @@ describe("BrokerProviderAdapter", () => {
     });
   });
 
+  it.each([
+    ["escaped controls", "\u0001"],
+    ["isolated surrogates", "\ud800"]
+  ])("accepts contract-maximal %s in request and result", async (_label, unit) => {
+    const legalText = unit.repeat(12_000);
+    let capturedPrompt = "";
+    const socketPath = await startUdsServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        capturedPrompt = (
+          JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+            prompt: string;
+          }
+        ).prompt;
+        sendJson(response, 200, brokerResult({ output: legalText }));
+      });
+    });
+
+    const result = await adapter(socketPath).invoke({
+      ...providerRequest,
+      content: [{ type: "text", text: legalText }]
+    });
+
+    expect(capturedPrompt).toBe(legalText);
+    expect(result).toMatchObject({
+      status: "succeeded",
+      output: [{ type: "text", text: legalText }]
+    });
+  });
+
   it("preserves an Agent-scoped external session only in the UDS body", async () => {
     let capturedBody: Record<string, unknown> | undefined;
     const socketPath = await startUdsServer((request, response) => {
@@ -277,6 +308,20 @@ describe("BrokerProviderAdapter", () => {
 
     const result = await adapter(socketPath, { maxResponseBytes: 1024 })
       .invoke(providerRequest);
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { code: "PROVIDER_RESPONSE_INVALID" }
+    });
+    expect(JSON.stringify(result)).not.toContain("SSSSSSSS");
+  });
+
+  it("rejects a response above the default 128 KiB cap", async () => {
+    const socketPath = await startUdsServer((_request, response) => {
+      sendJson(response, 200, { padding: "S".repeat(128 * 1024) });
+    });
+
+    const result = await adapter(socketPath).invoke(providerRequest);
 
     expect(result).toMatchObject({
       status: "failed",
@@ -477,6 +522,33 @@ describe("BrokerProviderAdapter", () => {
     healthBody = {
       status: "ok",
       agents: [healthDescriptor("agent:hermes-zzh", "available")]
+    };
+    await expect(broker.health()).resolves.toMatchObject({ status: "offline" });
+  });
+
+  it("fails closed when aggregate health contradicts descriptor semantics", async () => {
+    let statusCode = 200;
+    let healthBody: unknown = {
+      status: "ok",
+      agents: [
+        healthDescriptor("agent:hermes-zzh", "available"),
+        healthDescriptor("agent:hermes-nsy", "unavailable")
+      ]
+    };
+    const socketPath = await startUdsServer((_request, response) => {
+      sendJson(response, statusCode, healthBody);
+    });
+    const broker = adapter(socketPath);
+
+    await expect(broker.health()).resolves.toMatchObject({ status: "offline" });
+
+    statusCode = 503;
+    healthBody = {
+      status: "degraded",
+      agents: [
+        healthDescriptor("agent:hermes-zzh", "available"),
+        healthDescriptor("agent:hermes-nsy", "available")
+      ]
     };
     await expect(broker.health()).resolves.toMatchObject({ status: "offline" });
   });

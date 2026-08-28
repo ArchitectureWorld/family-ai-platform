@@ -14,8 +14,8 @@ import {
 import type { ProviderAdapter } from "./index.js";
 import { providerPromptFrom } from "./providerPrompt.js";
 
-const DEFAULT_MAX_REQUEST_BYTES = 64 * 1024;
-const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024;
+const DEFAULT_MAX_REQUEST_BYTES = 128 * 1024;
+const DEFAULT_MAX_RESPONSE_BYTES = 128 * 1024;
 const DEFAULT_MAX_DEADLINE_MS = 300_000;
 const DEFAULT_HEALTH_DEADLINE_MS = 3_000;
 
@@ -466,7 +466,17 @@ export class BrokerProviderAdapter implements ProviderAdapter {
             (descriptor) => descriptor.success &&
               descriptor.data.agentRef === this.options.targetAgentRef
           );
-          online = descriptors.every((descriptor) => descriptor.success) &&
+          const descriptorsValid = descriptors.every(
+            (descriptor) => descriptor.success
+          );
+          const allAvailable = descriptorsValid && descriptors.every(
+            (descriptor) =>
+              descriptor.success && descriptor.data.status === "available"
+          );
+          const aggregateConsistent =
+            (aggregateStatus === "ok" && allAvailable) ||
+            (aggregateStatus === "degraded" && !allAvailable);
+          online = descriptorsValid && aggregateConsistent &&
             configured.length === 1 &&
             configured[0]?.success === true &&
             configured[0].data.status === "available";

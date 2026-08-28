@@ -11,7 +11,7 @@ import sys
 from typing import Any
 
 
-MAX_FRAME_BYTES = 64 * 1024
+MAX_FRAME_BYTES = 128 * 1024
 MAX_QUERY_CHARS = 12_000
 ALLOWED_PROFILES = frozenset({"default", "zzh", "nsy"})
 SESSION_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,99}$")
