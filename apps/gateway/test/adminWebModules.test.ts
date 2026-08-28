@@ -135,6 +135,59 @@ describe("Admin Web responsive state", () => {
 });
 
 describe("Admin Web API client", () => {
+  it("normalizes only the exact approved Agent catalog and strips private fields", async () => {
+    const { createAdminApi } = await apiModule();
+    const approved = [
+      ["agent:hermes-jarvis", "Jarvis", "idle", "空闲"],
+      ["agent:hermes-zzh", "于途", "working", "工作中"],
+      ["agent:hermes-nsy", "乔晶晶", "problem", "有问题"]
+    ].map(([agentRef, displayName, status, statusLabel]) => ({
+      agentRef,
+      displayName,
+      status,
+      statusLabel,
+      activeTurnCount: 0,
+      lastCheckedAt: "2026-08-28T12:00:00.000Z",
+      publicProblem: status === "problem" ? "Agent 当前无法连接。" : null,
+      providerProfileRef: "provider-profile:private",
+      home: "/srv/private/runtime",
+      profile: "nsy",
+      serviceToken: "secret"
+    }));
+    const api = createAdminApi({
+      credential: { kind: "entry", entrySessionRef: "entry-session:preview-admin", token },
+      fetchImpl: async () => Response.json({ protocolVersion: 1, agents: approved })
+    });
+
+    expect(await api.agents()).toEqual({
+      protocolVersion: 1,
+      agents: [
+        { agentRef: "agent:hermes-jarvis", displayName: "Jarvis", system: true, runtime: "available", runtimeLabel: "可用" },
+        { agentRef: "agent:hermes-zzh", displayName: "于途", system: false, runtime: "available", runtimeLabel: "可用" },
+        { agentRef: "agent:hermes-nsy", displayName: "乔晶晶", system: false, runtime: "unavailable", runtimeLabel: "不可用" }
+      ]
+    });
+    expect(JSON.stringify(await api.agents())).not.toMatch(
+      /providerProfileRef|home|profile|serviceToken|private/u
+    );
+
+    for (const agents of [
+      approved.slice(0, 2),
+      [...approved, approved[2]],
+      approved.map((agent) => agent.agentRef === "agent:hermes-nsy" ? { ...agent, displayName: "新名字" } : agent),
+      [...approved, { ...approved[2], agentRef: "agent:unexpected" }]
+    ]) {
+      const driftedApi = createAdminApi({
+        credential: { kind: "entry", entrySessionRef: "entry-session:preview-admin", token },
+        fetchImpl: async () => Response.json({ protocolVersion: 1, agents })
+      });
+      await expect(driftedApi.agents()).rejects.toMatchObject({
+        code: "ADMIN_AGENTS_INVALID",
+        status: 502
+      });
+    }
+  });
+
   it("uses public status plus strict bootstrap and family-admin requests", async () => {
     const { createAdminApi, normalizeDisplayName, normalizeFamilyRole } = await apiModule();
     const requests: Array<{ url: string; init: RequestInit }> = [];

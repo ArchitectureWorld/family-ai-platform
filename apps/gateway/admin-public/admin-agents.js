@@ -2,6 +2,15 @@ const SAFE_ERROR_TEXT = "暂时无法完成 Agent 配置，请稍后重试。";
 const UNAVAILABLE_TEXT = "无法确认当前 Agent 配置。请重新加载后再操作。";
 const REUSE_NOTE =
   "同一个 Agent 可以提供给多个成员；如果它连接的是同一个 Hermes Profile，Hermes 内部记忆也可能共享。";
+const APPROVED_AGENTS = Object.freeze([
+  Object.freeze({ agentRef: "agent:hermes-jarvis", displayName: "Jarvis", system: true }),
+  Object.freeze({ agentRef: "agent:hermes-zzh", displayName: "于途", system: false }),
+  Object.freeze({ agentRef: "agent:hermes-nsy", displayName: "乔晶晶", system: false })
+]);
+const PERSONAL_AGENT_REFS = new Set([
+  "agent:hermes-zzh",
+  "agent:hermes-nsy"
+]);
 
 function element(documentRef, name, { className, text, attributes = {} } = {}) {
   const node = documentRef.createElement(name);
@@ -15,7 +24,43 @@ function element(documentRef, name, { className, text, attributes = {} } = {}) {
 
 export function availableAgentOptions(catalog, mountedAgents) {
   const mounted = new Set(mountedAgents.map((agent) => agent.agentRef));
-  return catalog.filter((agent) => !mounted.has(agent.agentRef));
+  return catalog.filter((agent) =>
+    PERSONAL_AGENT_REFS.has(agent.agentRef) && !mounted.has(agent.agentRef)
+  );
+}
+
+function approvedCatalog(catalog) {
+  if (!Array.isArray(catalog) || catalog.length !== APPROVED_AGENTS.length) {
+    throw new Error("ADMIN_AGENT_CATALOG_UNAVAILABLE");
+  }
+  const byRef = new Map();
+  for (const agent of catalog) {
+    const approved = APPROVED_AGENTS.find(
+      (candidate) => candidate.agentRef === agent?.agentRef
+    );
+    if (
+      approved === undefined ||
+      byRef.has(agent.agentRef) ||
+      agent.displayName !== approved.displayName ||
+      agent.system !== approved.system ||
+      !["available", "unavailable"].includes(agent.runtime) ||
+      agent.runtimeLabel !== (agent.runtime === "available" ? "可用" : "不可用")
+    ) {
+      throw new Error("ADMIN_AGENT_CATALOG_UNAVAILABLE");
+    }
+    byRef.set(agent.agentRef, {
+      agentRef: approved.agentRef,
+      displayName: approved.displayName,
+      system: approved.system,
+      runtime: agent.runtime,
+      runtimeLabel: agent.runtimeLabel
+    });
+  }
+  return APPROVED_AGENTS.map((approved) => {
+    const agent = byRef.get(approved.agentRef);
+    if (agent === undefined) throw new Error("ADMIN_AGENT_CATALOG_UNAVAILABLE");
+    return agent;
+  });
 }
 
 export function renderMemberAgentControls({
@@ -30,6 +75,7 @@ export function renderMemberAgentControls({
   let mounts = null;
   let busy = false;
   let pendingMessage = "";
+  let successMessage = "";
   let menuOpen = false;
   let mutationRetry = null;
   let pendingMutation = null;
@@ -72,7 +118,7 @@ export function renderMemberAgentControls({
     const feedback = element(documentRef, "div", {
       className: "agent-feedback",
       attributes: {
-        role: "status",
+        role: mutationRetry === null ? "status" : "alert",
         "aria-live": "polite"
       }
     });
@@ -101,6 +147,8 @@ export function renderMemberAgentControls({
         element(documentRef, "span", { text: SAFE_ERROR_TEXT }),
         retry
       );
+    } else if (successMessage !== "") {
+      feedback.append(element(documentRef, "span", { text: successMessage }));
     }
     return feedback;
   };
@@ -140,68 +188,91 @@ export function renderMemberAgentControls({
   };
 
   const renderKnown = (section) => {
-    const chips = element(documentRef, "div", {
-      className: "agent-chip-list",
-      attributes: { "aria-label": "已挂载 Agent" }
+    const personalMounts = mounts.mountedAgents.filter((mount) =>
+      PERSONAL_AGENT_REFS.has(mount.agentRef)
+    );
+    const mountsByRef = new Map(
+      personalMounts.map((mount) => [mount.agentRef, mount])
+    );
+    const cards = element(documentRef, "div", {
+      className: "agent-card-list",
+      attributes: { "aria-label": "可用 Agent" }
     });
-    if (mounts.mountedAgents.length === 0) {
-      chips.append(element(documentRef, "p", {
-        className: "agent-empty",
-        text: "尚未挂载 Agent。"
-      }));
-    }
-    for (const mount of mounts.mountedAgents) {
-      const chip = element(documentRef, "div", {
-        className: `agent-chip agent-status-${mount.status}`
+    for (const agent of catalog) {
+      const mount = mountsByRef.get(agent.agentRef);
+      const card = element(documentRef, "article", {
+        className: `agent-card agent-runtime-${agent.runtime}`,
+        attributes: { "data-agent-card": agent.agentRef }
       });
-      const identity = element(documentRef, "span", {
-        className: "agent-chip-identity"
+      const heading = element(documentRef, "div", {
+        className: "agent-card-heading"
       });
-      identity.append(
-        element(documentRef, "strong", { text: mount.displayName }),
+      heading.append(
+        element(documentRef, "h5", { text: agent.displayName }),
         element(documentRef, "span", {
-          className: "agent-status",
-          text: mount.statusLabel
+          className: "agent-card-kind",
+          text: agent.system ? "系统 Agent" : "可分配"
         })
       );
-      if (mount.isDefault) {
-        identity.append(element(documentRef, "span", {
-          className: "agent-default-badge",
-          text: "默认"
+      card.append(
+        heading,
+        element(documentRef, "p", {
+          className: "agent-card-state",
+          text: `运行状态：${agent.runtimeLabel}`
+        })
+      );
+      if (agent.system) {
+        card.append(element(documentRef, "p", {
+          className: "agent-card-allocation",
+          text: "成员分配：由家庭管理系统统一提供。"
         }));
-      }
-      const remove = control(element(documentRef, "button", {
-        className: "agent-remove-button",
-        text: "×",
-        attributes: {
-          type: "button",
-          "data-remove-agent": mount.agentRef,
-          "data-focus-key": `remove:${mount.agentRef}`,
-          "aria-label": `移除 ${mount.displayName}`
-        }
-      }));
-      remove.addEventListener("click", () => {
-        if (
-          busy ||
-          !confirmImpl(`从该成员移除 ${mount.displayName}？`)
-        ) {
-          return;
-        }
-        const agentRef = mount.agentRef;
-        void runMutation({
-          action: () => api.unmountAgent(personRef, agentRef),
-          applied: (current) =>
-            !current.mountedAgents.some((agent) => agent.agentRef === agentRef),
-          focusKey: `remove:${agentRef}`,
-          pendingMessage: "正在移除 Agent…"
+      } else {
+        const assigned = mount !== undefined;
+        const allocation = element(documentRef, "div", {
+          className: "agent-card-allocation"
         });
-      });
-      chip.append(identity, remove);
-      chips.append(chip);
+        allocation.append(element(documentRef, "span", {
+          text: `成员分配：${assigned ? "已分配" : "未分配"}`
+        }));
+        if (mount?.isDefault) {
+          allocation.append(element(documentRef, "span", {
+            className: "agent-default-badge",
+            text: "默认"
+          }));
+        }
+        if (assigned) {
+          const remove = control(element(documentRef, "button", {
+            className: "agent-remove-button",
+            text: "移除",
+            attributes: {
+              type: "button",
+              "data-remove-agent": agent.agentRef,
+              "data-focus-key": `remove:${agent.agentRef}`,
+              "aria-label": `从成员移除 ${agent.displayName}`
+            }
+          }));
+          remove.addEventListener("click", () => {
+            if (busy || !confirmImpl(`从该成员移除 ${agent.displayName}？`)) return;
+            const agentRef = agent.agentRef;
+            void runMutation({
+              action: () => api.unmountAgent(personRef, agentRef),
+              applied: (current) =>
+                !current.mountedAgents.some((currentMount) =>
+                  currentMount.agentRef === agentRef
+                ),
+              focusKey: `remove:${agentRef}`,
+              pendingMessage: "正在移除 Agent…"
+            });
+          });
+          allocation.append(remove);
+        }
+        card.append(allocation);
+      }
+      cards.append(card);
     }
-    section.append(chips);
+    section.append(cards);
 
-    const options = availableAgentOptions(catalog, mounts.mountedAgents);
+    const options = availableAgentOptions(catalog, personalMounts);
     const addControl = element(documentRef, "div", {
       className: "agent-add-menu"
     });
@@ -243,14 +314,15 @@ export function renderMemberAgentControls({
     addMenu.hidden = !menuOpen;
     for (const agent of options) {
       const option = control(element(documentRef, "button", {
-        className: `agent-add-option agent-status-${agent.status}`,
-        text: `${agent.displayName} · ${agent.statusLabel}`,
+        className: `agent-add-option agent-runtime-${agent.runtime}`,
+        text: `${agent.displayName} · ${agent.runtimeLabel}`,
         attributes: {
           type: "button",
           "data-mount-agent": agent.agentRef,
           "data-focus-key": `add:${agent.agentRef}`
         }
       }));
+      if (agent.runtime !== "available") option.disabled = true;
       option.addEventListener("keydown", closeAddPopover);
       option.addEventListener("click", () => {
         if (busy) return;
@@ -286,13 +358,17 @@ export function renderMemberAgentControls({
       text: "不设默认 Agent",
       attributes: { value: "" }
     }));
-    for (const mount of mounts.mountedAgents) {
+    for (const mount of personalMounts) {
+      const agent = catalog.find((candidate) => candidate.agentRef === mount.agentRef);
+      if (agent === undefined) continue;
       defaultSelect.append(element(documentRef, "option", {
-        text: mount.displayName,
+        text: agent.displayName,
         attributes: { value: mount.agentRef }
       }));
     }
-    defaultSelect.value = mounts.defaultAgentRef ?? "";
+    defaultSelect.value = personalMounts.some(
+      (mount) => mount.agentRef === mounts.defaultAgentRef
+    ) ? mounts.defaultAgentRef : "";
     defaultLabel.append(
       element(documentRef, "span", { text: "默认 Agent" }),
       defaultSelect
@@ -350,7 +426,7 @@ export function renderMemberAgentControls({
       api.memberAgentMounts(personRef)
     ]);
     return {
-      catalog: catalogResult.agents,
+      catalog: approvedCatalog(catalogResult.agents),
       mounts: mountResult
     };
   };
@@ -378,9 +454,11 @@ export function renderMemberAgentControls({
         const { descriptor, outcome } = pendingMutation;
         if (outcome === "ambiguous" && !descriptor.applied(mounts)) {
           mutationRetry = descriptor;
+          successMessage = "";
           resolvedFocus = "mutation-retry";
         } else {
           mutationRetry = null;
+          successMessage = "Agent 配置已更新。";
           resolvedFocus = descriptor.focusKey;
         }
         pendingMutation = null;
@@ -393,6 +471,7 @@ export function renderMemberAgentControls({
       mounts = null;
       busy = false;
       pendingMessage = "";
+      successMessage = "";
       mutationRetry = null;
       menuOpen = false;
       render("refresh-retry");
@@ -404,6 +483,7 @@ export function renderMemberAgentControls({
     if (busy || !stateKnown) return;
     busy = true;
     pendingMessage = descriptor.pendingMessage;
+    successMessage = "";
     mutationRetry = null;
     menuOpen = false;
     render("pending");
@@ -427,10 +507,13 @@ export function renderMemberAgentControls({
 
   return Object.freeze({
     ready: reloadState(),
-    refresh: () => reloadState({
-      pendingText: "正在重新加载 Agent 配置…",
-      pendingFocus: true,
-      successFocus: "add-menu"
-    })
+    refresh: () => {
+      successMessage = "";
+      return reloadState({
+        pendingText: "正在重新加载 Agent 配置…",
+        pendingFocus: true,
+        successFocus: "add-menu"
+      });
+    }
   });
 }

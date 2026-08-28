@@ -28,6 +28,23 @@ const AGENT_PUBLIC_PROBLEMS = new Set([
   "Agent 任务执行超时。",
   "Agent 最近一次调用失败。"
 ]);
+const APPROVED_ADMIN_AGENTS = Object.freeze([
+  Object.freeze({
+    agentRef: "agent:hermes-jarvis",
+    displayName: "Jarvis",
+    system: true
+  }),
+  Object.freeze({
+    agentRef: "agent:hermes-zzh",
+    displayName: "于途",
+    system: false
+  }),
+  Object.freeze({
+    agentRef: "agent:hermes-nsy",
+    displayName: "乔晶晶",
+    system: false
+  })
+]);
 
 export class AdminApiError extends Error {
   constructor(code, status) {
@@ -309,13 +326,20 @@ function validateAgentCatalog(value) {
     !isRecord(value) ||
     value.protocolVersion !== 1 ||
     !Array.isArray(value.agents) ||
-    value.agents.length > 500
+    value.agents.length !== APPROVED_ADMIN_AGENTS.length
   ) {
     throw new AdminApiError("ADMIN_AGENTS_INVALID", 502);
   }
-  const agents = value.agents.map((agent) => {
+  const byRef = new Map();
+  for (const agent of value.agents) {
     const safe = safeAgentStatus(agent, "ADMIN_AGENTS_INVALID");
+    const approved = APPROVED_ADMIN_AGENTS.find(
+      (candidate) => candidate.agentRef === safe.agentRef
+    );
     if (
+      approved === undefined ||
+      approved.displayName !== safe.displayName ||
+      byRef.has(safe.agentRef) ||
       !Number.isInteger(agent.activeTurnCount) ||
       agent.activeTurnCount < 0 ||
       !validTimestamp(agent.lastCheckedAt) ||
@@ -323,11 +347,20 @@ function validateAgentCatalog(value) {
     ) {
       throw new AdminApiError("ADMIN_AGENTS_INVALID", 502);
     }
+    byRef.set(safe.agentRef, safe);
+  }
+  const agents = APPROVED_ADMIN_AGENTS.map((approved) => {
+    const safe = byRef.get(approved.agentRef);
+    if (safe === undefined) {
+      throw new AdminApiError("ADMIN_AGENTS_INVALID", 502);
+    }
+    const available = safe.status !== "problem";
     return {
-      ...safe,
-      activeTurnCount: agent.activeTurnCount,
-      lastCheckedAt: agent.lastCheckedAt,
-      publicProblem: agent.publicProblem
+      agentRef: approved.agentRef,
+      displayName: approved.displayName,
+      system: approved.system,
+      runtime: available ? "available" : "unavailable",
+      runtimeLabel: available ? "可用" : "不可用"
     };
   });
   return { protocolVersion: 1, agents };

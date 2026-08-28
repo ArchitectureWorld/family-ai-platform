@@ -150,24 +150,42 @@ const catalog = {
   protocolVersion: 1,
   agents: [
     {
-      agentRef: "agent:mounted",
-      displayName: "家庭助理",
-      status: "working",
-      statusLabel: "工作中",
-      activeTurnCount: 1,
-      lastCheckedAt: "2026-07-28T10:00:00.000Z",
-      publicProblem: null
+      agentRef: "agent:hermes-jarvis",
+      displayName: "Jarvis",
+      system: true,
+      runtime: "available",
+      runtimeLabel: "可用"
     },
     {
-      agentRef: "agent:not-mounted",
-      displayName: "研究助理",
-      status: "problem",
-      statusLabel: "有问题",
-      activeTurnCount: 0,
-      lastCheckedAt: "2026-07-28T10:00:00.000Z",
-      publicProblem: "Agent 当前无法连接。"
+      agentRef: "agent:hermes-zzh",
+      displayName: "于途",
+      system: false,
+      runtime: "available",
+      runtimeLabel: "可用"
+    },
+    {
+      agentRef: "agent:hermes-nsy",
+      displayName: "乔晶晶",
+      system: false,
+      runtime: "unavailable",
+      runtimeLabel: "不可用"
     }
   ]
+};
+
+const rawCatalog = {
+  protocolVersion: 1,
+  agents: catalog.agents.map((agent) => ({
+    agentRef: agent.agentRef,
+    displayName: agent.displayName,
+    status: agent.runtime === "available" ? "idle" : "problem",
+    statusLabel: agent.runtime === "available" ? "空闲" : "有问题",
+    activeTurnCount: 0,
+    lastCheckedAt: "2026-07-28T10:00:00.000Z",
+    publicProblem: agent.runtime === "available"
+      ? null
+      : "Agent 当前无法连接。"
+  }))
 };
 
 const mounted = {
@@ -175,9 +193,9 @@ const mounted = {
   personRef: "person:alice",
   defaultAgentRef: null,
   mountedAgents: [{
-    assignmentRef: "assignment:alice-mounted",
-    agentRef: "agent:mounted",
-    displayName: "家庭助理",
+    assignmentRef: "assignment:alice-zzh",
+    agentRef: "agent:hermes-zzh",
+    displayName: "于途",
     providerProfileRef: "provider-profile:private",
     isDefault: false,
     status: "working",
@@ -190,15 +208,165 @@ async function flush() {
 }
 
 describe("Admin member Agent controls", () => {
+  it("renders exactly the approved three cards with textual runtime and allocation states", async () => {
+    const { renderMemberAgentControls } = await agentsModule();
+    const documentRef = new TestDocument();
+    const card = documentRef.createElement("article");
+    const hostileMounts = {
+      ...mounted,
+      mountedAgents: [
+        ...mounted.mountedAgents,
+        {
+          agentRef: "agent:hermes-jarvis",
+          displayName: "Jarvis /srv/private/runtime",
+          providerProfileRef: "provider-profile:private-jarvis",
+          isDefault: true,
+          status: "working",
+          statusLabel: "工作中"
+        }
+      ]
+    };
+    const api = {
+      agents: vi.fn(async () => ({
+        ...catalog,
+        agents: catalog.agents.map((agent) => ({
+          ...agent,
+          providerProfileRef: "provider-profile:private",
+          home: "/srv/private/runtime",
+          profile: "nsy",
+          serviceToken: "secret"
+        }))
+      })),
+      memberAgentMounts: vi.fn(async () => hostileMounts),
+      mountAgent: vi.fn(),
+      unmountAgent: vi.fn(),
+      setDefaultAgent: vi.fn()
+    };
+    const controller = renderMemberAgentControls({
+      documentRef,
+      root: card,
+      personRef: "person:alice",
+      api,
+      confirmImpl: () => true
+    });
+    await controller.ready;
+
+    const cards = card.querySelectorAll("[data-agent-card]");
+    expect(cards.map((node) => node.getAttribute("data-agent-card"))).toEqual([
+      "agent:hermes-jarvis",
+      "agent:hermes-zzh",
+      "agent:hermes-nsy"
+    ]);
+    expect(cards[0]?.textContent).toContain("Jarvis");
+    expect(cards[0]?.textContent).toContain("系统 Agent");
+    expect(cards[0]?.textContent).toContain("可用");
+    expect(cards[0]?.textContent).toContain("由家庭管理系统统一提供");
+    expect(cards[0]?.querySelector("[data-mount-agent]")).toBeNull();
+    expect(cards[0]?.querySelector("[data-remove-agent]")).toBeNull();
+    expect(cards[1]?.textContent).toContain("于途");
+    expect(cards[1]?.textContent).toContain("可分配");
+    expect(cards[1]?.textContent).toContain("已分配");
+    expect(cards[2]?.textContent).toContain("乔晶晶");
+    expect(cards[2]?.textContent).toContain("不可用");
+    expect(cards[2]?.textContent).toContain("未分配");
+    expect(card.querySelector('[data-mount-agent="agent:hermes-nsy"]')?.disabled)
+      .toBe(true);
+    expect(card.querySelector("[data-default-agent]")?.options.map((option) => option.value))
+      .toEqual(["", "agent:hermes-zzh"]);
+    expect(card.textContent).not.toContain("provider-profile:private");
+    expect(card.textContent).not.toContain("/srv/private");
+    expect(card.textContent).not.toContain("serviceToken");
+  });
+
+  it("allows an assigned unavailable personal Agent to be removed safely", async () => {
+    const { renderMemberAgentControls } = await agentsModule();
+    const documentRef = new TestDocument();
+    const card = documentRef.createElement("article");
+    let serverMounts = {
+      ...mounted,
+      mountedAgents: [{
+        ...mounted.mountedAgents[0],
+        assignmentRef: "assignment:alice-nsy",
+        agentRef: "agent:hermes-nsy",
+        displayName: "hostile raw profile nsy",
+        status: "problem",
+        statusLabel: "有问题"
+      }]
+    };
+    const api = {
+      agents: vi.fn(async () => catalog),
+      memberAgentMounts: vi.fn(async () => serverMounts),
+      mountAgent: vi.fn(),
+      unmountAgent: vi.fn(async (_personRef: string, agentRef: string) => {
+        serverMounts = { ...serverMounts, mountedAgents: [] };
+        expect(agentRef).toBe("agent:hermes-nsy");
+      }),
+      setDefaultAgent: vi.fn()
+    };
+    const controller = renderMemberAgentControls({
+      documentRef,
+      root: card,
+      personRef: "person:alice",
+      api,
+      confirmImpl: () => true
+    });
+    await controller.ready;
+
+    const remove = card.querySelector('[data-remove-agent="agent:hermes-nsy"]');
+    expect(remove?.disabled).toBe(false);
+    expect(card.textContent).not.toContain("hostile raw profile nsy");
+    remove?.click();
+    await flush();
+    await flush();
+    expect(api.unmountAgent).toHaveBeenCalledWith(
+      "person:alice",
+      "agent:hermes-nsy"
+    );
+    expect(card.querySelector('[data-remove-agent="agent:hermes-nsy"]')).toBeNull();
+    expect(card.querySelector('[data-mount-agent="agent:hermes-nsy"]')?.disabled)
+      .toBe(true);
+  });
+
+  it.each([
+    ["missing", catalog.agents.slice(0, 2)],
+    ["duplicate", [...catalog.agents, catalog.agents[2]]],
+    ["renamed", catalog.agents.map((agent) => agent.agentRef === "agent:hermes-nsy" ? { ...agent, displayName: "新名字" } : agent)],
+    ["unexpected", [...catalog.agents, { ...catalog.agents[2], agentRef: "agent:unknown" }]]
+  ])("fails closed for %s first-release catalog drift", async (_kind, agents) => {
+    const { renderMemberAgentControls } = await agentsModule();
+    const documentRef = new TestDocument();
+    const card = documentRef.createElement("article");
+    const controller = renderMemberAgentControls({
+      documentRef,
+      root: card,
+      personRef: "person:alice",
+      api: {
+        agents: vi.fn(async () => ({ protocolVersion: 1, agents })),
+        memberAgentMounts: vi.fn(async () => mounted),
+        mountAgent: vi.fn(),
+        unmountAgent: vi.fn(),
+        setDefaultAgent: vi.fn()
+      }
+    });
+    await controller.ready;
+
+    expect(card.textContent).toContain("无法确认当前 Agent 配置");
+    expect(card.querySelectorAll("[data-agent-card]")).toHaveLength(0);
+    expect(card.querySelector("[data-mount-agent]")).toBeNull();
+    expect(card.querySelector("[data-remove-agent]")).toBeNull();
+    expect(card.querySelector("[data-save-default-agent]")).toBeNull();
+    expect(card.querySelector('[role="alert"]')).not.toBeNull();
+  });
+
   it("filters only this member's active mounts and renders safe, accessible status controls", async () => {
     const { availableAgentOptions, renderMemberAgentControls } = await agentsModule();
     const addOptions = availableAgentOptions(catalog.agents, mounted.mountedAgents);
     expect(addOptions.map((option: { agentRef: string }) => option.agentRef))
-      .toEqual(["agent:not-mounted"]);
+      .toEqual(["agent:hermes-nsy"]);
     expect(
       availableAgentOptions(catalog.agents, [])
         .map((option: { agentRef: string }) => option.agentRef)
-    ).toEqual(["agent:mounted", "agent:not-mounted"]);
+    ).toEqual(["agent:hermes-zzh", "agent:hermes-nsy"]);
 
     const documentRef = new TestDocument();
     const card = documentRef.createElement("article");
@@ -217,12 +385,12 @@ describe("Admin member Agent controls", () => {
     });
     await controller.ready;
 
-    expect(card.querySelector("[data-remove-agent]")?.textContent).toBe("×");
+    expect(card.querySelector("[data-remove-agent]")?.textContent).toBe("移除");
     expect(card.querySelector("[data-remove-agent]")?.tagName).toBe("button");
     expect(card.querySelector("[data-remove-agent]")?.getAttribute("aria-label"))
-      .toBe("移除 家庭助理");
-    expect(card.textContent).toContain("工作中");
-    expect(card.textContent).toContain("有问题");
+      .toBe("从成员移除 于途");
+    expect(card.textContent).toContain("可用");
+    expect(card.textContent).toContain("不可用");
     expect(card.textContent).not.toContain("provider-profile:private");
     expect(card.textContent).not.toContain("Session");
     const addTrigger = card.querySelector("[data-add-agent-trigger]");
@@ -239,9 +407,11 @@ describe("Admin member Agent controls", () => {
     expect(
       card.querySelectorAll("[data-mount-agent]")
         .map((option) => option.getAttribute("data-mount-agent"))
-    ).toEqual(["agent:not-mounted"]);
+    ).toEqual(["agent:hermes-nsy"]);
     expect(documentRef.activeElement?.getAttribute("data-mount-agent"))
-      .toBe("agent:not-mounted");
+      .toBeNull();
+    expect(documentRef.activeElement?.getAttribute("data-add-agent-trigger"))
+      .toBe("");
     expect(card.querySelector("[data-default-agent]")?.value).toBe("");
   });
 
@@ -273,7 +443,9 @@ describe("Admin member Agent controls", () => {
     expect(menu?.getAttribute("role")).toBeNull();
     expect(option?.getAttribute("role")).toBeNull();
     expect(option?.tagName).toBe("button");
-    expect(documentRef.activeElement).toBe(option);
+    expect(option?.disabled).toBe(true);
+    expect(documentRef.activeElement)
+      .toBe(card.querySelector("[data-add-agent-trigger]"));
 
     const escape = option?.keydown("Escape");
     expect(escape?.defaultPrevented).toBe(true);
@@ -320,7 +492,7 @@ describe("Admin member Agent controls", () => {
     card.querySelector("[data-agent-refresh-retry]")?.click();
     await flush();
     await flush();
-    expect(card.textContent).toContain("家庭助理");
+    expect(card.textContent).toContain("于途");
     expect(card.querySelector("[data-add-agent-trigger]")).not.toBeNull();
     expect(api.mountAgent).not.toHaveBeenCalled();
     expect(api.unmountAgent).not.toHaveBeenCalled();
@@ -371,7 +543,10 @@ describe("Admin member Agent controls", () => {
     await flush();
     expect(api.memberAgentMounts).toHaveBeenCalledTimes(2);
     expect(card.querySelector("[data-remove-agent]")).toBeNull();
-    expect(card.textContent).toContain("尚未挂载");
+    expect(card.textContent).toContain("未分配");
+    expect(card.textContent).toContain("Agent 配置已更新");
+    expect(card.querySelector('[role="status"]')?.getAttribute("aria-live"))
+      .toBe("polite");
     expect(card.querySelector("[data-default-agent]")?.value).toBe("");
   });
 
@@ -404,6 +579,8 @@ describe("Admin member Agent controls", () => {
     card.querySelector("[data-remove-agent]")?.click();
     expect(documentRef.activeElement?.getAttribute("data-focus-key"))
       .toBe("pending");
+    expect(card.querySelector('[role="status"]')?.getAttribute("aria-live"))
+      .toBe("polite");
     await flush();
     await flush();
     expect(api.unmountAgent).toHaveBeenCalledTimes(1);
@@ -418,7 +595,7 @@ describe("Admin member Agent controls", () => {
     await flush();
     expect(api.unmountAgent).toHaveBeenCalledTimes(1);
     expect(api.memberAgentMounts).toHaveBeenCalledTimes(3);
-    expect(card.textContent).toContain("尚未挂载");
+    expect(card.textContent).toContain("未分配");
     expect(documentRef.activeElement?.getAttribute("data-focus-key"))
       .toBe("add-menu");
   });
@@ -454,16 +631,16 @@ describe("Admin member Agent controls", () => {
     await controller.ready;
 
     const selectDefault = card.querySelector("[data-default-agent]");
-    if (selectDefault) selectDefault.value = "agent:mounted";
+    if (selectDefault) selectDefault.value = "agent:hermes-zzh";
     card.querySelector("[data-save-default-agent]")?.click();
     await flush();
     await flush();
     expect(api.setDefaultAgent).toHaveBeenLastCalledWith(
       "person:alice",
-      "agent:mounted"
+      "agent:hermes-zzh"
     );
     expect(card.querySelector("[data-default-agent]")?.value)
-      .toBe("agent:mounted");
+      .toBe("agent:hermes-zzh");
     expect(card.textContent).toContain("默认");
 
     const clearDefault = card.querySelector("[data-default-agent]");
@@ -505,11 +682,13 @@ describe("Admin member Agent controls", () => {
     });
     await controller.ready;
     card.querySelector("[data-add-agent-trigger]")?.click();
-    card.querySelector('[data-mount-agent="agent:mounted"]')?.click();
+    card.querySelector('[data-mount-agent="agent:hermes-zzh"]')?.click();
     await flush();
 
     expect(card.textContent).toContain("暂时无法完成");
     expect(card.textContent).not.toContain("private provider path");
+    expect(card.querySelector('[role="alert"]')?.getAttribute("aria-live"))
+      .toBe("polite");
     expect(documentRef.activeElement?.getAttribute("data-focus-key"))
       .toBe("mutation-retry");
     card.querySelector("[data-agent-retry]")?.click();
@@ -528,7 +707,7 @@ describe("Admin Agent API client", () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = String(input);
       requests.push({ url, init });
-      if (url === "/api/v1/admin/agents") return Response.json(catalog);
+      if (url === "/api/v1/admin/agents") return Response.json(rawCatalog);
       return Response.json(mounted, {
         status: init.method === "POST" ? 201 : 200
       });
@@ -544,19 +723,19 @@ describe("Admin Agent API client", () => {
 
     await api.agents();
     await api.memberAgentMounts("person:alice");
-    await api.mountAgent("person:alice", "agent:not-mounted");
-    await api.unmountAgent("person:alice", "agent:mounted");
+    await api.mountAgent("person:alice", "agent:hermes-nsy");
+    await api.unmountAgent("person:alice", "agent:hermes-zzh");
     await api.setDefaultAgent("person:alice", null);
 
     expect(requests.map(({ url, init }) => [url, init.method])).toEqual([
       ["/api/v1/admin/agents", "GET"],
       ["/api/v1/admin/members/person%3Aalice/agent-mounts", "GET"],
       ["/api/v1/admin/members/person%3Aalice/agent-mounts", "POST"],
-      ["/api/v1/admin/members/person%3Aalice/agent-mounts/agent%3Amounted", "DELETE"],
+      ["/api/v1/admin/members/person%3Aalice/agent-mounts/agent%3Ahermes-zzh", "DELETE"],
       ["/api/v1/admin/members/person%3Aalice/default-agent", "PUT"]
     ]);
     expect(JSON.parse(String(requests[2]!.init.body))).toEqual({
-      agentRef: "agent:not-mounted"
+      agentRef: "agent:hermes-nsy"
     });
     expect(requests[3]!.init.body).toBeUndefined();
     expect(JSON.parse(String(requests[4]!.init.body))).toEqual({
@@ -582,8 +761,10 @@ describe("Admin Agent API client", () => {
         token
       },
       fetchImpl: async () => Response.json({
-        ...catalog,
-        agents: [{ ...catalog.agents[0], status: "disabled" }]
+        ...rawCatalog,
+        agents: rawCatalog.agents.map((agent, index) =>
+          index === 0 ? { ...agent, status: "disabled" } : agent
+        )
       })
     });
     await expect(api.agents()).rejects.toMatchObject({
