@@ -19,6 +19,7 @@ import http, {
 } from "node:http";
 import net from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   agentInvocationRequestV1Schema,
   agentInvocationResultV1Schema,
@@ -91,6 +92,25 @@ export interface AgentBrokerOptions {
   readonly maxStderrBytes?: number;
   readonly maxConcurrency?: number;
   readonly terminationGraceMs?: number;
+  readonly lifecyclePython?: string;
+  readonly renameNoReplace?: RenameNoReplace;
+  readonly lifecycleTestHooks?: AgentBrokerLifecycleTestHooks;
+}
+
+export type RenameNoReplaceResult =
+  | "renamed"
+  | "destination_exists"
+  | "unsupported"
+  | "failed";
+export type RenameNoReplace = (
+  source: string,
+  destination: string
+) => Promise<RenameNoReplaceResult>;
+
+export interface AgentBrokerLifecycleTestHooks {
+  beforeCloseQuarantine?: () => Promise<void>;
+  beforeStaleQuarantine?: () => Promise<void>;
+  beforeRestore?: () => Promise<void>;
 }
 
 export interface AgentBroker {
@@ -132,6 +152,15 @@ interface ConnectorOptions {
   readonly maxConcurrency: number;
   readonly terminationGraceMs: number;
 }
+
+interface SocketLifecycle {
+  readonly renameNoReplace: RenameNoReplace;
+  readonly hooks: AgentBrokerLifecycleTestHooks;
+}
+
+const RENAME_NOREPLACE_HELPER = fileURLToPath(
+  new URL("../runtime/rename_noreplace.py", import.meta.url)
+);
 
 function scopedExternalSessionRef(target: AgentTarget, rawSessionId: string): string {
   return `external-session:hermes-${target.sessionScope}-${rawSessionId}`;
@@ -535,9 +564,79 @@ async function discardClaim(claim: ClaimedMarker): Promise<void> {
   await rmdir(claim.parent);
 }
 
+async function linuxRenameNoReplace(
+  runtimeDirectory: string,
+  python: string,
+  source: string,
+  destination: string
+): Promise<RenameNoReplaceResult> {
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), 2_000);
+  try {
+    const result = await runControlledProcess({
+      executable: python,
+      prefixArgs: [RENAME_NOREPLACE_HELPER],
+      args: [],
+      cwd: runtimeDirectory,
+      allowedEnvironment: [],
+      stdin: `${JSON.stringify({
+        protocolVersion: 1,
+        runtimeDirectory,
+        source,
+        destination
+      })}\n`,
+      abortSignal: abortController.signal,
+      timeoutMs: 2_000,
+      terminationGraceMs: 100,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxStdinBytes: 16 * 1024,
+      maxConcurrency: 16
+    });
+    if (result.exitCode !== 0 || result.timedOut || result.aborted) return "failed";
+    const parsed = JSON.parse(result.stdout) as unknown;
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Object.keys(parsed).join(",") !== "status"
+    ) {
+      return "failed";
+    }
+    const status = (parsed as { status?: unknown }).status;
+    return status === "renamed" ||
+      status === "destination_exists" ||
+      status === "unsupported" ||
+      status === "failed"
+      ? status
+      : "failed";
+  } catch {
+    return "failed";
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function restoreQuarantinedPath(
+  source: string,
+  destination: string,
+  lifecycle: SocketLifecycle
+): Promise<void> {
+  await lifecycle.hooks.beforeRestore?.();
+  const result = await lifecycle.renameNoReplace(source, destination);
+  if (result === "renamed") return;
+  if (result === "destination_exists") {
+    throw new Error("NOREPLACE destination exists; quarantined path preserved");
+  }
+  if (result === "unsupported") {
+    throw new Error("NOREPLACE primitive is unsupported; quarantined path preserved");
+  }
+  throw new Error("NOREPLACE restore failed; quarantined path preserved");
+}
+
 async function prepareSocketPath(
   runtimeDirectory: string,
-  socketPath: string
+  socketPath: string,
+  lifecycle: SocketLifecycle
 ): Promise<void> {
   if (!resolve(socketPath).startsWith(`${resolve(runtimeDirectory)}/`)) {
     throw new Error("socket path must be inside RuntimeDirectory");
@@ -601,6 +700,7 @@ async function prepareSocketPath(
   const quarantinedSocket = join(quarantine, "socket");
   let moved = false;
   try {
+    await lifecycle.hooks.beforeStaleQuarantine?.();
     await rename(socketPath, quarantinedSocket);
     moved = true;
     const quarantined = await lstat(quarantinedSocket, { bigint: true });
@@ -615,10 +715,19 @@ async function prepareSocketPath(
   } catch (error) {
     if (moved) {
       try {
-        await rename(quarantinedSocket, socketPath);
+        await restoreQuarantinedPath(
+          quarantinedSocket,
+          socketPath,
+          lifecycle
+        );
         moved = false;
-      } catch {
-        // Preserve the quarantined inode and fail closed.
+      } catch (restoreError) {
+        try {
+          await restoreClaim(claim, publicMarker);
+        } catch {
+          // Keep the claimed marker private rather than overwriting a path.
+        }
+        throw restoreError;
       }
     }
     if (!moved) {
@@ -681,39 +790,68 @@ async function publishSocket(
 async function removeOwnedPublication(
   runtimeDirectory: string,
   socketPath: string,
-  ownedSocket: OwnedSocket
+  ownedSocket: OwnedSocket,
+  lifecycle: SocketLifecycle
 ): Promise<void> {
+  const quarantine = await mkdtemp(
+    join(runtimeDirectory, `.${basename(socketPath)}.close-`)
+  );
+  const quarantinedPath = join(quarantine, "replacement");
+  let pathError: unknown;
+  let moved = false;
   try {
-    const published = await lstat(socketPath, { bigint: true });
+    await lifecycle.hooks.beforeCloseQuarantine?.();
+    await rename(socketPath, quarantinedPath);
+    moved = true;
+    const published = await lstat(quarantinedPath, { bigint: true });
     if (
       published.isSocket() &&
       published.uid === ownedSocket.uid &&
       published.dev === ownedSocket.dev &&
       published.ino === ownedSocket.ino
     ) {
-      await unlink(socketPath);
+      await unlink(quarantinedPath);
+      moved = false;
+    } else {
+      await restoreQuarantinedPath(
+        quarantinedPath,
+        socketPath,
+        lifecycle
+      );
+      moved = false;
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") pathError = error;
+  }
+  if (!moved) {
+    try {
+      await rmdir(quarantine);
+    } catch (error) {
+      pathError ??= error;
+    }
   }
 
   const publicMarker = markerDirectory(runtimeDirectory, socketPath);
   const claim = await claimMarker(runtimeDirectory, publicMarker);
-  if (!claim) throw new Error("owned socket marker disappeared during close");
-  try {
-    const record = await readOwnershipRecord(claim.directory);
-    if (!recordMatchesSocket(record, ownedSocket)) {
-      throw new Error("owned socket marker changed during close");
-    }
-    await discardClaim(claim);
-  } catch (error) {
+  if (!claim) {
+    pathError ??= new Error("owned socket marker disappeared during close");
+  } else {
     try {
-      await restoreClaim(claim, publicMarker);
-    } catch {
-      // Preserve the claimed marker without overwriting another path.
+      const record = await readOwnershipRecord(claim.directory);
+      if (!recordMatchesSocket(record, ownedSocket)) {
+        throw new Error("owned socket marker changed during close");
+      }
+      await discardClaim(claim);
+    } catch (error) {
+      try {
+        await restoreClaim(claim, publicMarker);
+      } catch {
+        // Preserve the claimed marker without overwriting another path.
+      }
+      pathError ??= error;
     }
-    throw error;
   }
+  if (pathError) throw pathError;
 }
 
 async function defaultServiceProbe(
@@ -753,6 +891,18 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
   ) {
     throw new Error("Broker maxConcurrency must be between 1 and 16");
   }
+  const lifecycle: SocketLifecycle = {
+    renameNoReplace:
+      options.renameNoReplace ??
+      ((source, destination) =>
+        linuxRenameNoReplace(
+          options.runtimeDirectory,
+          options.lifecyclePython ?? "/usr/bin/python3",
+          source,
+          destination
+        )),
+    hooks: options.lifecycleTestHooks ?? {}
+  };
   const connector = new HermesStdinConnector({
     executable: options.executable,
     prefixArgs: options.prefixArgs ?? [],
@@ -965,7 +1115,11 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
     server,
     async start(): Promise<void> {
       if (started) return;
-      await prepareSocketPath(options.runtimeDirectory, options.socketPath);
+      await prepareSocketPath(
+        options.runtimeDirectory,
+        options.socketPath,
+        lifecycle
+      );
       const privateDirectory = await mkdtemp(
         join(options.runtimeDirectory, `.${basename(options.socketPath)}.listen-`)
       );
@@ -1004,7 +1158,8 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
             await removeOwnedPublication(
               options.runtimeDirectory,
               options.socketPath,
-              ownedSocket
+              ownedSocket,
+              lifecycle
             );
           } catch {
             // Preserve any uncertain publication fail-closed.
@@ -1037,28 +1192,34 @@ export function createAgentBroker(options: AgentBrokerOptions): AgentBroker {
         invocation.abortController.abort();
       }
       closing = (async () => {
-        const serverClosed = new Promise<void>((resolveClose, rejectClose) => {
+        const completions = [...activeInvocations].map(
+          (invocation) => invocation.completion
+        );
+        await Promise.allSettled(completions);
+        let publicationError: unknown;
+        if (ownedSocket) {
+          try {
+            await removeOwnedPublication(
+              options.runtimeDirectory,
+              options.socketPath,
+              ownedSocket,
+              lifecycle
+            );
+          } catch (error) {
+            publicationError = error;
+          }
+        }
+        await new Promise<void>((resolveClose, rejectClose) => {
           server.close((error) => {
             if (error) rejectClose(error);
             else resolveClose();
           });
           server.closeAllConnections();
         });
-        const completions = [...activeInvocations].map(
-          (invocation) => invocation.completion
-        );
-        await Promise.allSettled(completions);
-        await serverClosed;
         started = false;
-        if (ownedSocket) {
-          await removeOwnedPublication(
-            options.runtimeDirectory,
-            options.socketPath,
-            ownedSocket
-          );
-        }
         ownedSocket = undefined;
         safeLog(options.logger, { event: "broker_stopped" });
+        if (publicationError) throw publicationError;
       })();
       try {
         await closing;

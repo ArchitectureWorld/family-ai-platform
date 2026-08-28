@@ -5,6 +5,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   readlink,
   rm,
@@ -1135,31 +1136,35 @@ describe("Unix-socket Agent Broker", () => {
     "does not alter a foreign %s replacement installed before Broker close",
     async (replacementType) => {
     const { root, runtimeDirectory, socketPath } = await fixture();
+    let foreignSocket: NetServer | undefined;
+    const symlinkTarget = join(root, "foreign-target");
     const broker = await startBroker({
       runtimeDirectory,
       socketPath,
       executable: process.execPath,
       processCwd: () => root,
-      runtimeProbe: async () => true
+      runtimeProbe: async () => true,
+      lifecycleTestHooks: {
+        beforeCloseQuarantine: async () => {
+          await unlink(socketPath);
+          if (replacementType === "file") {
+            await writeFile(socketPath, "foreign file", "utf8");
+          } else if (replacementType === "symlink") {
+            await writeFile(symlinkTarget, "foreign target", "utf8");
+            await symlink(symlinkTarget, socketPath);
+          } else if (replacementType === "socket") {
+            foreignSocket = net.createServer();
+            await new Promise<void>((resolveListen, rejectListen) => {
+              foreignSocket?.once("error", rejectListen);
+              foreignSocket?.listen(socketPath, resolveListen);
+            });
+          } else {
+            await mkdir(socketPath);
+            await writeFile(join(socketPath, "child"), "foreign directory", "utf8");
+          }
+        }
+      }
     });
-    await unlink(socketPath);
-    let foreignSocket: NetServer | undefined;
-    const symlinkTarget = join(root, "foreign-target");
-    if (replacementType === "file") {
-      await writeFile(socketPath, "foreign file", "utf8");
-    } else if (replacementType === "symlink") {
-      await writeFile(symlinkTarget, "foreign target", "utf8");
-      await symlink(symlinkTarget, socketPath);
-    } else if (replacementType === "socket") {
-      foreignSocket = net.createServer();
-      await new Promise<void>((resolveListen, rejectListen) => {
-        foreignSocket?.once("error", rejectListen);
-        foreignSocket?.listen(socketPath, resolveListen);
-      });
-    } else {
-      await mkdir(socketPath);
-      await writeFile(join(socketPath, "child"), "foreign directory", "utf8");
-    }
 
     try {
       await broker.close();
@@ -1188,6 +1193,148 @@ describe("Unix-socket Agent Broker", () => {
         );
       }
     }
+  });
+
+  it.each(["file", "symlink", "socket", "directory"] as const)(
+    "atomically restores a %s swapped into a marked stale path after validation",
+    async (replacementType) => {
+      const { root, runtimeDirectory, socketPath } = await fixture();
+      await mkdir(runtimeDirectory, { mode: 0o700 });
+      const staleOwner = spawn(
+        process.execPath,
+        [
+          "-e",
+          `require("node:net").createServer().listen(${JSON.stringify(socketPath)}, () => process.stdout.write("ready\\n"));`
+        ],
+        { stdio: ["ignore", "pipe", "ignore"] }
+      );
+      childProcesses.push(staleOwner);
+      await new Promise<void>((resolveListen, rejectListen) => {
+        staleOwner.stdout?.once("data", () => resolveListen());
+        staleOwner.once("error", rejectListen);
+      });
+      await chmod(socketPath, 0o660);
+      staleOwner.kill("SIGKILL");
+      await new Promise<void>((resolveExit) => staleOwner.once("exit", () => resolveExit()));
+      await writeSocketOwnerMarker(runtimeDirectory, socketPath);
+      let foreignSocket: NetServer | undefined;
+      const symlinkTarget = join(root, "stale-foreign-target");
+      const broker = createAgentBroker({
+        runtimeDirectory,
+        socketPath,
+        executable: process.execPath,
+        processCwd: () => root,
+        runtimeProbe: async () => true,
+        lifecycleTestHooks: {
+          beforeStaleQuarantine: async () => {
+            await unlink(socketPath);
+            if (replacementType === "file") {
+              await writeFile(socketPath, "stale foreign file", "utf8");
+            } else if (replacementType === "symlink") {
+              await writeFile(symlinkTarget, "target", "utf8");
+              await symlink(symlinkTarget, socketPath);
+            } else if (replacementType === "socket") {
+              foreignSocket = net.createServer();
+              await new Promise<void>((resolveListen, rejectListen) => {
+                foreignSocket?.once("error", rejectListen);
+                foreignSocket?.listen(socketPath, resolveListen);
+              });
+            } else {
+              await mkdir(socketPath);
+              await writeFile(join(socketPath, "child"), "stale foreign directory", "utf8");
+            }
+          }
+        }
+      });
+      brokers.push(broker);
+
+      try {
+        await expect(broker.start()).rejects.toThrow(/stale|socket path|quarantine/i);
+        const replacement = await lstat(socketPath);
+        if (replacementType === "file") {
+          expect(replacement.isFile()).toBe(true);
+          expect(await readFile(socketPath, "utf8")).toBe("stale foreign file");
+        } else if (replacementType === "symlink") {
+          expect(replacement.isSymbolicLink()).toBe(true);
+          expect(await readlink(socketPath)).toBe(symlinkTarget);
+        } else if (replacementType === "socket") {
+          expect(replacement.isSocket()).toBe(true);
+          expect(foreignSocket?.listening).toBe(true);
+        } else {
+          expect(replacement.isDirectory()).toBe(true);
+          expect(await readFile(join(socketPath, "child"), "utf8")).toBe(
+            "stale foreign directory"
+          );
+        }
+      } finally {
+        if (foreignSocket?.listening) {
+          await new Promise<void>((resolveClose) =>
+            foreignSocket?.close(() => resolveClose())
+          );
+        }
+      }
+    }
+  );
+
+  it("fails closed without deleting a quarantined replacement when NOREPLACE is unsupported", async () => {
+    const { root, runtimeDirectory, socketPath } = await fixture();
+    const broker = await startBroker({
+      runtimeDirectory,
+      socketPath,
+      executable: process.execPath,
+      processCwd: () => root,
+      runtimeProbe: async () => true,
+      renameNoReplace: async () => "unsupported",
+      lifecycleTestHooks: {
+        beforeCloseQuarantine: async () => {
+          await unlink(socketPath);
+          await writeFile(socketPath, "must survive unsupported", "utf8");
+        }
+      }
+    });
+
+    await expect(broker.close()).rejects.toThrow(/NOREPLACE.*unsupported/i);
+    brokers.splice(brokers.indexOf(broker), 1);
+    expect(broker.server.listening).toBe(false);
+    const quarantines = (await readdir(runtimeDirectory)).filter((name) =>
+      name.includes(".close-")
+    );
+    expect(quarantines).toHaveLength(1);
+    expect(
+      await readFile(join(runtimeDirectory, quarantines[0]!, "replacement"), "utf8")
+    ).toBe("must survive unsupported");
+  });
+
+  it("never overwrites a public path that appears concurrently before restore", async () => {
+    const { root, runtimeDirectory, socketPath } = await fixture();
+    const broker = await startBroker({
+      runtimeDirectory,
+      socketPath,
+      executable: process.execPath,
+      processCwd: () => root,
+      runtimeProbe: async () => true,
+      lifecycleTestHooks: {
+        beforeCloseQuarantine: async () => {
+          await unlink(socketPath);
+          await writeFile(socketPath, "quarantined original", "utf8");
+        },
+        beforeRestore: async () => {
+          await writeFile(socketPath, "concurrent public", "utf8");
+        }
+      }
+    });
+
+    await expect(broker.close()).rejects.toThrow(/destination exists/i);
+    brokers.splice(brokers.indexOf(broker), 1);
+    expect(broker.server.listening).toBe(false);
+    expect(await readFile(socketPath, "utf8")).toBe("concurrent public");
+    const quarantine = (await readdir(runtimeDirectory)).find((name) =>
+      name.includes(".close-")
+    );
+    expect(quarantine).toBeDefined();
+    expect(
+      await readFile(join(runtimeDirectory, quarantine!, "replacement"), "utf8")
+    ).toBe("quarantined original");
   });
 
   it("classifies unexpected internal failures as retryable internal errors", async () => {

@@ -28,6 +28,7 @@ export async function startAgentBrokerFromEnvironment(): Promise<void> {
     socketPath: join(runtimeDirectory, "agent-broker.sock"),
     executable: HERMES_PYTHON,
     prefixArgs: [HERMES_MACHINE_BRIDGE],
+    lifecyclePython: HERMES_PYTHON,
     logger: (entry) => {
       process.stderr.write(`${JSON.stringify(entry)}\n`);
     }
