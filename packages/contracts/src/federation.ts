@@ -57,6 +57,10 @@ const protocolVersionSchema = z.literal(1);
 const timestampSchema = z.string().datetime({ offset: true });
 const productIdSchema = z.enum(["family", "canvas", "me"]);
 const boundedTextSchema = z.string().trim().min(1).max(12000);
+const invocationPromptSchema = z.string().max(12000).refine(
+  (value) => value.trim().length > 0,
+  { message: "Invocation prompt must contain non-whitespace content" }
+);
 const capabilitySchema = z.string().trim().min(1).max(100);
 const roleSchema = z.string().regex(/^[a-z][a-z0-9_:-]{0,63}$/);
 const displayNameSchema = z.string()
@@ -135,7 +139,7 @@ export const agentInvocationRequestV1Schema = z
     agentRef: agentRefSchema,
     localSessionRef: localSessionRefSchema,
     externalSessionRef: externalSessionRefSchema.optional(),
-    prompt: boundedTextSchema,
+    prompt: invocationPromptSchema,
     timeoutMs: z.number().int().min(1000).max(300000)
   })
   .strict();

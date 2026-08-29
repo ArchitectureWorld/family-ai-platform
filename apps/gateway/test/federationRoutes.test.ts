@@ -19,7 +19,10 @@ import { AgentManagementRepository } from "../src/agentManagement.js";
 import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
 import { DomainEventStore } from "../src/domainEvents.js";
 import { FederationRepository } from "../src/federationRepository.js";
-import { FederationService } from "../src/federationService.js";
+import {
+  FederationService,
+  invocationRequestSha256
+} from "../src/federationService.js";
 
 const NOW = "2026-08-28T12:00:00.000Z";
 const DEVICE_TOKEN = "federation-routes-bootstrap-device-token-long-enough";
@@ -117,6 +120,7 @@ describe("Family federation routes", () => {
   let ownerPersonRef = "";
   let memberPersonRef = "";
   let brokerCalls = 0;
+  let brokerRequests: AgentInvocationRequestV1[] = [];
   let brokerDelayMs = 0;
   let brokerFailure = false;
 
@@ -174,11 +178,75 @@ describe("Family federation routes", () => {
     return entry;
   };
 
+  it("hashes the literal canonical UTF-8 intent and excludes ephemeral Actor context", () => {
+    const service = { serviceRef: "service:canvas", product: "canvas" as const };
+    const actor = {
+      protocolVersion: 1 as const,
+      contextRef: "actor-context:first",
+      product: "canvas" as const,
+      familyRef: "family:hash",
+      personRef: "person:hash",
+      deviceRef: "device:hash",
+      entrySessionRef: "entry-session:hash",
+      personDisplayName: "哈希成员",
+      familyDisplayName: "哈希家庭",
+      roles: ["owner"],
+      assignmentVersion: 1,
+      contextVersion: 1,
+      expiresAt: "2099-01-01T00:00:00.000Z"
+    };
+    const request = invocation({
+      invocationRef: "invocation:hash",
+      correlationRef: "correlation:hash",
+      actorContextRef: actor.contextRef,
+      agentRef: "agent:hermes-zzh",
+      localSessionRef: "local-session:hash",
+      prompt: "  x  ",
+      timeoutMs: 2_000
+    });
+    expect(invocationRequestSha256(service, actor, request)).toBe(
+      "0401511bed143dbf143c380259f36469de71133867c357e15fff448d554daddc"
+    );
+    expect(invocationRequestSha256(service, {
+      ...actor,
+      contextRef: "actor-context:refreshed"
+    }, {
+      ...request,
+      actorContextRef: "actor-context:refreshed"
+    })).toBe("0401511bed143dbf143c380259f36469de71133867c357e15fff448d554daddc");
+    expect(invocationRequestSha256(service, actor, {
+      ...request,
+      externalSessionRef: "external-session:hash"
+    })).toBe("2086270fb60dfe7bf2f8c161c64d41f0f21c4eed6b458a25673e359e2694e16c");
+    for (const drifted of [
+      { ...request, invocationRef: "invocation:hash-drift" },
+      { ...request, correlationRef: "correlation:hash-drift" },
+      { ...request, agentRef: "agent:hermes-nsy" },
+      { ...request, localSessionRef: "local-session:hash-drift" },
+      { ...request, prompt: "x" },
+      { ...request, timeoutMs: 2_001 }
+    ]) {
+      expect(invocationRequestSha256(service, actor, drifted)).not.toBe(
+        "0401511bed143dbf143c380259f36469de71133867c357e15fff448d554daddc"
+      );
+    }
+    expect(invocationRequestSha256(service, { ...actor, familyRef: "family:drift" }, request))
+      .not.toBe("0401511bed143dbf143c380259f36469de71133867c357e15fff448d554daddc");
+    expect(invocationRequestSha256(service, { ...actor, personRef: "person:drift" }, request))
+      .not.toBe("0401511bed143dbf143c380259f36469de71133867c357e15fff448d554daddc");
+    expect(invocationRequestSha256(
+      { serviceRef: "service:me", product: "me" },
+      { ...actor, product: "me" },
+      { ...request, product: "me" }
+    )).not.toBe("0401511bed143dbf143c380259f36469de71133867c357e15fff448d554daddc");
+  });
+
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), "family-ai-federation-routes-"));
     socketDirectory = await mkdtemp(join(tmpdir(), "family-ai-federation-broker-"));
     socketPath = join(socketDirectory, "broker.sock");
     brokerCalls = 0;
+    brokerRequests = [];
     brokerDelayMs = 0;
     brokerFailure = false;
     broker = http.createServer((request, response) => {
@@ -218,6 +286,7 @@ describe("Family federation routes", () => {
           return;
         }
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as AgentInvocationRequestV1;
+        brokerRequests.push(body);
         const profile = body.agentRef.split("-").at(-1);
         const result = JSON.stringify({
           protocolVersion: 1,
@@ -417,6 +486,34 @@ describe("Family federation routes", () => {
         }
       });
     }
+  });
+
+  it("preserves prompt spaces through Broker and conflicts on trimmed same-ref drift", async () => {
+    const contextRef = await actorRef("canvas", admin);
+    const payload = invocation({
+      invocationRef: "invocation:prompt-spaces",
+      correlationRef: "correlation:prompt-spaces",
+      actorContextRef: contextRef,
+      localSessionRef: "local-session:prompt-spaces",
+      prompt: "  x  "
+    });
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload
+    });
+    expect(first.statusCode).toBe(200);
+    expect(brokerRequests.at(-1)?.prompt).toBe("  x  ");
+    const beforeDrift = brokerCalls;
+    const drift = await app.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload: { ...payload, prompt: "x" }
+    });
+    expect(drift.statusCode).toBe(409);
+    expect(brokerCalls).toBe(beforeDrift);
   });
 
   it("lists only Jarvis for admins and exact active mounts for members", async () => {

@@ -100,6 +100,19 @@ describe("Family federation and Agent invocation contracts v1", () => {
     ).toMatchObject({ status: "succeeded", output: "已规划三道菜。" });
   });
 
+  it("preserves exact invocation prompt code units while rejecting blank or oversized input", () => {
+    for (const prompt of ["  x  ", "\t多 字节🙂\n", "x".repeat(12_000)]) {
+      expect(agentInvocationRequestV1Schema.parse({ ...invocation, prompt }).prompt)
+        .toBe(prompt);
+    }
+    for (const prompt of ["", "   ", "\t\n", "x".repeat(12_001)]) {
+      expect(agentInvocationRequestV1Schema.safeParse({ ...invocation, prompt }).success)
+        .toBe(false);
+    }
+    expect(agentInvocationResultV1Schema.parse({ ...result, output: "  保持原输出语义  " }).output)
+      .toBe("保持原输出语义");
+  });
+
   it("rejects unknown fields on every public object and keeps paths and secrets out", () => {
     expect(agentDescriptorV1Schema.safeParse({ ...agent, unexpected: true }).success).toBe(false);
     expect(

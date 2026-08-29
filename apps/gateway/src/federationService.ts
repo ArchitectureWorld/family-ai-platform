@@ -143,7 +143,7 @@ function repositoryError(error: unknown): GatewayDomainError {
   );
 }
 
-function invocationRequestSha256(
+export function invocationRequestSha256(
   service: AuthenticatedFederationService,
   actor: FederationActorContextV1,
   request: AgentInvocationRequestV1

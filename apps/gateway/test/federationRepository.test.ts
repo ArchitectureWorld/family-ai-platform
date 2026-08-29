@@ -71,7 +71,6 @@ describe("FederationRepository", () => {
       product: "canvas",
       token: SENSITIVE_VALUES[0]
     });
-
     expect(repository.authenticateService(SENSITIVE_VALUES[0])).toEqual({
       serviceRef: "service:canvas",
       product: "canvas"
@@ -499,6 +498,16 @@ describe("FederationRepository", () => {
       product: "canvas",
       token: SENSITIVE_VALUES[0]
     });
+    repository.provisionService({
+      serviceRef: "service:canvas-other",
+      product: "canvas",
+      token: "canvas-other-service-token"
+    });
+    repository.provisionService({
+      serviceRef: "service:me",
+      product: "me",
+      token: "me-other-service-token"
+    });
     const actor = repository.issueActorContext({
       product: "canvas",
       entrySessionRef,
@@ -547,6 +556,21 @@ describe("FederationRepository", () => {
         ...input,
         correlationRef: "correlation:same-ref-drift"
       })).toThrow("FEDERATION_INVOCATION_DUPLICATE");
+      for (const drift of [
+        { serviceRef: "service:canvas-other" },
+        { serviceRef: "service:me", product: "me" as const },
+        { familyRef: "family:same-ref-drift" },
+        { personRef: "person:same-ref-drift" },
+        { agentRef: "agent:hermes-nsy" },
+        { localSessionRef: "local-session:same-ref-drift" },
+        { externalSessionRef: "external-session:same-ref-drift" },
+        { timeoutMs: 2_001 }
+      ]) {
+        expect(() => second.claimInvocation({
+          ...input,
+          ...drift
+        })).toThrow("FEDERATION_INVOCATION_DUPLICATE");
+      }
     } finally {
       secondDb.close();
     }
