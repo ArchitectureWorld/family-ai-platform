@@ -590,7 +590,7 @@ describe("protected federation service bootstrap CLI", () => {
     expect(inspectServices()).toEqual([]);
   });
 
-  it("rejects a closed WAL-mode lookalike without any filesystem mutation", () => {
+  it("rejects a closed WAL-mode lookalike without database content, schema, size, mtime, or sidecar mutation", () => {
     const invalid = new Database(databasePath, { fileMustExist: true });
     expect(invalid.pragma("journal_mode", { simple: true })).toBe("wal");
     invalid.pragma("foreign_keys = OFF");
