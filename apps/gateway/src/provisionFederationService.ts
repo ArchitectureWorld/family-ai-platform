@@ -10,6 +10,7 @@ import {
   realpathSync,
   type Stats
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
@@ -55,6 +56,42 @@ const EXPECTED_MIGRATIONS = Array.from({ length: 14 }, (_, index) => index + 1);
 const EXPECTED_V14_SCHEMA_OBJECT_COUNT = 144;
 const EXPECTED_V14_SCHEMA_SHA256 =
   "ded4e2c1800dac6e799fa2e42bb8876996ac40852161a0041b6ae41a048b6845";
+
+interface SchemaStatement {
+  all: () => unknown[];
+}
+
+interface SchemaInspectionDatabase {
+  prepare: (sql: string) => SchemaStatement;
+}
+
+interface ImmutableDatabase extends SchemaInspectionDatabase {
+  close: () => void;
+}
+
+type ImmutableDatabaseConstructor = new (
+  path: string,
+  options: { readOnly: true }
+) => ImmutableDatabase;
+
+let immutableDatabaseConstructor: ImmutableDatabaseConstructor | undefined;
+
+function loadImmutableDatabaseConstructor(): ImmutableDatabaseConstructor {
+  if (immutableDatabaseConstructor) return immutableDatabaseConstructor;
+  const originalEmitWarning = process.emitWarning;
+  try {
+    // node:sqlite is experimental on Node 22. Suppress only its synchronous load warning;
+    // operational CLI warnings and errors remain untouched after this require returns.
+    process.emitWarning = (() => undefined) as typeof process.emitWarning;
+    const sqlite = createRequire(import.meta.url)("node:sqlite") as {
+      DatabaseSync: ImmutableDatabaseConstructor;
+    };
+    immutableDatabaseConstructor = sqlite.DatabaseSync;
+    return immutableDatabaseConstructor;
+  } finally {
+    process.emitWarning = originalEmitWarning;
+  }
+}
 
 function failure(code: BootstrapErrorCode): never {
   throw new BootstrapError(code);
@@ -184,6 +221,20 @@ function protectedDatabaseState(state: Stats, expectedUid: number): boolean {
     && state.uid === expectedUid
     && state.nlink === 1
     && (state.mode & 0o022) === 0;
+}
+
+function assertNoDatabaseSidecars(path: string): void {
+  for (const sidecar of [`${path}-wal`, `${path}-shm`, `${path}-journal`]) {
+    try {
+      lstatSync(sidecar);
+      failure("FEDERATION_BOOTSTRAP_DATABASE_INVALID");
+    } catch (error) {
+      if (error instanceof BootstrapError) throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        failure("FEDERATION_BOOTSTRAP_DATABASE_INVALID");
+      }
+    }
+  }
 }
 
 function openFileDescriptorsForIdentity(identity: Stats): Set<number> {
@@ -319,7 +370,7 @@ function exactJson(left: unknown, right: unknown): boolean {
 }
 
 interface CanonicalSchemaObject {
-  type: "index" | "table" | "trigger";
+  type: "index" | "table" | "trigger" | "view";
   name: string;
   tableName: string;
   sql: string | null;
@@ -336,29 +387,50 @@ function compareSchemaObjects(
   return 0;
 }
 
-function canonicalV14Schema(database: Database.Database): CanonicalSchemaObject[] {
-  return database.prepare(
+function canonicalV14Schema(
+  database: SchemaInspectionDatabase
+): CanonicalSchemaObject[] {
+  const applicationTypes = new Set<CanonicalSchemaObject["type"]>([
+    "index",
+    "table",
+    "trigger",
+    "view"
+  ]);
+  const objects: CanonicalSchemaObject[] = [];
+  for (const row of database.prepare(
     "SELECT type, name, tbl_name, sql FROM sqlite_master"
-  ).all().filter(row => {
+  ).all()) {
     const object = row as Record<string, unknown>;
-    const type = String(object.type);
-    const name = String(object.name);
-    return (type === "table" || type === "index" || type === "trigger")
-      && (!name.startsWith("sqlite_") || name.startsWith("sqlite_autoindex_"));
-  }).map(row => {
-    const object = row as Record<string, unknown>;
-    return {
-      type: String(object.type) as CanonicalSchemaObject["type"],
-      name: String(object.name),
-      tableName: String(object.tbl_name),
+    if (
+      !exactJson(Object.keys(object).toSorted(), ["name", "sql", "tbl_name", "type"])
+      || typeof object.type !== "string"
+      || typeof object.name !== "string"
+      || typeof object.tbl_name !== "string"
+      || (object.sql !== null && typeof object.sql !== "string")
+    ) {
+      failure("FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID");
+    }
+    const type = object.type;
+    const name = object.name;
+    if (name.startsWith("sqlite_") && !name.startsWith("sqlite_autoindex_")) {
+      continue;
+    }
+    if (!applicationTypes.has(type as CanonicalSchemaObject["type"])) {
+      failure("FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID");
+    }
+    objects.push({
+      type: object.type as CanonicalSchemaObject["type"],
+      name: object.name,
+      tableName: object.tbl_name,
       sql: object.sql === null
         ? null
         : String(object.sql).replace(/\s+/g, " ").trim()
-    };
-  }).toSorted(compareSchemaObjects);
+    });
+  }
+  return objects.toSorted(compareSchemaObjects);
 }
 
-function exactV14SchemaFingerprint(database: Database.Database): boolean {
+function exactV14SchemaFingerprint(database: SchemaInspectionDatabase): boolean {
   const objects = canonicalV14Schema(database);
   if (objects.length !== EXPECTED_V14_SCHEMA_OBJECT_COUNT) return false;
   const fingerprint = createHash("sha256")
@@ -367,15 +439,18 @@ function exactV14SchemaFingerprint(database: Database.Database): boolean {
   return fingerprint === EXPECTED_V14_SCHEMA_SHA256;
 }
 
-function validateV14(database: Database.Database): void {
+function validateV14(database: SchemaInspectionDatabase): void {
   try {
     const migrations = database.prepare(
       "SELECT version FROM schema_migrations ORDER BY version"
     ).all().map(row => Number((row as { version: unknown }).version));
-    const quickCheck = database.pragma("quick_check", { simple: true });
-    const foreignKeyViolations = database.pragma("foreign_key_check") as unknown[];
+    const quickCheck = database.prepare("PRAGMA quick_check").all();
+    const foreignKeyViolations = database.prepare("PRAGMA foreign_key_check").all();
+    const quickCheckValue = quickCheck.length === 1
+      ? Object.values(quickCheck[0] as Record<string, unknown>)[0]
+      : undefined;
     if (!exactJson(migrations, EXPECTED_MIGRATIONS)
-      || quickCheck !== "ok"
+      || quickCheckValue !== "ok"
       || foreignKeyViolations.length !== 0) {
       failure("FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID");
     }
@@ -424,12 +499,23 @@ function openExistingV14Database(
   hooks: FederationProvisionTestHooks
 ): ProtectedGatewayDatabase {
   const protectedPath = captureProtectedDatabasePath(path, hooks);
-  const readonlyBaseline = openFileDescriptorsForIdentity(
-    protectedPath.databaseIdentity
-  );
-  let inspection: Database.Database;
+  let readonlyBaseline: Set<number>;
   try {
-    inspection = new Database(path, { readonly: true, fileMustExist: true });
+    assertNoDatabaseSidecars(path);
+    readonlyBaseline = openFileDescriptorsForIdentity(
+      protectedPath.databaseIdentity
+    );
+  } catch (error) {
+    closeSync(protectedPath.parentDescriptor);
+    throw error;
+  }
+  let inspection: ImmutableDatabase;
+  try {
+    const ImmutableDatabaseSync = loadImmutableDatabaseConstructor();
+    inspection = new ImmutableDatabaseSync(
+      `${pathToFileURL(path).href}?immutable=1`,
+      { readOnly: true }
+    );
   } catch {
     closeSync(protectedPath.parentDescriptor);
     failure("FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID");
@@ -440,13 +526,16 @@ function openExistingV14Database(
       protectedPath.databaseIdentity
     );
     assertProtectedDatabasePath(protectedPath);
+    assertNoDatabaseSidecars(path);
     assertSqliteConnectionFd(inspectionDescriptor, protectedPath.databaseIdentity);
     hooks.checkpoint?.("afterReadonlyOpen");
     assertProtectedDatabasePath(protectedPath);
+    assertNoDatabaseSidecars(path);
     assertSqliteConnectionFd(inspectionDescriptor, protectedPath.databaseIdentity);
     validateV14(inspection);
     hooks.checkpoint?.("afterReadonlyValidation");
     assertProtectedDatabasePath(protectedPath);
+    assertNoDatabaseSidecars(path);
     assertSqliteConnectionFd(inspectionDescriptor, protectedPath.databaseIdentity);
   } catch (error) {
     closeSync(protectedPath.parentDescriptor);
@@ -457,6 +546,7 @@ function openExistingV14Database(
   let writableBaseline: Set<number>;
   try {
     assertProtectedDatabasePath(protectedPath);
+    assertNoDatabaseSidecars(path);
     writableBaseline = openFileDescriptorsForIdentity(
       protectedPath.databaseIdentity
     );

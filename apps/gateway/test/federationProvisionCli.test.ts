@@ -6,14 +6,17 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import Database from "better-sqlite3";
@@ -114,6 +117,26 @@ function inspectServicesAt(path = databasePath): Array<Record<string, unknown>> 
   } finally {
     database.close();
   }
+}
+
+function databaseFilesystemSnapshot(path: string): {
+  sha256: string;
+  size: number;
+  mtimeMs: number;
+  sidecars: string[];
+} {
+  const state = statSync(path);
+  const fileName = basename(path);
+  return {
+    sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    size: state.size,
+    mtimeMs: state.mtimeMs,
+    sidecars: readdirSync(dirname(path)).filter(name =>
+      name === `${fileName}-wal`
+      || name === `${fileName}-shm`
+      || name === `${fileName}-journal`
+    ).sort()
+  };
 }
 
 const inspectServices = () => inspectServicesAt(databasePath);
@@ -564,6 +587,56 @@ describe("protected federation service bootstrap CLI", () => {
       credentialPath,
       databasePath
     ]);
+    expect(inspectServices()).toEqual([]);
+  });
+
+  it("rejects a closed WAL-mode lookalike without any filesystem mutation", () => {
+    const invalid = new Database(databasePath, { fileMustExist: true });
+    expect(invalid.pragma("journal_mode", { simple: true })).toBe("wal");
+    invalid.pragma("foreign_keys = OFF");
+    invalid.exec(`DROP TABLE federation_services;
+      CREATE TABLE federation_services (
+        service_ref TEXT PRIMARY KEY,
+        product TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        revoked_at TEXT
+      );`);
+    invalid.close();
+    const before = databaseFilesystemSnapshot(databasePath);
+    expect(before.sidecars).toEqual([]);
+
+    const result = runCli();
+
+    expectFixedFailure(result, "FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID", [
+      token,
+      credentialPath,
+      databasePath
+    ]);
+    expect(databaseFilesystemSnapshot(databasePath)).toEqual(before);
+  });
+
+  it("rejects pre-existing exact SQLite sidecars without reading or changing them", () => {
+    const walPath = `${databasePath}-wal`;
+    const shmPath = `${databasePath}-shm`;
+    const walBytes = Buffer.from("pre-existing-wal-sentinel", "utf8");
+    const shmBytes = Buffer.alloc(32 * 1024, 0x5a);
+    writeFileSync(walPath, walBytes, { mode: 0o600 });
+    writeFileSync(shmPath, shmBytes, { mode: 0o600 });
+    const before = databaseFilesystemSnapshot(databasePath);
+
+    const result = runCli();
+
+    expectFixedFailure(result, "FEDERATION_BOOTSTRAP_DATABASE_INVALID", [
+      token,
+      credentialPath,
+      databasePath,
+      "pre-existing-wal-sentinel"
+    ]);
+    expect(databaseFilesystemSnapshot(databasePath)).toEqual(before);
+    expect(readFileSync(walPath)).toEqual(walBytes);
+    expect(readFileSync(shmPath)).toEqual(shmBytes);
     expect(inspectServices()).toEqual([]);
   });
 

@@ -74,6 +74,90 @@ test("built production CLI provisions one disposable V14 service without secret 
   }
 });
 
+test("built production CLI rejects extra and altered persistent service views", async () => {
+  const { openGatewayDatabase } = await import(
+    "../apps/gateway/dist/database.js"
+  );
+  for (const [label, viewSql] of [
+    [
+      "extra",
+      "CREATE VIEW permissive_service_view AS SELECT service_ref, token_hash FROM federation_services"
+    ],
+    [
+      "altered",
+      `CREATE VIEW permissive_service_view AS
+       SELECT service_ref, product, token_hash FROM federation_services WHERE 1=1`
+    ]
+  ]) {
+    const directory = mkdtempSync(join(tmpdir(), `family-built-view-${label}-`));
+    const databasePath = join(directory, "gateway.sqlite");
+    const credentialPath = join(directory, "canvas.credential");
+    const credential = `Built-View-Credential-${label}-0001`;
+    try {
+      const database = openGatewayDatabase(databasePath);
+      database.exec(viewSql);
+      database.close();
+      writeFileSync(credentialPath, credential, { mode: 0o600 });
+      chmodSync(credentialPath, 0o600);
+
+      const result = spawnSync(process.execPath, [
+        builtCli,
+        "--service-ref", `service:canvas-view-${label}`,
+        "--product", "canvas",
+        "--credential-file", credentialPath,
+        "--database", databasePath
+      ], {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, NODE_ENV: "production" }
+      });
+
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, "FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID\n");
+      assert.equal(`${result.stdout}${result.stderr}`.includes(credential), false);
+      assert.equal(`${result.stdout}${result.stderr}`.includes(databasePath), false);
+      const verification = openGatewayDatabase(databasePath);
+      assert.deepEqual(
+        verification.prepare("SELECT COUNT(*) AS count FROM federation_services").get(),
+        { count: 0 }
+      );
+      verification.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("built production CLI ignores SQLite-owned ANALYZE objects", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "family-built-internal-schema-"));
+  const databasePath = join(directory, "gateway.sqlite");
+  const credentialPath = join(directory, "canvas.credential");
+  try {
+    const { openGatewayDatabase } = await import(
+      "../apps/gateway/dist/database.js"
+    );
+    const database = openGatewayDatabase(databasePath);
+    database.exec("ANALYZE");
+    database.close();
+    writeFileSync(credentialPath, "Built-Internal-Credential-0001", { mode: 0o600 });
+    chmodSync(credentialPath, 0o600);
+
+    const result = spawnSync(process.execPath, [
+      builtCli,
+      "--service-ref", "service:canvas-internal",
+      "--product", "canvas",
+      "--credential-file", credentialPath,
+      "--database", databasePath
+    ], { cwd: root, encoding: "utf8", env: { ...process.env, NODE_ENV: "production" } });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, "");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("final Docker runtime runs the built self-check after prune, copy and non-root switch", () => {
   const prune = dockerfile.indexOf("npm prune --omit=dev");
   const runtimeStage = dockerfile.indexOf(" AS runtime", prune);
