@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -51,196 +52,9 @@ export interface FederationProvisionTestHooks {
 }
 
 const EXPECTED_MIGRATIONS = Array.from({ length: 14 }, (_, index) => index + 1);
-interface ExpectedColumn {
-  name: string;
-  type: string;
-  notnull: 0 | 1;
-  pk: number;
-}
-
-const EXPECTED_COLUMNS: Record<string, ExpectedColumn[]> = {
-  federation_services: [
-    { name: "service_ref", type: "TEXT", notnull: 0, pk: 1 },
-    { name: "product", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "token_hash", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "status", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "created_at", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "revoked_at", type: "TEXT", notnull: 0, pk: 0 }
-  ],
-  agent_invocation_audit: [
-    { name: "invocation_ref", type: "TEXT", notnull: 0, pk: 1 },
-    { name: "correlation_ref", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "product", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "person_ref", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "agent_ref", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "local_session_ref", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "request_sha256", type: "TEXT", notnull: 0, pk: 0 },
-    { name: "service_ref", type: "TEXT", notnull: 0, pk: 0 },
-    { name: "family_ref", type: "TEXT", notnull: 0, pk: 0 },
-    { name: "actor_context_ref", type: "TEXT", notnull: 0, pk: 0 },
-    { name: "requested_external_session_ref", type: "TEXT", notnull: 0, pk: 0 },
-    { name: "timeout_ms", type: "INTEGER", notnull: 0, pk: 0 },
-    { name: "status", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "error_code", type: "TEXT", notnull: 0, pk: 0 },
-    { name: "started_at", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "completed_at", type: "TEXT", notnull: 0, pk: 0 }
-  ],
-  federation_session_invocation_claims: [
-    { name: "product", type: "TEXT", notnull: 1, pk: 1 },
-    { name: "family_ref", type: "TEXT", notnull: 1, pk: 2 },
-    { name: "person_ref", type: "TEXT", notnull: 1, pk: 3 },
-    { name: "agent_ref", type: "TEXT", notnull: 1, pk: 4 },
-    { name: "local_session_ref", type: "TEXT", notnull: 1, pk: 5 },
-    { name: "invocation_ref", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "service_ref", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "claimed_at", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "lease_expires_at", type: "TEXT", notnull: 1, pk: 0 }
-  ],
-  federation_session_bindings: [
-    { name: "product", type: "TEXT", notnull: 1, pk: 1 },
-    { name: "family_ref", type: "TEXT", notnull: 1, pk: 2 },
-    { name: "person_ref", type: "TEXT", notnull: 1, pk: 3 },
-    { name: "agent_ref", type: "TEXT", notnull: 1, pk: 4 },
-    { name: "local_session_ref", type: "TEXT", notnull: 1, pk: 5 },
-    { name: "external_session_ref", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "created_at", type: "TEXT", notnull: 1, pk: 0 },
-    { name: "updated_at", type: "TEXT", notnull: 1, pk: 0 }
-  ]
-};
-
-interface ExpectedIndex {
-  name: string;
-  unique: 0 | 1;
-  origin: "c" | "pk" | "u";
-  partial: 0 | 1;
-  columns: string[];
-}
-
-const EXPECTED_INDEXES: Record<string, ExpectedIndex[]> = {
-  federation_services: [
-    {
-      name: "sqlite_autoindex_federation_services_2",
-      unique: 1,
-      origin: "u",
-      partial: 0,
-      columns: ["token_hash"]
-    },
-    {
-      name: "sqlite_autoindex_federation_services_1",
-      unique: 1,
-      origin: "pk",
-      partial: 0,
-      columns: ["service_ref"]
-    }
-  ],
-  agent_invocation_audit: [
-    {
-      name: "agent_invocation_audit_scope_idx",
-      unique: 0,
-      origin: "c",
-      partial: 0,
-      columns: [
-        "service_ref", "product", "family_ref", "person_ref", "agent_ref",
-        "local_session_ref", "invocation_ref"
-      ]
-    },
-    {
-      name: "sqlite_autoindex_agent_invocation_audit_1",
-      unique: 1,
-      origin: "pk",
-      partial: 0,
-      columns: ["invocation_ref"]
-    }
-  ],
-  federation_session_invocation_claims: [
-    {
-      name: "federation_session_claim_expiry_idx",
-      unique: 0,
-      origin: "c",
-      partial: 0,
-      columns: ["lease_expires_at"]
-    },
-    {
-      name: "sqlite_autoindex_federation_session_invocation_claims_2",
-      unique: 1,
-      origin: "pk",
-      partial: 0,
-      columns: ["product", "family_ref", "person_ref", "agent_ref", "local_session_ref"]
-    },
-    {
-      name: "sqlite_autoindex_federation_session_invocation_claims_1",
-      unique: 1,
-      origin: "u",
-      partial: 0,
-      columns: ["invocation_ref"]
-    }
-  ],
-  federation_session_bindings: [
-    {
-      name: "sqlite_autoindex_federation_session_bindings_2",
-      unique: 1,
-      origin: "pk",
-      partial: 0,
-      columns: ["product", "family_ref", "person_ref", "agent_ref", "local_session_ref"]
-    },
-    {
-      name: "sqlite_autoindex_federation_session_bindings_1",
-      unique: 1,
-      origin: "u",
-      partial: 0,
-      columns: ["external_session_ref"]
-    }
-  ]
-};
-
-interface ExpectedForeignKey {
-  table: string;
-  from: string;
-  to: string;
-  on_delete: string;
-}
-
-const EXPECTED_FOREIGN_KEYS: Record<string, ExpectedForeignKey[]> = {
-  federation_services: [],
-  agent_invocation_audit: [],
-  federation_session_invocation_claims: [
-    { table: "federation_services", from: "service_ref", to: "service_ref", on_delete: "NO ACTION" },
-    { table: "agent_invocation_audit", from: "invocation_ref", to: "invocation_ref", on_delete: "CASCADE" },
-    { table: "agents", from: "agent_ref", to: "agent_ref", on_delete: "NO ACTION" },
-    { table: "persons", from: "person_ref", to: "person_ref", on_delete: "NO ACTION" },
-    { table: "families", from: "family_ref", to: "family_ref", on_delete: "NO ACTION" }
-  ],
-  federation_session_bindings: [
-    { table: "agents", from: "agent_ref", to: "agent_ref", on_delete: "NO ACTION" },
-    { table: "persons", from: "person_ref", to: "person_ref", on_delete: "NO ACTION" },
-    { table: "families", from: "family_ref", to: "family_ref", on_delete: "NO ACTION" }
-  ]
-};
-
-const EXPECTED_CRITICAL_SQL: Record<string, string[]> = {
-  federation_services: [
-    "product TEXT NOT NULL CHECK(product IN ('canvas', 'me'))",
-    "token_hash TEXT NOT NULL UNIQUE",
-    "status TEXT NOT NULL CHECK(status IN ('active', 'revoked'))"
-  ],
-  agent_invocation_audit: [
-    "status TEXT NOT NULL CHECK(status IN ('accepted', 'succeeded', 'failed'))",
-    "request_sha256 IS NULL AND service_ref IS NULL AND family_ref IS NULL AND actor_context_ref IS NULL AND requested_external_session_ref IS NULL AND timeout_ms IS NULL",
-    "request_sha256 IS NOT NULL AND length(request_sha256) = 64 AND request_sha256 NOT GLOB '*[^0-9a-f]*' AND service_ref IS NOT NULL AND family_ref IS NOT NULL AND actor_context_ref IS NOT NULL AND timeout_ms BETWEEN 1000 AND 300000",
-    "(status = 'accepted' AND error_code IS NULL AND completed_at IS NULL) OR (status = 'succeeded' AND error_code IS NULL AND completed_at IS NOT NULL) OR (status = 'failed' AND error_code IS NOT NULL AND completed_at IS NOT NULL)"
-  ],
-  federation_session_invocation_claims: [
-    "product TEXT NOT NULL CHECK(product IN ('canvas', 'me'))",
-    "invocation_ref TEXT NOT NULL UNIQUE REFERENCES agent_invocation_audit(invocation_ref) ON DELETE CASCADE",
-    "service_ref TEXT NOT NULL REFERENCES federation_services(service_ref)",
-    "PRIMARY KEY(product, family_ref, person_ref, agent_ref, local_session_ref)"
-  ],
-  federation_session_bindings: [
-    "product TEXT NOT NULL CHECK(product IN ('canvas', 'me'))",
-    "external_session_ref TEXT NOT NULL UNIQUE",
-    "PRIMARY KEY(product, family_ref, person_ref, agent_ref, local_session_ref)"
-  ]
-};
+const EXPECTED_V14_SCHEMA_OBJECT_COUNT = 144;
+const EXPECTED_V14_SCHEMA_SHA256 =
+  "ded4e2c1800dac6e799fa2e42bb8876996ac40852161a0041b6ae41a048b6845";
 
 function failure(code: BootstrapErrorCode): never {
   throw new BootstrapError(code);
@@ -500,59 +314,57 @@ function newSqliteConnectionFd(
   return descriptor;
 }
 
-function tableColumns(database: Database.Database, table: string): ExpectedColumn[] {
-  return database.prepare(`PRAGMA table_info(${table})`).all().map(row => {
-    const column = row as Record<string, unknown>;
-    return {
-      name: String(column.name),
-      type: String(column.type),
-      notnull: Number(column.notnull) as 0 | 1,
-      pk: Number(column.pk)
-    };
-  });
-}
-
-function tableIndexes(database: Database.Database, table: string): ExpectedIndex[] {
-  return database.prepare(`PRAGMA index_list(${table})`).all().map(row => {
-    const index = row as Record<string, unknown>;
-    const name = String(index.name);
-    return {
-      name,
-      unique: Number(index.unique) as 0 | 1,
-      origin: String(index.origin) as ExpectedIndex["origin"],
-      partial: Number(index.partial) as 0 | 1,
-      columns: database.prepare(`PRAGMA index_info(${name})`).all()
-        .map(column => String((column as { name: unknown }).name))
-    };
-  }).toSorted((left, right) => left.name.localeCompare(right.name));
-}
-
-function tableForeignKeys(
-  database: Database.Database,
-  table: string
-): ExpectedForeignKey[] {
-  return database.prepare(`PRAGMA foreign_key_list(${table})`).all().map(row => {
-    const key = row as Record<string, unknown>;
-    return {
-      table: String(key.table),
-      from: String(key.from),
-      to: String(key.to),
-      on_delete: String(key.on_delete)
-    };
-  }).toSorted((left, right) => left.from.localeCompare(right.from));
-}
-
-function canonicalTableSql(database: Database.Database, table: string): string {
-  const row = database.prepare(
-    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?"
-  ).get(table) as { sql: unknown } | undefined;
-  return typeof row?.sql === "string"
-    ? row.sql.replace(/\s+/g, " ").trim()
-    : "";
-}
-
 function exactJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+interface CanonicalSchemaObject {
+  type: "index" | "table" | "trigger";
+  name: string;
+  tableName: string;
+  sql: string | null;
+}
+
+function compareSchemaObjects(
+  left: CanonicalSchemaObject,
+  right: CanonicalSchemaObject
+): number {
+  for (const key of ["type", "name", "tableName"] as const) {
+    if (left[key] < right[key]) return -1;
+    if (left[key] > right[key]) return 1;
+  }
+  return 0;
+}
+
+function canonicalV14Schema(database: Database.Database): CanonicalSchemaObject[] {
+  return database.prepare(
+    "SELECT type, name, tbl_name, sql FROM sqlite_master"
+  ).all().filter(row => {
+    const object = row as Record<string, unknown>;
+    const type = String(object.type);
+    const name = String(object.name);
+    return (type === "table" || type === "index" || type === "trigger")
+      && (!name.startsWith("sqlite_") || name.startsWith("sqlite_autoindex_"));
+  }).map(row => {
+    const object = row as Record<string, unknown>;
+    return {
+      type: String(object.type) as CanonicalSchemaObject["type"],
+      name: String(object.name),
+      tableName: String(object.tbl_name),
+      sql: object.sql === null
+        ? null
+        : String(object.sql).replace(/\s+/g, " ").trim()
+    };
+  }).toSorted(compareSchemaObjects);
+}
+
+function exactV14SchemaFingerprint(database: Database.Database): boolean {
+  const objects = canonicalV14Schema(database);
+  if (objects.length !== EXPECTED_V14_SCHEMA_OBJECT_COUNT) return false;
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(objects), "utf8")
+    .digest("hex");
+  return fingerprint === EXPECTED_V14_SCHEMA_SHA256;
 }
 
 function validateV14(database: Database.Database): void {
@@ -567,30 +379,8 @@ function validateV14(database: Database.Database): void {
       || foreignKeyViolations.length !== 0) {
       failure("FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID");
     }
-    for (const [table, expectedColumns] of Object.entries(EXPECTED_COLUMNS)) {
-      const expectedIndexes = EXPECTED_INDEXES[table];
-      const expectedForeignKeys = EXPECTED_FOREIGN_KEYS[table];
-      const criticalSql = EXPECTED_CRITICAL_SQL[table];
-      if (
-        expectedIndexes === undefined
-        || expectedForeignKeys === undefined
-        || criticalSql === undefined
-        || !exactJson(tableColumns(database, table), expectedColumns)
-        || !exactJson(
-          tableIndexes(database, table),
-          expectedIndexes.toSorted((left, right) => left.name.localeCompare(right.name))
-        )
-        || !exactJson(
-          tableForeignKeys(database, table),
-          expectedForeignKeys.toSorted((left, right) => left.from.localeCompare(right.from))
-        )
-      ) {
-        failure("FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID");
-      }
-      const sql = canonicalTableSql(database, table);
-      if (criticalSql.some(fragment => !sql.includes(fragment))) {
-        failure("FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID");
-      }
+    if (!exactV14SchemaFingerprint(database)) {
+      failure("FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID");
     }
   } catch (error) {
     if (error instanceof BootstrapError) throw error;

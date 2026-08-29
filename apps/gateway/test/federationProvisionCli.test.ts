@@ -567,6 +567,77 @@ describe("protected federation service bootstrap CLI", () => {
     expect(inspectServices()).toEqual([]);
   });
 
+  it("rejects an OR-true CHECK bypass even when every prior SQL fragment remains", () => {
+    const hostile = new Database(databasePath, { fileMustExist: true });
+    hostile.pragma("foreign_keys = OFF");
+    hostile.exec(`DROP TABLE federation_services;
+      CREATE TABLE federation_services (
+        service_ref TEXT PRIMARY KEY,
+        product TEXT NOT NULL CHECK(product IN ('canvas', 'me') OR 1=1),
+        token_hash TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL CHECK(status IN ('active', 'revoked')),
+        created_at TEXT NOT NULL,
+        revoked_at TEXT,
+        /* product TEXT NOT NULL CHECK(product IN ('canvas', 'me')) */
+        CHECK(1=1)
+      );`);
+    hostile.close();
+
+    const result = runCli();
+
+    expectFixedFailure(result, "FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID", [
+      token,
+      credentialPath,
+      databasePath,
+      "OR 1=1"
+    ]);
+    expect(inspectServices()).toEqual([]);
+  });
+
+  it("rejects an altered V14 trigger with all protected tables unchanged", () => {
+    const hostile = new Database(databasePath, { fileMustExist: true });
+    hostile.exec(`DROP TRIGGER person_federation_context_person_update;
+      CREATE TRIGGER person_federation_context_person_update
+      AFTER UPDATE OF display_name, status ON persons
+      BEGIN
+        SELECT 1;
+      END;`);
+    hostile.close();
+
+    const result = runCli();
+
+    expectFixedFailure(result, "FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID", [
+      token,
+      credentialPath,
+      databasePath
+    ]);
+    expect(inspectServices()).toEqual([]);
+  });
+
+  it.each([
+    ["index", "CREATE INDEX permissive_person_name_idx ON persons(display_name)"],
+    ["table", "CREATE TABLE permissive_federation_shadow(value TEXT)"],
+    [
+      "trigger",
+      `CREATE TRIGGER permissive_service_trigger AFTER INSERT ON federation_services
+       BEGIN SELECT 1; END`
+    ]
+  ])("rejects an extra permissive V14 %s object", (_kind, sql) => {
+    const hostile = new Database(databasePath, { fileMustExist: true });
+    hostile.exec(sql);
+    hostile.close();
+
+    const result = runCli();
+
+    expectFixedFailure(result, "FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID", [
+      token,
+      credentialPath,
+      databasePath,
+      "permissive"
+    ]);
+    expect(inspectServices()).toEqual([]);
+  });
+
   it("rejects V14 when the required invocation scope index is absent", () => {
     const weak = new Database(databasePath, { fileMustExist: true });
     weak.exec("DROP INDEX agent_invocation_audit_scope_idx");
@@ -632,6 +703,32 @@ describe("protected federation service bootstrap CLI", () => {
     ]);
     expect(inspectServices()).toEqual([]);
   });
+
+  it.each([10, 13])(
+    "accepts one exact V%d-to-V14 migration fingerprint and reopens it idempotently",
+    (migrationLimit) => {
+      const migratedPath = join(directory, `gateway-v${migrationLimit}-to-v14.sqlite`);
+      const legacy = openGatewayDatabase(migratedPath, {
+        migrationLimit: migrationLimit as 10 | 13
+      });
+      legacy.close();
+      const migrated = openGatewayDatabase(migratedPath);
+      migrated.close();
+      const args = argumentsFor({
+        serviceRef: `service:canvas-v${migrationLimit}`,
+        database: migratedPath
+      });
+
+      const first = runCli(args);
+      const reopened = openGatewayDatabase(migratedPath);
+      reopened.close();
+      const replay = runCli(args);
+
+      expect(first.status).toBe(0);
+      expect(replay.status).toBe(0);
+      expect(replay.stdout).toBe(first.stdout);
+    }
+  );
 
   it("rejects malformed flags, unsupported products and token arguments with fixed errors", () => {
     for (const args of [
