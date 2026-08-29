@@ -35,7 +35,8 @@ const migrationVersions = [
   { version: 10 },
   { version: 11 },
   { version: 12 },
-  { version: 13 }
+  { version: 13 },
+  { version: 14 }
 ];
 
 const openAtVersion = openGatewayDatabase as unknown as (
@@ -316,12 +317,12 @@ describe("gateway database", () => {
         applied_at TEXT NOT NULL
       );
       INSERT INTO schema_migrations(version, applied_at)
-      VALUES(14, '2026-07-25T00:00:00.000Z');
+      VALUES(15, '2026-07-25T00:00:00.000Z');
     `);
     legacy.close();
 
     expect(() => openGatewayDatabase(databasePath)).toThrow(
-      "Unsupported Gateway schema version: 14"
+      "Unsupported Gateway schema version: 15"
     );
   });
 
@@ -367,6 +368,12 @@ describe("gateway database", () => {
         "person_ref",
         "agent_ref",
         "local_session_ref",
+        "request_sha256",
+        "service_ref",
+        "family_ref",
+        "actor_context_ref",
+        "requested_external_session_ref",
+        "timeout_ms",
         "status",
         "error_code",
         "started_at",
@@ -471,7 +478,7 @@ describe("gateway database", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
-  it("keeps Domain Event schema installation compatible with both V11 and V12", () => {
+  it("keeps Domain Event schema installation compatible from V11 through latest V14", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-domain-event-version-compat-"));
     const databasePath = join(directory, "gateway.sqlite");
     db = openAtVersion(databasePath, { migrationLimit: 11 });
@@ -526,6 +533,73 @@ describe("gateway database", () => {
        WHERE person_ref = ?`
     ).get(initialized.owner.personRef)).toEqual({ context_version: 4 });
     expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("upgrades V13 invocation audits to bounded legacy-compatible V14 scope", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-v14-upgrade-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 13 });
+    const onboarding = new FamilyDomainRepository(db).initializeFamily({
+      familyName: "V14 家庭",
+      ownerName: "V14 成员",
+      deviceName: "V14 设备",
+      deviceCredential: "v14-device-credential-with-enough-length"
+    });
+    db.prepare(
+      `INSERT INTO agent_invocation_audit(
+         invocation_ref, correlation_ref, product, person_ref, agent_ref,
+         local_session_ref, status, error_code, started_at, completed_at
+       ) VALUES(?, ?, 'canvas', ?, 'agent:hermes-jarvis', ?, 'failed', ?, ?, ?)`
+    ).run(
+      "invocation:v13-legacy",
+      "correlation:v13-legacy",
+      onboarding.owner.personRef,
+      "local-session:v13-legacy",
+      "AGENT_RUNTIME_UNAVAILABLE",
+      "2026-08-29T00:00:00.000Z",
+      "2026-08-29T00:00:01.000Z"
+    );
+    db.close();
+
+    db = openGatewayDatabase(databasePath);
+    expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
+      .toEqual({ version: 14 });
+    expect(db.prepare(
+      `SELECT request_sha256, service_ref, family_ref, actor_context_ref,
+              requested_external_session_ref, timeout_ms
+       FROM agent_invocation_audit WHERE invocation_ref = ?`
+    ).get("invocation:v13-legacy")).toEqual({
+      request_sha256: null,
+      service_ref: null,
+      family_ref: null,
+      actor_context_ref: null,
+      requested_external_session_ref: null,
+      timeout_ms: null
+    });
+    expect(() => db!.prepare(
+      `INSERT INTO agent_invocation_audit(
+         invocation_ref, correlation_ref, product, person_ref, agent_ref,
+         local_session_ref, request_sha256, service_ref, family_ref,
+         actor_context_ref, timeout_ms, status, started_at
+       ) VALUES(?, ?, 'canvas', ?, 'agent:hermes-jarvis', ?, ?, NULL, ?, ?,
+                1000, 'accepted', ?)`
+    ).run(
+      "invocation:v14-partial",
+      "correlation:v14-partial",
+      onboarding.owner.personRef,
+      "local-session:v14-partial",
+      "a".repeat(64),
+      onboarding.family.familyRef,
+      "actor-context:v14-partial",
+      "2026-08-29T00:00:02.000Z"
+    )).toThrow(/CHECK constraint failed/);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+
+    db.close();
+    db = openGatewayDatabase(databasePath);
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 14"
+    ).get()).toEqual({ count: 1 });
   });
 
   it("creates the formal Chat Work domain schema with thread-scoped uniqueness", () => {

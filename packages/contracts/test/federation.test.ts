@@ -4,7 +4,11 @@ import {
   agentDescriptorV1Schema,
   agentInvocationRequestV1Schema,
   agentInvocationResultV1Schema,
-  federationActorContextV1Schema
+  federationActorContextV1Schema,
+  federationAgentListV1Schema,
+  federationInvocationPostResponseV1Schema,
+  federationInvocationResponseV1Schema,
+  federationInvocationStatusV1Schema
 } from "../src/federation.js";
 import { federationActorContextV1Schema as publicFederationActorContextV1Schema } from "../src/index.js";
 import * as publicContracts from "../src/index.js";
@@ -57,6 +61,23 @@ const result = {
   output: "已规划三道菜。",
   completedAt: "2030-01-01T00:00:30.000Z",
   externalSessionRef: "external-session:opaque-demo-1"
+};
+
+const scope = {
+  serviceRef: "service:canvas",
+  product: "canvas" as const,
+  actorContextRef: actor.contextRef,
+  familyRef: actor.familyRef,
+  personRef: actor.personRef,
+  agentRef: agent.agentRef,
+  localSessionRef: invocation.localSessionRef
+};
+
+const liveResponse = {
+  protocolVersion: 1 as const,
+  scope,
+  correlationRef: invocation.correlationRef,
+  result
 };
 
 describe("Family federation and Agent invocation contracts v1", () => {
@@ -130,5 +151,78 @@ describe("Family federation and Agent invocation contracts v1", () => {
     expect(federationContracts).not.toHaveProperty("AgentInvocationAuthorityV1");
     expect(federationContracts).not.toHaveProperty("agentInvocationAuthorityV1Schema");
     expect(publicContracts).not.toHaveProperty("agentInvocationAuthorityV1Schema");
+  });
+
+  it("publishes strict scoped Agent list and live invocation envelopes", () => {
+    expect(federationAgentListV1Schema.parse({
+      protocolVersion: 1,
+      scope: {
+        serviceRef: scope.serviceRef,
+        product: scope.product,
+        actorContextRef: scope.actorContextRef,
+        familyRef: scope.familyRef,
+        personRef: scope.personRef,
+        assignmentVersion: 7,
+        contextVersion: 3
+      },
+      agents: [agent]
+    })).toMatchObject({ agents: [{ agentRef: agent.agentRef }] });
+    expect(federationInvocationResponseV1Schema.parse(liveResponse)).toEqual(liveResponse);
+    expect(federationInvocationPostResponseV1Schema.parse(liveResponse)).toEqual(liveResponse);
+    expect(federationInvocationResponseV1Schema.safeParse({
+      ...liveResponse,
+      scope: { ...scope, unexpected: true }
+    }).success).toBe(false);
+    expect(federationInvocationResponseV1Schema.safeParse({
+      ...liveResponse,
+      correlationRef: "correlation:other"
+    }).success).toBe(false);
+  });
+
+  it("publishes a strict output-free invocation recovery union", () => {
+    const accepted = {
+      protocolVersion: 1 as const,
+      invocationRef: invocation.invocationRef,
+      correlationRef: invocation.correlationRef,
+      scope,
+      status: "accepted" as const,
+      leaseExpiresAt: "2030-01-01T00:00:30.000Z",
+      retryAfter: 30
+    };
+    const succeeded = {
+      protocolVersion: 1 as const,
+      invocationRef: invocation.invocationRef,
+      correlationRef: invocation.correlationRef,
+      scope,
+      status: "succeeded" as const,
+      externalSessionRef: result.externalSessionRef,
+      completedAt: result.completedAt,
+      outputAvailable: false as const
+    };
+    const failed = {
+      protocolVersion: 1 as const,
+      invocationRef: invocation.invocationRef,
+      correlationRef: invocation.correlationRef,
+      scope,
+      status: "failed" as const,
+      completedAt: result.completedAt,
+      errorCode: "AGENT_RUNTIME_UNAVAILABLE"
+    };
+    for (const status of [accepted, succeeded, failed]) {
+      expect(federationInvocationStatusV1Schema.parse(status)).toEqual(status);
+      expect(federationInvocationPostResponseV1Schema.parse(status)).toEqual(status);
+    }
+    expect(federationInvocationStatusV1Schema.safeParse({
+      ...succeeded,
+      output: "private output"
+    }).success).toBe(false);
+    expect(federationInvocationStatusV1Schema.safeParse({
+      ...accepted,
+      retryAfter: 0
+    }).success).toBe(false);
+    expect(federationInvocationStatusV1Schema.safeParse({
+      ...failed,
+      errorCode: "raw error"
+    }).success).toBe(false);
   });
 });

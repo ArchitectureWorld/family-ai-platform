@@ -1,9 +1,16 @@
+import { createHash } from "node:crypto";
 import {
   agentDescriptorV1Schema,
+  federationAgentListV1Schema,
+  federationInvocationResponseV1Schema,
   type AgentDescriptorV1,
   type AgentInvocationRequestV1,
   type AgentInvocationResultV1,
-  type FederationActorContextV1
+  type FederationActorContextV1,
+  type FederationAgentListV1,
+  type FederationInvocationPostResponseV1,
+  type FederationInvocationResponseV1,
+  type FederationInvocationStatusV1
 } from "@family-ai/contracts";
 import {
   BrokerFederationError,
@@ -12,7 +19,8 @@ import {
 } from "@family-ai/provider-adapter-sdk";
 import {
   FederationRepository,
-  type AuthenticatedFederationService
+  type AuthenticatedFederationService,
+  type ScopedInvocationStatus
 } from "./federationRepository.js";
 import { GatewayDomainError } from "./service.js";
 
@@ -135,6 +143,30 @@ function repositoryError(error: unknown): GatewayDomainError {
   );
 }
 
+function invocationRequestSha256(
+  service: AuthenticatedFederationService,
+  actor: FederationActorContextV1,
+  request: AgentInvocationRequestV1
+): string {
+  const intent = {
+    protocolVersion: 1 as const,
+    invocationRef: request.invocationRef,
+    correlationRef: request.correlationRef,
+    serviceRef: service.serviceRef,
+    product: service.product,
+    familyRef: actor.familyRef,
+    personRef: actor.personRef,
+    agentRef: request.agentRef,
+    localSessionRef: request.localSessionRef,
+    ...(request.externalSessionRef === undefined
+      ? {}
+      : { externalSessionRef: request.externalSessionRef }),
+    prompt: request.prompt,
+    timeoutMs: request.timeoutMs
+  };
+  return createHash("sha256").update(JSON.stringify(intent), "utf8").digest("hex");
+}
+
 export class FederationService {
   private readonly queue = new SessionInvocationQueue();
 
@@ -180,20 +212,12 @@ export class FederationService {
   }
 
   async listAgents(
-    actor: FederationActorContextV1
-  ): Promise<AgentDescriptorV1[]> {
-    const live = this.repository.getActorContext(actor.contextRef);
-    if (!live || live.product !== actor.product) {
-      throw domainError(
-        "FEDERATION_CONTEXT_INVALID",
-        403,
-        "permission",
-        false,
-        "当前 Family 身份已经失效。"
-      );
-    }
+    service: AuthenticatedFederationService,
+    contextRef: string
+  ): Promise<FederationAgentListV1> {
+    const live = this.liveActorForContext(service, contextRef);
     const authorized = this.repository.listAuthorizedAgents(live);
-    return Promise.all(authorized.map(async (agent) => {
+    const agents = await Promise.all(authorized.map(async (agent) => {
       let status: AgentDescriptorV1["status"] = "unavailable";
       try {
         const adapter = this.providers.resolve(agent.providerProfileRef);
@@ -226,12 +250,25 @@ export class FederationService {
         observedAt
       });
     }));
+    return federationAgentListV1Schema.parse({
+      protocolVersion: 1,
+      scope: {
+        serviceRef: service.serviceRef,
+        product: service.product,
+        actorContextRef: live.contextRef,
+        familyRef: live.familyRef,
+        personRef: live.personRef,
+        assignmentVersion: live.assignmentVersion,
+        contextVersion: live.contextVersion
+      },
+      agents
+    });
   }
 
   async invoke(
     service: AuthenticatedFederationService,
     request: AgentInvocationRequestV1
-  ): Promise<AgentInvocationResultV1> {
+  ): Promise<FederationInvocationPostResponseV1> {
     const initialActor = this.liveActor(service, request);
     const key = [
       service.product,
@@ -254,12 +291,41 @@ export class FederationService {
         throw repositoryError(error);
       }
 
+      let claim;
+      try {
+        claim = this.repository.claimInvocation({
+          serviceRef: service.serviceRef,
+          invocationRef: request.invocationRef,
+          correlationRef: request.correlationRef,
+          product: service.product,
+          familyRef: actor.familyRef,
+          personRef: actor.personRef,
+          actorContextRef: actor.contextRef,
+          agentRef: request.agentRef,
+          localSessionRef: request.localSessionRef,
+          ...(request.externalSessionRef === undefined
+            ? {}
+            : { externalSessionRef: request.externalSessionRef }),
+          requestSha256: invocationRequestSha256(service, actor, request),
+          timeoutMs: request.timeoutMs
+        });
+      } catch (error) {
+        throw repositoryError(error);
+      }
+      if (claim.kind !== "acquired") {
+        return this.statusEnvelope(service, actor, claim.status);
+      }
+
       let adapter: BrokerProviderAdapter;
       try {
         const resolved = this.providers.resolve(authorized.providerProfileRef);
         if (!(resolved instanceof BrokerProviderAdapter)) throw new Error();
         adapter = resolved;
       } catch {
+        this.repository.finalizeInvocationFailure({
+          invocationRef: request.invocationRef,
+          errorCode: "AGENT_RUNTIME_UNAVAILABLE"
+        });
         throw domainError(
           "AGENT_RUNTIME_UNAVAILABLE",
           503,
@@ -267,25 +333,6 @@ export class FederationService {
           true,
           "Agent 暂时不可用，请稍后重试。"
         );
-      }
-
-      try {
-        this.repository.claimInvocation({
-          serviceRef: service.serviceRef,
-          invocationRef: request.invocationRef,
-          correlationRef: request.correlationRef,
-          product: service.product,
-          familyRef: actor.familyRef,
-          personRef: actor.personRef,
-          agentRef: request.agentRef,
-          localSessionRef: request.localSessionRef,
-          ...(request.externalSessionRef === undefined
-            ? {}
-            : { externalSessionRef: request.externalSessionRef }),
-          timeoutMs: request.timeoutMs
-        });
-      } catch (error) {
-        throw repositoryError(error);
       }
 
       const finalizeFailure = (errorCode: string) => {
@@ -370,8 +417,135 @@ export class FederationService {
               : "AGENT_INVOCATION_FAILED"
         );
       }
-      return result;
+      return federationInvocationResponseV1Schema.parse({
+        protocolVersion: 1,
+        scope: {
+          serviceRef: service.serviceRef,
+          product: service.product,
+          actorContextRef: actor.contextRef,
+          familyRef: actor.familyRef,
+          personRef: actor.personRef,
+          agentRef: request.agentRef,
+          localSessionRef: request.localSessionRef
+        },
+        correlationRef: request.correlationRef,
+        result
+      } satisfies FederationInvocationResponseV1);
     });
+  }
+
+  getInvocationStatus(
+    service: AuthenticatedFederationService,
+    input: {
+      contextRef: string;
+      agentRef: string;
+      localSessionRef: string;
+      invocationRef: string;
+    }
+  ): FederationInvocationStatusV1 {
+    const actor = this.liveActorForContext(service, input.contextRef);
+    try {
+      this.repository.requireAuthorizedAgent(actor, input.agentRef);
+    } catch {
+      throw this.invocationNotFound();
+    }
+    const status = this.repository.getScopedInvocationStatus({
+      serviceRef: service.serviceRef,
+      product: service.product,
+      familyRef: actor.familyRef,
+      personRef: actor.personRef,
+      agentRef: input.agentRef,
+      localSessionRef: input.localSessionRef,
+      invocationRef: input.invocationRef
+    });
+    if (!status) throw this.invocationNotFound();
+    return this.statusEnvelope(service, actor, status);
+  }
+
+  private statusEnvelope(
+    service: AuthenticatedFederationService,
+    actor: FederationActorContextV1,
+    status: ScopedInvocationStatus
+  ): FederationInvocationStatusV1 {
+    const scope = {
+      serviceRef: service.serviceRef,
+      product: service.product,
+      actorContextRef: actor.contextRef,
+      familyRef: actor.familyRef,
+      personRef: actor.personRef,
+      agentRef: status.agentRef,
+      localSessionRef: status.localSessionRef
+    };
+    const base = {
+      protocolVersion: 1 as const,
+      invocationRef: status.invocationRef,
+      correlationRef: status.correlationRef,
+      scope
+    };
+    if (status.status === "accepted") {
+      return {
+        ...base,
+        status: "accepted",
+        leaseExpiresAt: status.leaseExpiresAt,
+        retryAfter: status.retryAfter
+      };
+    }
+    if (status.status === "succeeded") {
+      return {
+        ...base,
+        status: "succeeded",
+        externalSessionRef: status.externalSessionRef,
+        completedAt: status.completedAt,
+        outputAvailable: false
+      };
+    }
+    return {
+      ...base,
+      status: "failed",
+      completedAt: status.completedAt,
+      errorCode: status.errorCode
+    };
+  }
+
+  private invocationNotFound(): GatewayDomainError {
+    return domainError(
+      "FEDERATION_INVOCATION_NOT_FOUND",
+      404,
+      "permission",
+      false,
+      "没有找到这次 Agent 请求。"
+    );
+  }
+
+  private liveActorForContext(
+    service: AuthenticatedFederationService,
+    contextRef: string
+  ): FederationActorContextV1 {
+    try {
+      this.repository.requireActiveService(service);
+    } catch (error) {
+      throw repositoryError(error);
+    }
+    const actor = this.repository.getActorContext(contextRef);
+    if (!actor) {
+      throw domainError(
+        "FEDERATION_CONTEXT_INVALID",
+        403,
+        "permission",
+        false,
+        "当前 Family 身份已经失效。"
+      );
+    }
+    if (actor.product !== service.product) {
+      throw domainError(
+        "FEDERATION_PRODUCT_MISMATCH",
+        403,
+        "permission",
+        false,
+        "产品身份与 Family 身份不匹配。"
+      );
+    }
+    return actor;
   }
 
   private liveActor(

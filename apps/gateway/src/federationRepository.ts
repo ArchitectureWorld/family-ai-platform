@@ -36,6 +36,12 @@ export interface InvocationAuditRecord {
   personRef: string;
   agentRef: string;
   localSessionRef: string;
+  requestSha256: string | null;
+  serviceRef: string | null;
+  familyRef: string | null;
+  actorContextRef: string | null;
+  requestedExternalSessionRef: string | null;
+  timeoutMs: number | null;
   status: InvocationAuditStatus;
   errorCode: string | null;
   startedAt: string;
@@ -71,6 +77,41 @@ export interface FederationInvocationClaim {
   claimedAt: string;
   leaseExpiresAt: string;
 }
+
+interface ScopedInvocationStatusBase {
+  invocationRef: string;
+  correlationRef: string;
+  serviceRef: string;
+  product: FederationServiceProduct;
+  familyRef: string;
+  personRef: string;
+  agentRef: string;
+  localSessionRef: string;
+}
+
+export type ScopedInvocationStatus =
+  | (ScopedInvocationStatusBase & {
+      status: "accepted";
+      leaseExpiresAt: string;
+      retryAfter: number;
+    })
+  | (ScopedInvocationStatusBase & {
+      status: "succeeded";
+      externalSessionRef: string;
+      completedAt: string;
+      outputAvailable: false;
+    })
+  | (ScopedInvocationStatusBase & {
+      status: "failed";
+      completedAt: string;
+      errorCode: string;
+    });
+
+export type ClaimInvocationResult =
+  | { kind: "acquired"; claim: FederationInvocationClaim }
+  | { kind: "accepted"; status: Extract<ScopedInvocationStatus, { status: "accepted" }> }
+  | { kind: "succeeded"; status: Extract<ScopedInvocationStatus, { status: "succeeded" }> }
+  | { kind: "failed"; status: Extract<ScopedInvocationStatus, { status: "failed" }> };
 
 const SAFE_IDENTIFIER = /^[a-z][a-z0-9._:-]{0,99}$/;
 const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
@@ -152,6 +193,26 @@ function mapAudit(row: Record<string, unknown>): InvocationAuditRecord {
     personRef: String(row.person_ref),
     agentRef: String(row.agent_ref),
     localSessionRef: String(row.local_session_ref),
+    requestSha256: row.request_sha256 === null || row.request_sha256 === undefined
+      ? null
+      : String(row.request_sha256),
+    serviceRef: row.service_ref === null || row.service_ref === undefined
+      ? null
+      : String(row.service_ref),
+    familyRef: row.family_ref === null || row.family_ref === undefined
+      ? null
+      : String(row.family_ref),
+    actorContextRef: row.actor_context_ref === null || row.actor_context_ref === undefined
+      ? null
+      : String(row.actor_context_ref),
+    requestedExternalSessionRef:
+      row.requested_external_session_ref === null
+        || row.requested_external_session_ref === undefined
+        ? null
+        : String(row.requested_external_session_ref),
+    timeoutMs: row.timeout_ms === null || row.timeout_ms === undefined
+      ? null
+      : Number(row.timeout_ms),
     status: row.status as InvocationAuditStatus,
     errorCode: row.error_code === null ? null : String(row.error_code),
     startedAt: String(row.started_at),
@@ -574,32 +635,59 @@ export class FederationRepository {
     product: FederationServiceProduct;
     familyRef: string;
     personRef: string;
+    actorContextRef: string;
     agentRef: string;
     localSessionRef: string;
     externalSessionRef?: string;
     invocationRef: string;
     correlationRef: string;
+    requestSha256: string;
     timeoutMs: number;
-  }): FederationInvocationClaim {
+  }): ClaimInvocationResult {
     this.validateSessionBindingInput(input);
     if (
       !hasRefPrefix(input.serviceRef, "service") ||
+      !hasRefPrefix(input.actorContextRef, "actor-context") ||
       !hasRefPrefix(input.invocationRef, "invocation") ||
       !hasRefPrefix(input.correlationRef, "correlation") ||
+      !/^[a-f0-9]{64}$/.test(input.requestSha256) ||
       !Number.isSafeInteger(input.timeoutMs) ||
       input.timeoutMs < 1_000 ||
       input.timeoutMs > 300_000
     ) {
       throw new Error("FEDERATION_CLAIM_INVALID");
     }
-    const claim = this.db.transaction(() => {
+    const claim = this.db.transaction((): ClaimInvocationResult => {
       this.requireActiveService({
         serviceRef: input.serviceRef,
         product: input.product
       });
-      this.validateExternalSessionBinding(input);
       const claimedAt = this.now();
       const claimedAtIso = claimedAt.toISOString();
+      const existingAudit = this.db.prepare(
+        "SELECT * FROM agent_invocation_audit WHERE invocation_ref = ?"
+      ).get(input.invocationRef) as Record<string, unknown> | undefined;
+      if (existingAudit) {
+        const exact =
+          existingAudit.request_sha256 === input.requestSha256 &&
+          existingAudit.service_ref === input.serviceRef &&
+          existingAudit.product === input.product &&
+          existingAudit.family_ref === input.familyRef &&
+          existingAudit.person_ref === input.personRef &&
+          existingAudit.agent_ref === input.agentRef &&
+          existingAudit.local_session_ref === input.localSessionRef &&
+          existingAudit.correlation_ref === input.correlationRef &&
+          existingAudit.requested_external_session_ref ===
+            (input.externalSessionRef ?? null) &&
+          Number(existingAudit.timeout_ms) === input.timeoutMs;
+        if (!exact) throw new Error("FEDERATION_INVOCATION_DUPLICATE");
+        const status = this.getScopedInvocationStatus(input);
+        if (!status) throw new Error("FEDERATION_INVOCATION_DUPLICATE");
+        if (status.status === "accepted") return { kind: "accepted", status };
+        if (status.status === "succeeded") return { kind: "succeeded", status };
+        return { kind: "failed", status };
+      }
+      this.validateExternalSessionBinding(input);
       const existingClaim = this.db.prepare(
         `SELECT * FROM federation_session_invocation_claims
          WHERE product = ? AND family_ref = ? AND person_ref = ?
@@ -612,28 +700,8 @@ export class FederationRepository {
         input.localSessionRef
       ) as Record<string, unknown> | undefined;
       if (existingClaim) {
-        const current = mapInvocationClaim(existingClaim);
-        if (current.leaseExpiresAt >= claimedAtIso) {
-          throw new Error("FEDERATION_INVOCATION_BUSY");
-        }
-        const abandoned = this.db.prepare(
-          `UPDATE agent_invocation_audit
-           SET status = 'failed', error_code = 'AGENT_INVOCATION_ABANDONED',
-               completed_at = ?
-           WHERE invocation_ref = ? AND status = 'accepted'`
-        ).run(claimedAtIso, current.invocationRef);
-        if (abandoned.changes !== 1) {
-          throw new Error("FEDERATION_CLAIM_INVALID");
-        }
-        this.db.prepare(
-          `DELETE FROM federation_session_invocation_claims
-           WHERE invocation_ref = ?`
-        ).run(current.invocationRef);
+        throw new Error("FEDERATION_INVOCATION_BUSY");
       }
-      const duplicate = this.db.prepare(
-        "SELECT 1 FROM agent_invocation_audit WHERE invocation_ref = ?"
-      ).get(input.invocationRef);
-      if (duplicate) throw new Error("FEDERATION_INVOCATION_DUPLICATE");
       const subject = this.db.prepare(
         `SELECT 1 FROM persons p, agents a
          WHERE p.person_ref = ? AND p.status = 'active' AND a.agent_ref = ?`
@@ -642,8 +710,10 @@ export class FederationRepository {
       this.db.prepare(
         `INSERT INTO agent_invocation_audit(
            invocation_ref, correlation_ref, product, person_ref, agent_ref,
-           local_session_ref, status, error_code, started_at, completed_at
-         ) VALUES(?, ?, ?, ?, ?, ?, 'accepted', NULL, ?, NULL)`
+           local_session_ref, request_sha256, service_ref, family_ref,
+           actor_context_ref, requested_external_session_ref, timeout_ms,
+           status, error_code, started_at, completed_at
+         ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted', NULL, ?, NULL)`
       ).run(
         input.invocationRef,
         input.correlationRef,
@@ -651,6 +721,12 @@ export class FederationRepository {
         input.personRef,
         input.agentRef,
         input.localSessionRef,
+        input.requestSha256,
+        input.serviceRef,
+        input.familyRef,
+        input.actorContextRef,
+        input.externalSessionRef ?? null,
+        input.timeoutMs,
         claimedAtIso
       );
       const leaseExpiresAt = new Date(
@@ -672,9 +748,106 @@ export class FederationRepository {
         claimedAtIso,
         leaseExpiresAt
       );
-      return this.getInvocationClaim(input.invocationRef)!;
+      return {
+        kind: "acquired",
+        claim: this.getInvocationClaim(input.invocationRef)!
+      };
     });
     return claim.immediate();
+  }
+
+  getScopedInvocationStatus(input: {
+    serviceRef: string;
+    product: FederationServiceProduct;
+    familyRef: string;
+    personRef: string;
+    agentRef: string;
+    localSessionRef: string;
+    invocationRef: string;
+  }): ScopedInvocationStatus | null {
+    if (
+      !hasRefPrefix(input.serviceRef, "service") ||
+      !SERVICE_PRODUCTS.has(input.product) ||
+      !hasRefPrefix(input.familyRef, "family") ||
+      !hasRefPrefix(input.personRef, "person") ||
+      !hasRefPrefix(input.agentRef, "agent") ||
+      !hasRefPrefix(input.localSessionRef, "local-session") ||
+      !hasRefPrefix(input.invocationRef, "invocation")
+    ) {
+      return null;
+    }
+    const row = this.db.prepare(
+      `SELECT audit.*, claim.lease_expires_at,
+              binding.external_session_ref AS bound_external_session_ref
+       FROM agent_invocation_audit audit
+       LEFT JOIN federation_session_invocation_claims claim
+         ON claim.invocation_ref = audit.invocation_ref
+       LEFT JOIN federation_session_bindings binding
+         ON binding.product = audit.product
+        AND binding.family_ref = audit.family_ref
+        AND binding.person_ref = audit.person_ref
+        AND binding.agent_ref = audit.agent_ref
+        AND binding.local_session_ref = audit.local_session_ref
+       WHERE audit.invocation_ref = ?
+         AND audit.service_ref = ?
+         AND audit.product = ?
+         AND audit.family_ref = ?
+         AND audit.person_ref = ?
+         AND audit.agent_ref = ?
+         AND audit.local_session_ref = ?`
+    ).get(
+      input.invocationRef,
+      input.serviceRef,
+      input.product,
+      input.familyRef,
+      input.personRef,
+      input.agentRef,
+      input.localSessionRef
+    ) as Record<string, unknown> | undefined;
+    if (!row || row.request_sha256 === null) return null;
+    const base: ScopedInvocationStatusBase = {
+      invocationRef: String(row.invocation_ref),
+      correlationRef: String(row.correlation_ref),
+      serviceRef: String(row.service_ref),
+      product: row.product as FederationServiceProduct,
+      familyRef: String(row.family_ref),
+      personRef: String(row.person_ref),
+      agentRef: String(row.agent_ref),
+      localSessionRef: String(row.local_session_ref)
+    };
+    if (row.status === "accepted") {
+      const leaseExpiresAt = String(row.lease_expires_at ?? "");
+      if (!validTimestamp(leaseExpiresAt)) throw new Error("FEDERATION_CLAIM_INVALID");
+      return {
+        ...base,
+        status: "accepted",
+        leaseExpiresAt,
+        retryAfter: Math.max(
+          1,
+          Math.ceil((Date.parse(leaseExpiresAt) - this.now().getTime()) / 1_000)
+        )
+      };
+    }
+    const completedAt = String(row.completed_at ?? "");
+    if (!validTimestamp(completedAt)) throw new Error("FEDERATION_AUDIT_INVALID_TRANSITION");
+    if (row.status === "succeeded") {
+      const externalSessionRef = String(row.bound_external_session_ref ?? "");
+      if (!hasRefPrefix(externalSessionRef, "external-session")) {
+        throw new Error("FEDERATION_SESSION_UNBOUND");
+      }
+      return {
+        ...base,
+        status: "succeeded",
+        externalSessionRef,
+        completedAt,
+        outputAvailable: false
+      };
+    }
+    const errorCode = String(row.error_code ?? "");
+    if (row.status !== "failed" || !SAFE_ERROR_CODE.test(errorCode)) {
+      throw new Error("FEDERATION_AUDIT_INVALID_TRANSITION");
+    }
+    return { ...base, status: "failed", completedAt, errorCode };
   }
 
   getInvocationClaim(invocationRef: string): FederationInvocationClaim | null {

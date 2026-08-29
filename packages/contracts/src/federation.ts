@@ -80,6 +80,7 @@ const correlationRefSchema = refSchema("correlation");
 const agentRefSchema = refSchema("agent");
 const localSessionRefSchema = refSchema("local-session");
 const externalSessionRefSchema = refSchema("external-session");
+const serviceRefSchema = refSchema("service");
 
 export const productIdV1Schema = productIdSchema;
 
@@ -150,3 +151,98 @@ export const agentInvocationResultV1Schema = z
     externalSessionRef: externalSessionRefSchema
   })
   .strict();
+
+const federationAgentListScopeV1Schema = z.object({
+  serviceRef: serviceRefSchema,
+  product: z.enum(["canvas", "me"]),
+  actorContextRef: actorContextRefSchema,
+  familyRef: familyRefSchema,
+  personRef: personRefSchema,
+  assignmentVersion: z.number().int().positive(),
+  contextVersion: z.number().int().positive()
+}).strict();
+
+export const federationAgentListV1Schema = z.object({
+  protocolVersion: protocolVersionSchema,
+  scope: federationAgentListScopeV1Schema,
+  agents: z.array(agentDescriptorV1Schema).max(100)
+}).strict();
+
+const federationInvocationScopeV1Schema = z.object({
+  serviceRef: serviceRefSchema,
+  product: z.enum(["canvas", "me"]),
+  actorContextRef: actorContextRefSchema,
+  familyRef: familyRefSchema,
+  personRef: personRefSchema,
+  agentRef: agentRefSchema,
+  localSessionRef: localSessionRefSchema
+}).strict();
+
+export const federationInvocationResponseV1Schema = z.object({
+  protocolVersion: protocolVersionSchema,
+  scope: federationInvocationScopeV1Schema,
+  correlationRef: correlationRefSchema,
+  result: agentInvocationResultV1Schema
+}).strict().superRefine((value, context) => {
+  if (value.correlationRef !== value.result.correlationRef) {
+    context.addIssue({
+      code: "custom",
+      path: ["correlationRef"],
+      message: "Invocation response correlation scope mismatch"
+    });
+  }
+});
+
+const federationInvocationStatusBaseShape = {
+  protocolVersion: protocolVersionSchema,
+  invocationRef: invocationRefSchema,
+  correlationRef: correlationRefSchema,
+  scope: federationInvocationScopeV1Schema
+};
+
+const federationInvocationAcceptedV1Schema = z.object({
+  ...federationInvocationStatusBaseShape,
+  status: z.literal("accepted"),
+  leaseExpiresAt: timestampSchema,
+  retryAfter: z.number().int().positive()
+}).strict();
+
+const federationInvocationSucceededV1Schema = z.object({
+  ...federationInvocationStatusBaseShape,
+  status: z.literal("succeeded"),
+  externalSessionRef: externalSessionRefSchema,
+  completedAt: timestampSchema,
+  outputAvailable: z.literal(false)
+}).strict();
+
+const federationInvocationFailedV1Schema = z.object({
+  ...federationInvocationStatusBaseShape,
+  status: z.literal("failed"),
+  completedAt: timestampSchema,
+  errorCode: z.string().regex(/^[A-Z][A-Z0-9_]{2,63}$/)
+}).strict();
+
+export const federationInvocationStatusV1Schema = z.discriminatedUnion(
+  "status",
+  [
+    federationInvocationAcceptedV1Schema,
+    federationInvocationSucceededV1Schema,
+    federationInvocationFailedV1Schema
+  ]
+);
+
+export const federationInvocationPostResponseV1Schema = z.union([
+  federationInvocationResponseV1Schema,
+  federationInvocationStatusV1Schema
+]);
+
+export type FederationAgentListV1 = z.infer<typeof federationAgentListV1Schema>;
+export type FederationInvocationResponseV1 = z.infer<
+  typeof federationInvocationResponseV1Schema
+>;
+export type FederationInvocationStatusV1 = z.infer<
+  typeof federationInvocationStatusV1Schema
+>;
+export type FederationInvocationPostResponseV1 = z.infer<
+  typeof federationInvocationPostResponseV1Schema
+>;

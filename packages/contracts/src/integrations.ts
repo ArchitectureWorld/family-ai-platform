@@ -72,7 +72,8 @@ export const assetRefSchema = z
 
 export const familyWorkToCanvasSchema = z
   .object({
-    schemaVersion: z.literal("family-work-to-canvas/1.0"),
+    schemaVersion: z.literal("family-work-to-canvas/1.1"),
+    agentRef: z.string().regex(refPattern("agent")),
     sourceWork: resourceRefSchema,
     title: z.string().trim().min(1).max(160),
     goal: z.string().trim().min(1).max(4000),

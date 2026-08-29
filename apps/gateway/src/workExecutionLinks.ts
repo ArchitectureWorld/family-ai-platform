@@ -213,7 +213,8 @@ export class WorkExecutionLinkService {
       })
     );
     const packagePayload = familyWorkToCanvasSchema.parse({
-      schemaVersion: "family-work-to-canvas/1.0",
+      schemaVersion: "family-work-to-canvas/1.1",
+      agentRef: input.agentRef,
       sourceWork: {
         schemaVersion: "resource-ref/1.0",
         system: "family-ai",

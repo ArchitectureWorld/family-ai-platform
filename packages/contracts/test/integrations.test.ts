@@ -47,7 +47,8 @@ describe("ecosystem integration contracts", () => {
 
   it("validates the thin Family Work to Canvas package", () => {
     const payload = {
-      schemaVersion: "family-work-to-canvas/1.0",
+      schemaVersion: "family-work-to-canvas/1.1",
+      agentRef: "agent:hermes-zzh",
       sourceWork: resource("family-ai", "work", "work:one"),
       title: "照明工作",
       goal: "完成照明方案",
@@ -62,6 +63,12 @@ describe("ecosystem integration contracts", () => {
       ...payload,
       messages: [{ content: "full history must not cross" }]
     })).toThrow();
+    expect(() => familyWorkToCanvasSchema.parse({
+      ...payload,
+      agentRef: "agent:other"
+    })).not.toThrow();
+    const { agentRef: _agentRef, ...withoutAgent } = payload;
+    expect(() => familyWorkToCanvasSchema.parse(withoutAgent)).toThrow();
   });
 
   it("separates the browser command from server-owned Work fields", () => {

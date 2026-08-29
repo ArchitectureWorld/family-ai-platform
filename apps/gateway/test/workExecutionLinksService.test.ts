@@ -105,6 +105,8 @@ describe("WorkExecutionLinkService", () => {
     expect(request.actor.principal.id).toBe(personRef);
     expect(request.actor.scopes).toEqual(["canvas:session:write"]);
     expect(request.work).toMatchObject({
+      schemaVersion: "family-work-to-canvas/1.1",
+      agentRef: "agent:personal-assistant",
       sourceWork: { id: workRef },
       title: "照明工作",
       goal: "完成照明方案",

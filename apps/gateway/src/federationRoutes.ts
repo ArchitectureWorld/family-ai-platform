@@ -1,6 +1,8 @@
 import {
   agentInvocationRequestV1Schema,
-  agentInvocationResultV1Schema
+  federationAgentListV1Schema,
+  federationInvocationPostResponseV1Schema,
+  federationInvocationStatusV1Schema
 } from "@family-ai/contracts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
@@ -16,6 +18,30 @@ function bearerToken(request: FastifyRequest): string | null {
   if (!authorization?.startsWith("Bearer ")) return null;
   const token = authorization.slice("Bearer ".length).trim();
   return token || null;
+}
+
+function scopedRefHeader(
+  request: FastifyRequest,
+  name: string,
+  prefix: string
+): string {
+  const value = request.headers[name];
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value !== value.trim() ||
+    value.includes(",") ||
+    !new RegExp(`^${prefix}:[a-z0-9][a-z0-9._:-]{1,126}$`).test(value)
+  ) {
+    throw new GatewayDomainError(
+      "FEDERATION_REQUEST_INVALID",
+      400,
+      "validation",
+      false,
+      "Agent 请求格式不正确。"
+    );
+  }
+  return value;
 }
 
 function displayNameHeader(value: string): string {
@@ -127,11 +153,15 @@ export function registerFederationRoutes(
   });
 
   app.get("/api/v1/federation/agents", async (request) => {
-    const actor = issueBrowserActor(request);
-    return {
-      protocolVersion: 1,
-      agents: await input.service.listAgents(actor)
-    };
+    const service = authenticateService(request);
+    const contextRef = scopedRefHeader(
+      request,
+      "x-family-ai-context-ref",
+      "actor-context"
+    );
+    return federationAgentListV1Schema.parse(
+      await input.service.listAgents(service, contextRef)
+    );
   });
 
   app.post("/api/v1/federation/invocations", async (request) => {
@@ -147,7 +177,7 @@ export function registerFederationRoutes(
       );
     }
     const { externalSessionRef, ...requiredRequest } = parsed.data;
-    return agentInvocationResultV1Schema.parse(
+    return federationInvocationPostResponseV1Schema.parse(
       await input.service.invoke(
         service,
         externalSessionRef === undefined
@@ -156,4 +186,41 @@ export function registerFederationRoutes(
       )
     );
   });
+
+  app.get<{ Params: { invocationRef: string } }>(
+    "/api/v1/federation/invocations/:invocationRef",
+    async (request) => {
+      const service = authenticateService(request);
+      const invocationRef = request.params.invocationRef;
+      if (!/^invocation:[a-z0-9][a-z0-9._:-]{1,126}$/.test(invocationRef)) {
+        throw new GatewayDomainError(
+          "FEDERATION_REQUEST_INVALID",
+          400,
+          "validation",
+          false,
+          "Agent 请求格式不正确。"
+        );
+      }
+      return federationInvocationStatusV1Schema.parse(
+        input.service.getInvocationStatus(service, {
+          invocationRef,
+          contextRef: scopedRefHeader(
+            request,
+            "x-family-ai-context-ref",
+            "actor-context"
+          ),
+          agentRef: scopedRefHeader(
+            request,
+            "x-family-ai-agent-ref",
+            "agent"
+          ),
+          localSessionRef: scopedRefHeader(
+            request,
+            "x-family-ai-local-session-ref",
+            "local-session"
+          )
+        })
+      );
+    }
+  );
 }

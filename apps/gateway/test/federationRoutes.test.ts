@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  agentInvocationResultV1Schema,
+  federationAgentListV1Schema,
+  federationInvocationResponseV1Schema,
+  federationInvocationStatusV1Schema,
   type AgentInvocationRequestV1
 } from "@family-ai/contracts";
 import {
@@ -69,6 +71,17 @@ function serviceHeaders(token: string, entry?: Entry): Record<string, string> {
     authorization: `Bearer ${token}`,
     ...(entry === undefined ? {} : { cookie: cookie(entry) })
   };
+}
+
+function actorHeaders(token: string, contextRef: string): Record<string, string> {
+  return {
+    ...serviceHeaders(token),
+    "x-family-ai-context-ref": contextRef
+  };
+}
+
+function liveResult(response: { json(): unknown }) {
+  return federationInvocationResponseV1Schema.parse(response.json()).result;
 }
 
 function invocation(input: Partial<AgentInvocationRequestV1> = {}): AgentInvocationRequestV1 {
@@ -387,21 +400,42 @@ describe("Family federation routes", () => {
         })
       });
       expect(response.statusCode).toBe(200);
-      expect(agentInvocationResultV1Schema.parse(response.json())).toMatchObject({
+      expect(federationInvocationResponseV1Schema.parse(response.json())).toMatchObject({
+        scope: {
+          serviceRef: `service:${product}`,
+          product,
+          actorContextRef: contextRef,
+          familyRef,
+          personRef: ownerPersonRef,
+          agentRef,
+          localSessionRef: `local-session:${product}-success`
+        },
+        correlationRef: `correlation:${product}-success`,
+        result: {
         invocationRef: `invocation:${product}-success`,
         status: "succeeded"
+        }
       });
     }
   });
 
   it("lists only Jarvis for admins and exact active mounts for members", async () => {
+    const adminContext = await actorRef("canvas", admin);
     const adminList = await app.inject({
       method: "GET",
       url: "/api/v1/federation/agents",
-      headers: serviceHeaders(CANVAS_TOKEN, admin)
+      headers: actorHeaders(CANVAS_TOKEN, adminContext)
     });
     expect(adminList.statusCode).toBe(200);
-    expect((adminList.json() as { agents: Array<{ agentRef: string }> }).agents.map(
+    const parsedAdmin = federationAgentListV1Schema.parse(adminList.json());
+    expect(parsedAdmin.scope).toMatchObject({
+      serviceRef: "service:canvas",
+      product: "canvas",
+      actorContextRef: adminContext,
+      familyRef,
+      personRef: ownerPersonRef
+    });
+    expect(parsedAdmin.agents.map(
       (agent) => agent.agentRef
     )).toEqual([
       "agent:hermes-jarvis",
@@ -410,15 +444,136 @@ describe("Family federation routes", () => {
     ]);
     expect(adminList.body).not.toMatch(/provider-profile|\/home\/|service-token|assignment:/i);
 
+    const memberContext = await actorRef("me", member);
     const memberList = await app.inject({
       method: "GET",
       url: "/api/v1/federation/agents",
-      headers: serviceHeaders(ME_TOKEN, member)
+      headers: actorHeaders(ME_TOKEN, memberContext)
     });
     expect(memberList.statusCode).toBe(200);
-    expect((memberList.json() as { agents: Array<{ agentRef: string }> }).agents.map(
+    expect(federationAgentListV1Schema.parse(memberList.json()).agents.map(
       (agent) => agent.agentRef
     )).toEqual(["agent:hermes-nsy"]);
+
+    for (const headers of [
+      serviceHeaders(CANVAS_TOKEN),
+      actorHeaders(CANVAS_TOKEN, `${adminContext},actor-context:folded`),
+      actorHeaders(ME_TOKEN, adminContext)
+    ]) {
+      const denied = await app.inject({
+        method: "GET",
+        url: "/api/v1/federation/agents",
+        headers
+      });
+      expect(denied.statusCode).toBeGreaterThanOrEqual(400);
+    }
+  });
+
+  it("returns full-scope accepted succeeded and failed recovery without output", async () => {
+    const contextRef = await actorRef("canvas", admin);
+    const headers = (agentRef: string, localSessionRef: string) => ({
+      ...actorHeaders(CANVAS_TOKEN, contextRef),
+      "x-family-ai-agent-ref": agentRef,
+      "x-family-ai-local-session-ref": localSessionRef
+    });
+    brokerDelayMs = 400;
+    const acceptedPayload = invocation({
+      invocationRef: "invocation:recovery-accepted",
+      correlationRef: "correlation:recovery-accepted",
+      actorContextRef: contextRef,
+      localSessionRef: "local-session:recovery-accepted"
+    });
+    const pending = app.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload: acceptedPayload
+    });
+    await expect.poll(() => brokerCalls).toBeGreaterThan(0);
+    const accepted = await app.inject({
+      method: "GET",
+      url: `/api/v1/federation/invocations/${acceptedPayload.invocationRef}`,
+      headers: headers(acceptedPayload.agentRef, acceptedPayload.localSessionRef)
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(federationInvocationStatusV1Schema.parse(accepted.json())).toMatchObject({
+      status: "accepted",
+      invocationRef: acceptedPayload.invocationRef,
+      correlationRef: acceptedPayload.correlationRef,
+      retryAfter: 32,
+      scope: {
+        serviceRef: "service:canvas",
+        product: "canvas",
+        actorContextRef: contextRef,
+        familyRef,
+        personRef: ownerPersonRef,
+        agentRef: acceptedPayload.agentRef,
+        localSessionRef: acceptedPayload.localSessionRef
+      }
+    });
+    expect((await pending).statusCode).toBe(200);
+
+    const succeeded = await app.inject({
+      method: "GET",
+      url: `/api/v1/federation/invocations/${acceptedPayload.invocationRef}`,
+      headers: headers(acceptedPayload.agentRef, acceptedPayload.localSessionRef)
+    });
+    expect(succeeded.statusCode).toBe(200);
+    const succeededBody = federationInvocationStatusV1Schema.parse(succeeded.json());
+    expect(succeededBody).toMatchObject({
+      status: "succeeded",
+      invocationRef: acceptedPayload.invocationRef,
+      outputAvailable: false
+    });
+    expect(JSON.stringify(succeededBody)).not.toContain(PRIVATE_OUTPUT);
+
+    brokerFailure = true;
+    const failedPayload = invocation({
+      invocationRef: "invocation:recovery-failed",
+      correlationRef: "correlation:recovery-failed",
+      actorContextRef: contextRef,
+      localSessionRef: "local-session:recovery-failed"
+    });
+    const failedPost = await app.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload: failedPayload
+    });
+    expect(failedPost.statusCode).toBeGreaterThanOrEqual(400);
+    const failed = await app.inject({
+      method: "GET",
+      url: `/api/v1/federation/invocations/${failedPayload.invocationRef}`,
+      headers: headers(failedPayload.agentRef, failedPayload.localSessionRef)
+    });
+    expect(failed.statusCode).toBe(200);
+    expect(federationInvocationStatusV1Schema.parse(failed.json())).toMatchObject({
+      status: "failed",
+      errorCode: "AGENT_RUNTIME_UNAVAILABLE"
+    });
+
+    for (const deniedHeaders of [
+      headers("agent:hermes-nsy", acceptedPayload.localSessionRef),
+      headers(acceptedPayload.agentRef, "local-session:recovery-other")
+    ]) {
+      const denied = await app.inject({
+        method: "GET",
+        url: `/api/v1/federation/invocations/${acceptedPayload.invocationRef}`,
+        headers: deniedHeaders
+      });
+      expect(denied.statusCode).toBe(404);
+    }
+    const memberContext = await actorRef("canvas", member);
+    const crossPerson = await app.inject({
+      method: "GET",
+      url: `/api/v1/federation/invocations/${acceptedPayload.invocationRef}`,
+      headers: {
+        ...actorHeaders(CANVAS_TOKEN, memberContext),
+        "x-family-ai-agent-ref": acceptedPayload.agentRef,
+        "x-family-ai-local-session-ref": acceptedPayload.localSessionRef
+      }
+    });
+    expect(crossPerson.statusCode).toBe(404);
   });
 
   it("allows Jarvis only for family_admin and personal Agents only with an active exact mount", async () => {
@@ -437,7 +592,7 @@ describe("Family federation routes", () => {
       })
     });
     expect(adminJarvis.statusCode).toBe(200);
-    expect(agentInvocationResultV1Schema.parse(adminJarvis.json()).status).toBe("succeeded");
+    expect(liveResult(adminJarvis).status).toBe("succeeded");
 
     const beforeDenied = brokerCalls;
     const memberJarvis = await app.inject({
@@ -514,7 +669,7 @@ describe("Family federation routes", () => {
       payload: invocation({ actorContextRef: canvasContext })
     });
     expect(first.statusCode).toBe(200);
-    const externalSessionRef = agentInvocationResultV1Schema.parse(first.json()).externalSessionRef;
+    const externalSessionRef = liveResult(first).externalSessionRef;
 
     const continued = await app.inject({
       method: "POST",
@@ -528,7 +683,7 @@ describe("Family federation routes", () => {
       })
     });
     expect(continued.statusCode).toBe(200);
-    expect(agentInvocationResultV1Schema.parse(continued.json()).externalSessionRef)
+    expect(liveResult(continued).externalSessionRef)
       .toBe(externalSessionRef);
 
     const cases: Array<{
@@ -620,7 +775,7 @@ describe("Family federation routes", () => {
     }
   });
 
-  it("uses a durable claim to stop a second Gateway instance before Broker", async () => {
+  it("returns accepted for the same ref/hash from a second Gateway without another Broker call", async () => {
     secondApp = await buildGatewayApp({
       databasePath,
       deviceToken: DEVICE_TOKEN,
@@ -645,32 +800,61 @@ describe("Family federation routes", () => {
     const contextRef = await actorRef("canvas", admin);
     brokerDelayMs = 500;
     const before = brokerCalls;
+    const payload = invocation({
+      invocationRef: "invocation:gateway-same",
+      correlationRef: "correlation:gateway-same",
+      actorContextRef: contextRef,
+      localSessionRef: "local-session:cross-gateway"
+    });
     const first = app.inject({
       method: "POST",
       url: "/api/v1/federation/invocations",
       headers: serviceHeaders(CANVAS_TOKEN),
-      payload: invocation({
-        invocationRef: "invocation:gateway-one",
-        correlationRef: "correlation:gateway-one",
-        actorContextRef: contextRef,
-        localSessionRef: "local-session:cross-gateway"
-      })
+      payload
     });
     await expect.poll(() => brokerCalls).toBe(before + 1);
     const second = await secondApp.inject({
       method: "POST",
       url: "/api/v1/federation/invocations",
       headers: serviceHeaders(CANVAS_TOKEN),
-      payload: invocation({
-        invocationRef: "invocation:gateway-two",
-        correlationRef: "correlation:gateway-two",
-        actorContextRef: contextRef,
-        localSessionRef: "local-session:cross-gateway"
-      })
+      payload
     });
-    expect(second.statusCode).toBe(409);
+    expect(second.statusCode).toBe(200);
+    expect(federationInvocationStatusV1Schema.parse(second.json())).toMatchObject({
+      status: "accepted",
+      invocationRef: payload.invocationRef,
+      correlationRef: payload.correlationRef,
+      scope: {
+        serviceRef: "service:canvas",
+        product: "canvas",
+        actorContextRef: contextRef,
+        familyRef,
+        personRef: ownerPersonRef,
+        agentRef: payload.agentRef,
+        localSessionRef: payload.localSessionRef
+      }
+    });
     expect(brokerCalls).toBe(before + 1);
     expect((await first).statusCode).toBe(200);
+    const completedBefore = brokerCalls;
+    const completedReplay = await secondApp.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload
+    });
+    expect(completedReplay.statusCode, completedReplay.body).toBe(200);
+    expect(federationInvocationStatusV1Schema.parse(completedReplay.json()).status)
+      .toBe("succeeded");
+    expect(brokerCalls).toBe(completedBefore);
+    const drift = await secondApp.inject({
+      method: "POST",
+      url: "/api/v1/federation/invocations",
+      headers: serviceHeaders(CANVAS_TOKEN),
+      payload: { ...payload, prompt: `${payload.prompt} drift` }
+    });
+    expect(drift.statusCode).toBe(409);
+    expect(brokerCalls).toBe(completedBefore);
   });
 
   it("rechecks service activity after claim and releases the failed audit before Broker", async () => {
@@ -730,9 +914,7 @@ describe("Family federation routes", () => {
       })
     });
     expect(initial.statusCode).toBe(200);
-    const externalSessionRef = agentInvocationResultV1Schema.parse(
-      initial.json()
-    ).externalSessionRef;
+    const externalSessionRef = liveResult(initial).externalSessionRef;
     brokerDelayMs = 400;
     const before = brokerCalls;
     const first = app.inject({
@@ -889,13 +1071,16 @@ describe("Family federation routes", () => {
     expect(brokerCalls - before).toBe(1);
 
     const duplicateBefore = brokerCalls;
+    const completedSuffix = left.statusCode === 200 ? "left" : "right";
     const duplicate = await app.inject({
       method: "POST",
       url: "/api/v1/federation/invocations",
       headers: serviceHeaders(CANVAS_TOKEN),
-      payload: payload("left")
+      payload: payload(completedSuffix)
     });
-    expect(duplicate.statusCode).toBeGreaterThanOrEqual(400);
+    expect(duplicate.statusCode).toBe(200);
+    expect(federationInvocationStatusV1Schema.parse(duplicate.json()).status)
+      .toBe("succeeded");
     expect(brokerCalls).toBe(duplicateBefore);
 
     const persisted = [

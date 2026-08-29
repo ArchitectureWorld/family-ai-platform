@@ -1072,6 +1072,73 @@ DROP TABLE federation_actor_contexts;
 ALTER TABLE federation_actor_contexts_v13 RENAME TO federation_actor_contexts;
 `;
 
+const MIGRATION_V14 = `
+CREATE TABLE agent_invocation_audit_v14 (
+  invocation_ref TEXT PRIMARY KEY,
+  correlation_ref TEXT NOT NULL,
+  product TEXT NOT NULL,
+  person_ref TEXT NOT NULL,
+  agent_ref TEXT NOT NULL,
+  local_session_ref TEXT NOT NULL,
+  request_sha256 TEXT,
+  service_ref TEXT,
+  family_ref TEXT,
+  actor_context_ref TEXT,
+  requested_external_session_ref TEXT,
+  timeout_ms INTEGER,
+  status TEXT NOT NULL CHECK(status IN ('accepted', 'succeeded', 'failed')),
+  error_code TEXT,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  CHECK (
+    (
+      request_sha256 IS NULL
+      AND service_ref IS NULL
+      AND family_ref IS NULL
+      AND actor_context_ref IS NULL
+      AND requested_external_session_ref IS NULL
+      AND timeout_ms IS NULL
+    )
+    OR
+    (
+      request_sha256 IS NOT NULL
+      AND length(request_sha256) = 64
+      AND request_sha256 NOT GLOB '*[^0-9a-f]*'
+      AND service_ref IS NOT NULL
+      AND family_ref IS NOT NULL
+      AND actor_context_ref IS NOT NULL
+      AND timeout_ms BETWEEN 1000 AND 300000
+      AND (requested_external_session_ref IS NULL
+        OR requested_external_session_ref GLOB 'external-session:*')
+    )
+  ),
+  CHECK (
+    (status = 'accepted' AND error_code IS NULL AND completed_at IS NULL)
+    OR (status = 'succeeded' AND error_code IS NULL AND completed_at IS NOT NULL)
+    OR (status = 'failed' AND error_code IS NOT NULL AND completed_at IS NOT NULL)
+  )
+);
+
+INSERT INTO agent_invocation_audit_v14(
+  invocation_ref, correlation_ref, product, person_ref, agent_ref,
+  local_session_ref, request_sha256, service_ref, family_ref,
+  actor_context_ref, requested_external_session_ref, timeout_ms,
+  status, error_code, started_at, completed_at
+)
+SELECT invocation_ref, correlation_ref, product, person_ref, agent_ref,
+       local_session_ref, NULL, NULL, NULL, NULL, NULL, NULL,
+       status, error_code, started_at, completed_at
+FROM agent_invocation_audit;
+
+DROP TABLE agent_invocation_audit;
+ALTER TABLE agent_invocation_audit_v14 RENAME TO agent_invocation_audit;
+
+CREATE INDEX agent_invocation_audit_scope_idx ON agent_invocation_audit(
+  service_ref, product, family_ref, person_ref, agent_ref, local_session_ref,
+  invocation_ref
+);
+`;
+
 function applyMigrationV8(db: GatewayDatabase): void {
   db.pragma("foreign_keys = OFF");
   try {
@@ -1144,6 +1211,24 @@ function applyMigrationV13(db: GatewayDatabase): void {
   })();
 }
 
+function applyMigrationV14(db: GatewayDatabase): void {
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(MIGRATION_V14);
+      db.prepare(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES(14, ?)"
+      ).run(new Date().toISOString());
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  const violations = db.pragma("foreign_key_check") as unknown[];
+  if (violations.length > 0) {
+    throw new Error("Gateway V14 migration produced foreign key violations");
+  }
+}
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -1153,7 +1238,7 @@ function latestMigrationVersion(db: GatewayDatabase): number {
 
 function applyMigrations(
   db: GatewayDatabase,
-  migrationLimit: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13
+  migrationLimit: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14
 ): void {
   const ledgerExists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
@@ -1244,13 +1329,17 @@ function applyMigrations(
     applyMigrationV13(db);
     latest = 13;
   }
+  if (latest === 13 && migrationLimit >= 14) {
+    applyMigrationV14(db);
+    latest = 14;
+  }
   if (latest !== migrationLimit) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
 
 export interface GatewayDatabaseOpenOptions {
-  migrationLimit?: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
+  migrationLimit?: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
 }
 
 export function openGatewayDatabase(
@@ -1262,7 +1351,7 @@ export function openGatewayDatabase(
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
-  applyMigrations(db, options.migrationLimit ?? 13);
+  applyMigrations(db, options.migrationLimit ?? 14);
   return db;
 }
 

@@ -18,6 +18,7 @@ const SENSITIVE_VALUES = [
 
 describe("FederationRepository", () => {
   let directory = "";
+  let databasePath = "";
   let db: GatewayDatabase;
   let repository: FederationRepository;
   let now: Date;
@@ -29,7 +30,8 @@ describe("FederationRepository", () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-federation-repository-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    databasePath = join(directory, "gateway.sqlite");
+    db = openGatewayDatabase(databasePath);
     const onboarding = new FamilyDomainRepository(db).initializeFamily({
       familyName: "联邦测试家庭",
       ownerName: "联邦测试成员",
@@ -450,8 +452,10 @@ describe("FederationRepository", () => {
     repository.claimInvocation({
       ...key,
       serviceRef: "service:canvas",
+      actorContextRef: "actor-context:bind-first",
       invocationRef: "invocation:bind-first",
       correlationRef: "correlation:bind-first",
+      requestSha256: "65a7b2b705e7f01121080c12e2b8a708aece031fab917f696b2d4697c926df83",
       timeoutMs: 2_000
     });
     repository.finalizeInvocationSuccess({
@@ -489,27 +493,202 @@ describe("FederationRepository", () => {
     })).toThrow("FEDERATION_SESSION_UNBOUND");
   });
 
-  it("claims one durable session invocation and recovers only after deadline plus grace", () => {
+  it("acquires one full-scope invocation and returns same-ref state without a second claim", () => {
     repository.provisionService({
       serviceRef: "service:canvas",
       product: "canvas",
       token: SENSITIVE_VALUES[0]
+    });
+    const actor = repository.issueActorContext({
+      product: "canvas",
+      entrySessionRef,
+      lifetimeSeconds: 60
+    });
+    const input = {
+      serviceRef: "service:canvas",
+      product: "canvas" as const,
+      familyRef,
+      personRef,
+      actorContextRef: actor.contextRef,
+      agentRef: "agent:personal-assistant",
+      localSessionRef: "local-session:same-ref",
+      invocationRef: "invocation:same-ref",
+      correlationRef: "correlation:same-ref",
+      requestSha256: "15a7b2b705e7f01121080c12e2b8a708aece031fab917f696b2d4697c926df83",
+      timeoutMs: 2_000
+    };
+
+    expect(repository.claimInvocation(input)).toMatchObject({
+      kind: "acquired",
+      claim: { invocationRef: input.invocationRef }
+    });
+    const secondDb = openGatewayDatabase(databasePath);
+    try {
+      const second = new FederationRepository(secondDb, { now: () => now });
+      expect(second.claimInvocation(input)).toMatchObject({
+        kind: "accepted",
+        status: {
+          invocationRef: input.invocationRef,
+          correlationRef: input.correlationRef,
+          serviceRef: input.serviceRef,
+          product: input.product,
+          familyRef,
+          personRef,
+          agentRef: input.agentRef,
+          localSessionRef: input.localSessionRef,
+          leaseExpiresAt: new Date(now.getTime() + 32_000).toISOString()
+        }
+      });
+      expect(() => second.claimInvocation({
+        ...input,
+        requestSha256: "25a7b2b705e7f01121080c12e2b8a708aece031fab917f696b2d4697c926df83"
+      })).toThrow("FEDERATION_INVOCATION_DUPLICATE");
+      expect(() => second.claimInvocation({
+        ...input,
+        correlationRef: "correlation:same-ref-drift"
+      })).toThrow("FEDERATION_INVOCATION_DUPLICATE");
+    } finally {
+      secondDb.close();
+    }
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM agent_invocation_audit WHERE invocation_ref = ?"
+    ).get(input.invocationRef)).toEqual({ count: 1 });
+  });
+
+  it("returns exact succeeded and failed status only for the stored full scope", () => {
+    repository.provisionService({
+      serviceRef: "service:canvas",
+      product: "canvas",
+      token: SENSITIVE_VALUES[0]
+    });
+    const actor = repository.issueActorContext({
+      product: "canvas",
+      entrySessionRef,
+      lifetimeSeconds: 60
+    });
+    const base = {
+      serviceRef: "service:canvas",
+      product: "canvas" as const,
+      familyRef,
+      personRef,
+      actorContextRef: actor.contextRef,
+      agentRef: "agent:personal-assistant",
+      localSessionRef: "local-session:status-scope",
+      invocationRef: "invocation:status-success",
+      correlationRef: "correlation:status-success",
+      requestSha256: "35a7b2b705e7f01121080c12e2b8a708aece031fab917f696b2d4697c926df83",
+      timeoutMs: 2_000
+    };
+    repository.claimInvocation(base);
+    now = new Date(now.getTime() + 1_000);
+    repository.finalizeInvocationSuccess({
+      invocationRef: base.invocationRef,
+      externalSessionRef: "external-session:status-success"
+    });
+    expect(repository.getScopedInvocationStatus(base)).toMatchObject({
+      status: "succeeded",
+      invocationRef: base.invocationRef,
+      externalSessionRef: "external-session:status-success",
+      completedAt: now.toISOString()
+    });
+    for (const drift of [
+      { personRef: "person:other-status" },
+      { agentRef: "agent:hermes-nsy" },
+      { localSessionRef: "local-session:other-status" }
+    ]) {
+      expect(repository.getScopedInvocationStatus({ ...base, ...drift })).toBeNull();
+    }
+
+    const failure = {
+      ...base,
+      localSessionRef: "local-session:status-failed",
+      invocationRef: "invocation:status-failed",
+      correlationRef: "correlation:status-failed",
+      requestSha256: "45a7b2b705e7f01121080c12e2b8a708aece031fab917f696b2d4697c926df83"
+    };
+    repository.claimInvocation(failure);
+    now = new Date(now.getTime() + 1_000);
+    repository.finalizeInvocationFailure({
+      invocationRef: failure.invocationRef,
+      errorCode: "AGENT_RUNTIME_UNAVAILABLE"
+    });
+    expect(repository.getScopedInvocationStatus(failure)).toMatchObject({
+      status: "failed",
+      errorCode: "AGENT_RUNTIME_UNAVAILABLE",
+      completedAt: now.toISOString()
+    });
+  });
+
+  it("keeps legacy unscoped invocation audits historical and non-replayable", () => {
+    repository.provisionService({
+      serviceRef: "service:canvas",
+      product: "canvas",
+      token: SENSITIVE_VALUES[0]
+    });
+    db.prepare(
+      `INSERT INTO agent_invocation_audit(
+         invocation_ref, correlation_ref, product, person_ref, agent_ref,
+         local_session_ref, status, error_code, started_at, completed_at
+       ) VALUES(?, ?, 'canvas', ?, 'agent:personal-assistant', ?,
+                'failed', 'AGENT_RUNTIME_UNAVAILABLE', ?, ?)`
+    ).run(
+      "invocation:legacy-unscoped",
+      "correlation:legacy-unscoped",
+      personRef,
+      "local-session:legacy-unscoped",
+      now.toISOString(),
+      now.toISOString()
+    );
+    const input = {
+      serviceRef: "service:canvas",
+      product: "canvas" as const,
+      familyRef,
+      personRef,
+      actorContextRef: "actor-context:legacy-retry",
+      agentRef: "agent:personal-assistant",
+      localSessionRef: "local-session:legacy-unscoped",
+      invocationRef: "invocation:legacy-unscoped",
+      correlationRef: "correlation:legacy-unscoped",
+      requestSha256: "a5a7b2b705e7f01121080c12e2b8a708aece031fab917f696b2d4697c926df83",
+      timeoutMs: 2_000
+    };
+    expect(repository.getScopedInvocationStatus(input)).toBeNull();
+    expect(() => repository.claimInvocation(input)).toThrow(
+      "FEDERATION_INVOCATION_DUPLICATE"
+    );
+  });
+
+  it("keeps an accepted invocation exclusive after lease expiry without reclaiming the session", () => {
+    repository.provisionService({
+      serviceRef: "service:canvas",
+      product: "canvas",
+      token: SENSITIVE_VALUES[0]
+    });
+    const actor = repository.issueActorContext({
+      product: "canvas",
+      entrySessionRef,
+      lifetimeSeconds: 60
     });
     const claim = (invocationRef: string) => repository.claimInvocation({
       serviceRef: "service:canvas",
       product: "canvas",
       familyRef,
       personRef,
+      actorContextRef: actor.contextRef,
       agentRef: "agent:personal-assistant",
       localSessionRef: "local-session:durable-claim",
       invocationRef,
       correlationRef: `correlation:${invocationRef.split(":")[1]}`,
+      requestSha256: "55a7b2b705e7f01121080c12e2b8a708aece031fab917f696b2d4697c926df83",
       timeoutMs: 1_000
     });
 
     expect(claim("invocation:lease-first")).toMatchObject({
-      invocationRef: "invocation:lease-first",
-      leaseExpiresAt: new Date(now.getTime() + 31_000).toISOString()
+      kind: "acquired",
+      claim: {
+        invocationRef: "invocation:lease-first",
+        leaseExpiresAt: new Date(now.getTime() + 31_000).toISOString()
+      }
     });
     now = new Date(now.getTime() + 30_999);
     expect(() => claim("invocation:lease-too-early")).toThrow(
@@ -523,12 +702,16 @@ describe("FederationRepository", () => {
       "FEDERATION_INVOCATION_BUSY"
     );
     now = new Date(now.getTime() + 1);
-    expect(claim("invocation:lease-recovered")).toMatchObject({
-      invocationRef: "invocation:lease-recovered"
+    expect(() => claim("invocation:lease-still-blocked")).toThrow(
+      "FEDERATION_INVOCATION_BUSY"
+    );
+    expect(claim("invocation:lease-first")).toMatchObject({
+      kind: "accepted",
+      status: { invocationRef: "invocation:lease-first" }
     });
     expect(repository.getInvocationAudit("invocation:lease-first")).toMatchObject({
-      status: "failed",
-      errorCode: "AGENT_INVOCATION_ABANDONED"
+      status: "accepted",
+      errorCode: null
     });
   });
 
@@ -543,10 +726,12 @@ describe("FederationRepository", () => {
       product: "me" as const,
       familyRef,
       personRef,
+      actorContextRef: "actor-context:atomic-finalize",
       agentRef: "agent:personal-assistant",
       localSessionRef: "local-session:atomic-finalize",
       invocationRef: "invocation:atomic-finalize",
       correlationRef: "correlation:atomic-finalize",
+      requestSha256: "75a7b2b705e7f01121080c12e2b8a708aece031fab917f696b2d4697c926df83",
       timeoutMs: 2_000
     };
     repository.claimInvocation(claimInput);
@@ -585,7 +770,8 @@ describe("FederationRepository", () => {
       ...claimInput,
       localSessionRef: "local-session:atomic-failure",
       invocationRef: "invocation:atomic-failure",
-      correlationRef: "correlation:atomic-failure"
+      correlationRef: "correlation:atomic-failure",
+      requestSha256: "85a7b2b705e7f01121080c12e2b8a708aece031fab917f696b2d4697c926df83"
     });
     repository.finalizeInvocationFailure({
       invocationRef: "invocation:atomic-failure",
@@ -607,10 +793,12 @@ describe("FederationRepository", () => {
       product: "me",
       familyRef,
       personRef,
+      actorContextRef: "actor-context:sensitive-v14",
       agentRef: "agent:personal-assistant",
       localSessionRef: "local-session:me-safe",
       invocationRef: "invocation:sensitive-v12",
       correlationRef: "correlation:sensitive-v12",
+      requestSha256: "95a7b2b705e7f01121080c12e2b8a708aece031fab917f696b2d4697c926df83",
       timeoutMs: 2_000,
       prompt: SENSITIVE_VALUES[1],
       output: SENSITIVE_VALUES[2],
