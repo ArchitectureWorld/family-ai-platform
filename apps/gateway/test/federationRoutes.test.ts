@@ -352,7 +352,17 @@ describe("Family federation routes", () => {
       expect(response.headers["x-family-ai-family-ref"]).toBe(familyRef);
       expect(response.headers["x-family-ai-roles"]).toBe("owner,family_admin");
       expect(response.headers["x-family-ai-context-ref"]).toMatch(/^actor-context:/);
+      expect(response.headers["x-family-ai-person-display-name-b64"])
+        .toBe("566h55CG5ZGY");
+      expect(response.headers["x-family-ai-family-display-name-b64"])
+        .toBe("6IGU6YKm5rWL6K-V5a625bqt");
+      expect(response.headers["x-family-ai-context-version"]).toBe("1");
+      expect(response.headers["x-family-ai-person-display-name-b64"])
+        .toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(response.headers["x-family-ai-family-display-name-b64"])
+        .toMatch(/^[A-Za-z0-9_-]+$/);
       const serialized = JSON.stringify(response.headers);
+      expect(serialized).not.toMatch(/管理员|联邦测试家庭|\r|\n/);
       expect(serialized).not.toMatch(/entry-token|service-token|provider-profile|hermes-home/i);
     }
   });

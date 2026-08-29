@@ -17,8 +17,11 @@ const actor = {
   personRef: "person:demo",
   deviceRef: "device:demo",
   entrySessionRef: "entry-session:demo",
+  personDisplayName: "管理员",
+  familyDisplayName: "演示家庭",
   roles: ["family_admin"],
   assignmentVersion: 7,
+  contextVersion: 3,
   expiresAt: "2030-01-01T00:01:00.000Z"
 };
 
@@ -107,6 +110,20 @@ describe("Family federation and Agent invocation contracts v1", () => {
         expiresAt: "2000-01-01T00:00:00.000Z"
       }).success
     ).toBe(false);
+    expect(federationActorContextV1Schema.safeParse({ ...actor, contextVersion: 0 }).success)
+      .toBe(false);
+    expect(federationActorContextV1Schema.safeParse({
+      ...actor,
+      personDisplayName: "名".repeat(81)
+    }).success).toBe(false);
+    expect(federationActorContextV1Schema.safeParse({
+      ...actor,
+      familyDisplayName: "家庭\n注入"
+    }).success).toBe(false);
+    expect(federationActorContextV1Schema.safeParse({
+      ...actor,
+      personDisplayName: "坏\ud800名称"
+    }).success).toBe(false);
   });
 
   it("does not publish an allocation authority contract", () => {

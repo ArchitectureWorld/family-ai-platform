@@ -190,7 +190,22 @@ type LiveActorRow = Record<string, unknown> & {
   audience: "family_admin" | "personal";
   family_role: string;
   assignment_version: number;
+  context_version: number;
 };
+
+function projectionDisplayName(value: unknown): string {
+  const name = String(value);
+  if (
+    name.length < 1 ||
+    name.length > 80 ||
+    name !== name.trim() ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(name) ||
+    /[\uD800-\uDFFF]/u.test(name)
+  ) {
+    throw new Error("FEDERATION_IDENTITY_PROJECTION_INVALID");
+  }
+  return name;
+}
 
 export class FederationRepository {
   private readonly now: () => Date;
@@ -373,6 +388,12 @@ export class FederationRepository {
       if (!Number.isSafeInteger(assignmentVersion) || assignmentVersion < 1) {
         throw new Error("FEDERATION_ASSIGNMENT_VERSION_UNAVAILABLE");
       }
+      const contextVersion = Number(row.context_version);
+      if (!Number.isSafeInteger(contextVersion) || contextVersion < 1) {
+        throw new Error("FEDERATION_CONTEXT_VERSION_UNAVAILABLE");
+      }
+      const personDisplayName = projectionDisplayName(row.person_display_name);
+      const familyDisplayName = projectionDisplayName(row.family_display_name);
       const contextRef = `actor-context:${this.uuid()}`;
       if (!hasRefPrefix(contextRef, "actor-context")) {
         throw new Error("FEDERATION_CONTEXT_REF_INVALID");
@@ -383,8 +404,9 @@ export class FederationRepository {
       this.db.prepare(
         `INSERT INTO federation_actor_contexts(
            context_ref, product, family_ref, person_ref, device_ref,
-           entry_session_ref, assignment_version, expires_at, created_at
-         ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           entry_session_ref, person_display_name, family_display_name,
+           assignment_version, context_version, expires_at, created_at
+         ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         contextRef,
         input.product,
@@ -392,7 +414,10 @@ export class FederationRepository {
         String(row.person_ref),
         String(row.device_ref),
         input.entrySessionRef,
+        personDisplayName,
+        familyDisplayName,
         assignmentVersion,
+        contextVersion,
         expiresAt,
         createdAt.toISOString()
       );
@@ -401,7 +426,10 @@ export class FederationRepository {
         context_ref: contextRef,
         product: input.product,
         entry_session_ref: input.entrySessionRef,
+        person_display_name: personDisplayName,
+        family_display_name: familyDisplayName,
         assignment_version: assignmentVersion,
+        context_version: contextVersion,
         expires_at: expiresAt
       });
     });
@@ -413,7 +441,8 @@ export class FederationRepository {
     const now = this.now().toISOString();
     const row = this.db.prepare(
       `SELECT fac.*, eb.audience, fm.family_role,
-              paav.assignment_version AS current_assignment_version
+              paav.assignment_version AS current_assignment_version,
+              pvc.context_version AS current_context_version
        FROM federation_actor_contexts fac
        JOIN entry_sessions es
          ON es.entry_session_ref = fac.entry_session_ref
@@ -443,9 +472,12 @@ export class FederationRepository {
         AND db.status = 'active'
        JOIN person_agent_assignment_versions paav
          ON paav.person_ref = fac.person_ref
+       JOIN person_federation_context_versions pvc
+         ON pvc.person_ref = fac.person_ref
        WHERE fac.context_ref = ?
          AND fac.expires_at > ?
-         AND paav.assignment_version = fac.assignment_version`
+         AND paav.assignment_version = fac.assignment_version
+         AND pvc.context_version = fac.context_version`
     ).get(now, contextRef, now) as LiveActorRow | undefined;
     return row ? this.mapActorContext(row) : null;
   }
@@ -825,7 +857,10 @@ export class FederationRepository {
   private findLiveActor(entrySessionRef: string, now: string): LiveActorRow | null {
     const row = this.db.prepare(
       `SELECT eb.family_ref, eb.person_ref, eb.device_ref, eb.audience,
-              fm.family_role, paav.assignment_version AS assignment_version
+              f.display_name AS family_display_name,
+              p.display_name AS person_display_name,
+              fm.family_role, paav.assignment_version AS assignment_version,
+              pvc.context_version AS context_version
        FROM entry_sessions es
        JOIN entry_bindings eb
          ON eb.entry_binding_ref = es.entry_binding_ref AND eb.status = 'active'
@@ -847,6 +882,8 @@ export class FederationRepository {
         AND db.status = 'active'
        JOIN person_agent_assignment_versions paav
          ON paav.person_ref = eb.person_ref
+       JOIN person_federation_context_versions pvc
+         ON pvc.person_ref = eb.person_ref
        WHERE es.entry_session_ref = ?
          AND es.status = 'active'
          AND es.expires_at > ?`
@@ -954,8 +991,11 @@ export class FederationRepository {
       personRef: String(row.person_ref),
       deviceRef: String(row.device_ref),
       entrySessionRef: String(row.entry_session_ref),
+      personDisplayName: projectionDisplayName(row.person_display_name),
+      familyDisplayName: projectionDisplayName(row.family_display_name),
       roles,
       assignmentVersion: Number(row.assignment_version),
+      contextVersion: Number(row.context_version),
       expiresAt: String(row.expires_at)
     };
   }

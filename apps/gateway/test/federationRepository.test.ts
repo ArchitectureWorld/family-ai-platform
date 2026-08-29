@@ -162,8 +162,11 @@ describe("FederationRepository", () => {
       personRef,
       deviceRef,
       entrySessionRef,
+      personDisplayName: "联邦测试成员",
+      familyDisplayName: "联邦测试家庭",
       roles: ["owner", "family_admin"],
       assignmentVersion: 1,
+      contextVersion: 1,
       expiresAt: new Date(now.getTime() + 60_000).toISOString()
     });
     expect(repository.getActorContext(actor.contextRef)).toEqual(actor);
@@ -232,6 +235,14 @@ describe("FederationRepository", () => {
        WHERE person_ref = ?`
     ).run(now.toISOString(), personRef);
     expect(repository.getActorContext(staleVersion.contextRef)).toBeNull();
+
+    const staleIdentity = issue();
+    db.prepare(
+      `UPDATE person_federation_context_versions
+       SET context_version = context_version + 1, updated_at = ?
+       WHERE person_ref = ?`
+    ).run(now.toISOString(), personRef);
+    expect(repository.getActorContext(staleIdentity.contextRef)).toBeNull();
   });
 
   it("fails Actor lookup closed when any live authority relation becomes inactive", () => {

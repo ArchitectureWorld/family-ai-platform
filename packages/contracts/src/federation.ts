@@ -22,8 +22,11 @@ export interface FederationActorContextV1 {
   personRef: string;
   deviceRef: string;
   entrySessionRef: string;
+  personDisplayName: string;
+  familyDisplayName: string;
   roles: readonly string[];
   assignmentVersion: number;
+  contextVersion: number;
   expiresAt: string;
 }
 
@@ -56,6 +59,12 @@ const productIdSchema = z.enum(["family", "canvas", "me"]);
 const boundedTextSchema = z.string().trim().min(1).max(12000);
 const capabilitySchema = z.string().trim().min(1).max(100);
 const roleSchema = z.string().regex(/^[a-z][a-z0-9_:-]{0,63}$/);
+const displayNameSchema = z.string()
+  .trim()
+  .min(1)
+  .max(80)
+  .regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u)
+  .refine((value) => !/[\uD800-\uDFFF]/u.test(value));
 
 function refSchema(prefix: string) {
   return z.string().regex(new RegExp(`^${prefix}:[a-z0-9][a-z0-9._:-]{1,126}$`));
@@ -97,8 +106,11 @@ export const federationActorContextV1Schema = z
     personRef: personRefSchema,
     deviceRef: deviceRefSchema,
     entrySessionRef: entrySessionRefSchema,
+    personDisplayName: displayNameSchema,
+    familyDisplayName: displayNameSchema,
     roles: z.array(roleSchema).min(1).max(100),
     assignmentVersion: z.number().int().positive(),
+    contextVersion: z.number().int().positive(),
     expiresAt: timestampSchema
   })
   .strict()

@@ -994,6 +994,84 @@ CREATE INDEX federation_session_claim_expiry_idx
   ON federation_session_invocation_claims(lease_expires_at);
 `;
 
+const MIGRATION_V13 = `
+CREATE TABLE person_federation_context_versions (
+  person_ref TEXT PRIMARY KEY REFERENCES persons(person_ref) ON DELETE CASCADE,
+  context_version INTEGER NOT NULL CHECK(context_version > 0),
+  updated_at TEXT NOT NULL
+);
+
+INSERT INTO person_federation_context_versions(person_ref, context_version, updated_at)
+SELECT person_ref, 1, updated_at FROM persons;
+
+CREATE TRIGGER person_federation_context_insert
+AFTER INSERT ON persons
+BEGIN
+  INSERT INTO person_federation_context_versions(person_ref, context_version, updated_at)
+  VALUES(NEW.person_ref, 1, NEW.updated_at);
+END;
+
+CREATE TRIGGER person_federation_context_person_update
+AFTER UPDATE OF display_name, status ON persons
+WHEN NEW.display_name <> OLD.display_name OR NEW.status <> OLD.status
+BEGIN
+  UPDATE person_federation_context_versions
+  SET context_version = context_version + 1, updated_at = NEW.updated_at
+  WHERE person_ref = NEW.person_ref;
+END;
+
+CREATE TRIGGER person_federation_context_membership_update
+AFTER UPDATE OF family_role, status ON family_memberships
+WHEN NEW.family_role <> OLD.family_role OR NEW.status <> OLD.status
+BEGIN
+  UPDATE person_federation_context_versions
+  SET context_version = context_version + 1, updated_at = NEW.updated_at
+  WHERE person_ref = NEW.person_ref;
+END;
+
+CREATE TRIGGER person_federation_context_family_update
+AFTER UPDATE OF display_name, status ON families
+WHEN NEW.display_name <> OLD.display_name OR NEW.status <> OLD.status
+BEGIN
+  UPDATE person_federation_context_versions
+  SET context_version = context_version + 1, updated_at = NEW.updated_at
+  WHERE person_ref IN (
+    SELECT person_ref FROM family_memberships WHERE family_ref = NEW.family_ref
+  );
+END;
+
+CREATE TABLE federation_actor_contexts_v13 (
+  context_ref TEXT PRIMARY KEY,
+  product TEXT NOT NULL,
+  family_ref TEXT NOT NULL,
+  person_ref TEXT NOT NULL,
+  device_ref TEXT NOT NULL,
+  entry_session_ref TEXT NOT NULL,
+  person_display_name TEXT NOT NULL,
+  family_display_name TEXT NOT NULL,
+  assignment_version INTEGER NOT NULL,
+  context_version INTEGER NOT NULL CHECK(context_version > 0),
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+INSERT INTO federation_actor_contexts_v13(
+  context_ref, product, family_ref, person_ref, device_ref, entry_session_ref,
+  person_display_name, family_display_name, assignment_version, context_version,
+  expires_at, created_at
+)
+SELECT fac.context_ref, fac.product, fac.family_ref, fac.person_ref,
+       fac.device_ref, fac.entry_session_ref, p.display_name, f.display_name,
+       fac.assignment_version, pvc.context_version, fac.expires_at, fac.created_at
+FROM federation_actor_contexts fac
+JOIN persons p ON p.person_ref = fac.person_ref
+JOIN families f ON f.family_ref = fac.family_ref
+JOIN person_federation_context_versions pvc ON pvc.person_ref = fac.person_ref;
+
+DROP TABLE federation_actor_contexts;
+ALTER TABLE federation_actor_contexts_v13 RENAME TO federation_actor_contexts;
+`;
+
 function applyMigrationV8(db: GatewayDatabase): void {
   db.pragma("foreign_keys = OFF");
   try {
@@ -1057,6 +1135,15 @@ function applyMigrationV12(db: GatewayDatabase): void {
   })();
 }
 
+function applyMigrationV13(db: GatewayDatabase): void {
+  db.transaction(() => {
+    db.exec(MIGRATION_V13);
+    db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(13, ?)"
+    ).run(new Date().toISOString());
+  })();
+}
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -1066,7 +1153,7 @@ function latestMigrationVersion(db: GatewayDatabase): number {
 
 function applyMigrations(
   db: GatewayDatabase,
-  migrationLimit: 6 | 7 | 8 | 9 | 10 | 11 | 12
+  migrationLimit: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13
 ): void {
   const ledgerExists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
@@ -1153,13 +1240,17 @@ function applyMigrations(
     applyMigrationV12(db);
     latest = 12;
   }
+  if (latest === 12 && migrationLimit >= 13) {
+    applyMigrationV13(db);
+    latest = 13;
+  }
   if (latest !== migrationLimit) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
 
 export interface GatewayDatabaseOpenOptions {
-  migrationLimit?: 6 | 7 | 8 | 9 | 10 | 11 | 12;
+  migrationLimit?: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
 }
 
 export function openGatewayDatabase(
@@ -1171,7 +1262,7 @@ export function openGatewayDatabase(
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
-  applyMigrations(db, options.migrationLimit ?? 12);
+  applyMigrations(db, options.migrationLimit ?? 13);
   return db;
 }
 

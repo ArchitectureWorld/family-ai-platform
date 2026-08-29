@@ -9,6 +9,7 @@ import {
   type GatewayDatabase
 } from "../src/database.js";
 import { DomainEventStore } from "../src/domainEvents.js";
+import { FamilyDomainRepository } from "../src/familyDomain.js";
 
 const bootstrap = {
   memberRef: "member:test",
@@ -33,7 +34,8 @@ const migrationVersions = [
   { version: 9 },
   { version: 10 },
   { version: 11 },
-  { version: 12 }
+  { version: 12 },
+  { version: 13 }
 ];
 
 const openAtVersion = openGatewayDatabase as unknown as (
@@ -314,16 +316,16 @@ describe("gateway database", () => {
         applied_at TEXT NOT NULL
       );
       INSERT INTO schema_migrations(version, applied_at)
-      VALUES(13, '2026-07-25T00:00:00.000Z');
+      VALUES(14, '2026-07-25T00:00:00.000Z');
     `);
     legacy.close();
 
     expect(() => openGatewayDatabase(databasePath)).toThrow(
-      "Unsupported Gateway schema version: 13"
+      "Unsupported Gateway schema version: 14"
     );
   });
 
-  it("creates V11 federation authority tables with only bounded metadata columns", () => {
+  it("keeps federation authority tables limited to bounded metadata columns", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-federation-schema-"));
     db = openGatewayDatabase(join(directory, "gateway.sqlite"));
 
@@ -351,7 +353,10 @@ describe("gateway database", () => {
         "person_ref",
         "device_ref",
         "entry_session_ref",
+        "person_display_name",
+        "family_display_name",
         "assignment_version",
+        "context_version",
         "expires_at",
         "created_at"
       ],
@@ -474,6 +479,53 @@ describe("gateway database", () => {
     db.close();
     db = openGatewayDatabase(databasePath);
     expect(() => new DomainEventStore(db!)).not.toThrow();
+  });
+
+  it("adds durable Family identity context snapshots in V13", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-identity-v13-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 12 });
+    const initialized = new FamilyDomainRepository(db).initializeFamily({
+      familyName: "V13 家庭",
+      ownerName: "V13 成员",
+      deviceName: "V13 设备",
+      deviceCredential: "v13-device-credential-with-enough-length"
+    });
+    db.close();
+
+    db = openGatewayDatabase(databasePath);
+    expect(db.prepare("PRAGMA table_info(person_federation_context_versions)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual(["person_ref", "context_version", "updated_at"]);
+    expect(db.prepare("PRAGMA table_info(federation_actor_contexts)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual([
+      "context_ref", "product", "family_ref", "person_ref", "device_ref",
+      "entry_session_ref", "person_display_name", "family_display_name",
+      "assignment_version", "context_version", "expires_at", "created_at"
+    ]);
+    expect(db.prepare(
+      "SELECT context_version FROM person_federation_context_versions"
+    ).get()).toEqual({ context_version: 1 });
+    db.prepare(
+      "UPDATE persons SET display_name = 'V13 新成员名', updated_at = ? WHERE person_ref = ?"
+    ).run("2026-08-29T01:00:00.000Z", initialized.owner.personRef);
+    db.prepare(
+      `UPDATE family_memberships SET family_role = 'adult', updated_at = ?
+       WHERE family_ref = ? AND person_ref = ?`
+    ).run(
+      "2026-08-29T01:00:01.000Z",
+      initialized.family.familyRef,
+      initialized.owner.personRef
+    );
+    db.prepare(
+      "UPDATE families SET display_name = 'V13 新家庭名', updated_at = ? WHERE family_ref = ?"
+    ).run("2026-08-29T01:00:02.000Z", initialized.family.familyRef);
+    expect(db.prepare(
+      `SELECT context_version FROM person_federation_context_versions
+       WHERE person_ref = ?`
+    ).get(initialized.owner.personRef)).toEqual({ context_version: 4 });
+    expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
   it("creates the formal Chat Work domain schema with thread-scoped uniqueness", () => {

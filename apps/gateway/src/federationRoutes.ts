@@ -18,6 +18,27 @@ function bearerToken(request: FastifyRequest): string | null {
   return token || null;
 }
 
+function displayNameHeader(value: string): string {
+  const bytes = Buffer.from(value, "utf8");
+  const encoded = bytes.toString("base64url");
+  if (
+    bytes.length < 1 ||
+    bytes.length > 320 ||
+    bytes.toString("utf8") !== value ||
+    !/^[A-Za-z0-9_-]+$/.test(encoded) ||
+    Buffer.from(encoded, "base64url").toString("base64url") !== encoded
+  ) {
+    throw new GatewayDomainError(
+      "FEDERATION_IDENTITY_PROJECTION_INVALID",
+      500,
+      "internal",
+      false,
+      "Family 身份投影无效。"
+    );
+  }
+  return encoded;
+}
+
 function entryError(result: EntrySessionAuthentication): GatewayDomainError {
   if (result.status === "expired") {
     return new GatewayDomainError(
@@ -91,8 +112,15 @@ export function registerFederationRoutes(
       "X-Family-AI-Family-Ref": actor.familyRef,
       "X-Family-AI-Person-Ref": actor.personRef,
       "X-Family-AI-Device-Ref": actor.deviceRef,
+      "X-Family-AI-Person-Display-Name-B64": displayNameHeader(
+        actor.personDisplayName
+      ),
+      "X-Family-AI-Family-Display-Name-B64": displayNameHeader(
+        actor.familyDisplayName
+      ),
       "X-Family-AI-Roles": actor.roles.join(","),
       "X-Family-AI-Assignment-Version": String(actor.assignmentVersion),
+      "X-Family-AI-Context-Version": String(actor.contextVersion),
       "X-Family-AI-Context-Expires-At": actor.expiresAt
     });
     return reply.code(204).send();
