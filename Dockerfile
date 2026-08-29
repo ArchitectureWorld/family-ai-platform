@@ -118,7 +118,8 @@ COPY --from=build --chown=node:node /app/apps/gateway/admin-public /app/apps/gat
 COPY --from=build --chown=node:node /app/apps/gateway/public /app/apps/gateway/public
 RUN chmod -R a+rX /app
 USER 65532:65532
-RUN node --input-type=module -e 'await import("@family-ai/contracts"); await import("@family-ai/provider-adapter-sdk"); await import("./apps/gateway/dist/app.js"); const { access } = await import("node:fs/promises"); await access("./apps/gateway/member-public/index.html"); await access("./apps/gateway/public/qr.js");'
+RUN node --input-type=module -e 'await import("@family-ai/contracts"); await import("@family-ai/provider-adapter-sdk"); await import("./apps/gateway/dist/app.js"); const { access } = await import("node:fs/promises"); await access("./apps/gateway/member-public/index.html"); await access("./apps/gateway/public/qr.js");' \
+  && node apps/gateway/dist/provisionFederationService.js --self-check
 
 USER node
 EXPOSE 8790

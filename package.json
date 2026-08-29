@@ -21,8 +21,10 @@
     "test:scripts": "node --test scripts/report-current-runtime.test.mjs && bash scripts/test-static-check-secret-pattern.sh && bash scripts/static-check.sh",
     "test": "npm run test:workspaces && npm run test:scripts",
     "typecheck": "npm run build:adapter-sdk && npm run typecheck --workspaces --if-present",
-    "check": "npm run test && npm run typecheck && npm run build",
-    "provision:federation-service": "tsx apps/gateway/src/provisionFederationService.ts",
+    "check": "npm run test && npm run typecheck && npm run build && npm run test:federation-bootstrap-runtime",
+    "test:federation-bootstrap-runtime": "node --test scripts/federation-bootstrap-runtime.test.mjs",
+    "provision:federation-service": "node apps/gateway/dist/provisionFederationService.js",
+    "provision:federation-service:dev": "tsx apps/gateway/src/provisionFederationService.ts",
     "start": "npm run start -w @family-ai/gateway"
   },
   "devDependencies": {
