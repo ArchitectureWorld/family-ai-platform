@@ -22,6 +22,7 @@
     "test": "npm run test:workspaces && npm run test:scripts",
     "typecheck": "npm run build:adapter-sdk && npm run typecheck --workspaces --if-present",
     "check": "npm run test && npm run typecheck && npm run build",
+    "provision:federation-service": "tsx apps/gateway/src/provisionFederationService.ts",
     "start": "npm run start -w @family-ai/gateway"
   },
   "devDependencies": {
