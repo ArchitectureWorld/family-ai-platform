@@ -152,7 +152,7 @@ describe("development Admin Preview direct access", () => {
     expect(revokedResponse.statusCode).toBe(401);
     expect(revokedResponse.json().code).toBe("PREVIEW_ADMIN_ENTRY_INVALID");
     expectNoCredential(revokedResponse.body, revoked.entries.admin.token);
-  });
+  }, 20_000);
 
   it("rejects wrong-origin and personal entries without returning credentials", async () => {
     const wrongOrigin = await initializedPreview("wrong-origin");

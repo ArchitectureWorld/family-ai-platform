@@ -30,7 +30,11 @@ const toolPaths = [
   "scripts/build-atomic-dir-exchange.sh",
   "scripts/runtime-restore.sh",
   "scripts/runtime-restore.mjs",
-  "apps/gateway/src/migrate.ts"
+  "apps/gateway/src/databaseLock.ts",
+  "apps/gateway/src/index.ts",
+  "apps/gateway/src/migrate.ts",
+  "apps/gateway/src/provisionFederationService.ts",
+  "apps/gateway/runtime/gateway_lock_exec.py"
 ];
 
 function git(repository, args) {

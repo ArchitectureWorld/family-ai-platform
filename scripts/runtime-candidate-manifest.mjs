@@ -36,7 +36,7 @@ function validateDefinition(path, image, receiptSha) {
   if (keys !== "attachmentRoot,databasePath,entrypoint,imageId,manifestKind,networkMode,releaseCapabilityReceiptSha256,runtimeMount,workerDisabled" ||
       value.manifestKind !== "gateway-migration-definition-v1" || value.imageId !== image.imageId ||
       value.releaseCapabilityReceiptSha256 !== receiptSha || value.networkMode !== "none" || value.workerDisabled !== true ||
-      JSON.stringify(value.entrypoint) !== JSON.stringify(["node", "apps/gateway/dist/migrate.js"]) ||
+      JSON.stringify(value.entrypoint) !== JSON.stringify(["--role", "migrate"]) ||
       value.runtimeMount !== "/runtime" || value.databasePath !== "/runtime/data/gateway.sqlite" || value.attachmentRoot !== "/runtime/data/attachments") {
     throw new Error("CANDIDATE_DEFINITION_INVALID");
   }
@@ -68,11 +68,12 @@ async function main() {
   const receiptSha = verifySidecar(capability, args["--expected-capability-receipt-sha256"], "CAPABILITY_RECEIPT");
   if (receiptSha !== snapshotManifest.capabilityReceiptSha256) throw new Error("CAPABILITY_RECEIPT_SNAPSHOT_MISMATCH");
   const receipt = readJson(capability, "CAPABILITY_RECEIPT");
+  if (receipt.release?.gatewayDatabaseFlockV1 !== true) throw new Error("CANDIDATE_DATABASE_FLOCK_REQUIRED");
   const image = imageRecord(args["--candidate-image-manifest"]);
-  if (image.releaseCapabilityReceiptSha256 !== receiptSha || image.sourceCommit !== image.labels?.["org.opencontainers.image.revision"] || !/^sha256:[0-9a-f]{64}$/.test(image.imageId ?? "")) throw new Error("CANDIDATE_IMAGE_BINDING_INVALID");
+  if (image.releaseCapabilityReceiptSha256 !== receiptSha || image.sourceCommit !== image.labels?.["org.opencontainers.image.revision"] || image.labels?.["org.architectureworld.family-ai.gateway-database-flock-v1"] !== "true" || !/^sha256:[0-9a-f]{64}$/.test(image.imageId ?? "")) throw new Error("CANDIDATE_IMAGE_BINDING_INVALID");
   const inspectedImage = JSON.parse(execFileSync("docker", ["image", "inspect", image.imageId], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }))[0];
   const actualLabels = inspectedImage?.Config?.Labels ?? {};
-  if (inspectedImage?.Id !== image.imageId || actualLabels["org.opencontainers.image.revision"] !== image.sourceCommit || actualLabels["org.architectureworld.family-ai.release-capability-receipt-sha256"] !== receiptSha || Number(actualLabels["org.architectureworld.family-ai.client-database-version"]) !== receipt.release.clientDatabaseVersion) throw new Error("CANDIDATE_IMAGE_RUNTIME_PROVENANCE_INVALID");
+  if (inspectedImage?.Id !== image.imageId || actualLabels["org.opencontainers.image.revision"] !== image.sourceCommit || actualLabels["org.architectureworld.family-ai.release-capability-receipt-sha256"] !== receiptSha || actualLabels["org.architectureworld.family-ai.gateway-database-flock-v1"] !== "true" || Number(actualLabels["org.architectureworld.family-ai.client-database-version"]) !== receipt.release.clientDatabaseVersion) throw new Error("CANDIDATE_IMAGE_RUNTIME_PROVENANCE_INVALID");
   if (receipt.release?.schemaHead !== Number(image.labels?.["org.architectureworld.family-ai.schema-head"] ?? receipt.release?.schemaHead)) throw new Error("CANDIDATE_SCHEMA_HEAD_MISMATCH");
   const definition = validateDefinition(args["--candidate-definition"], image, receiptSha);
   const parent = requireAbsolute(args["--target-parent"], "TARGET_PARENT", { type: "dir", mode: 0o700 });
@@ -89,7 +90,7 @@ async function main() {
   chmodSync(staging, 0o700);
   const databasePath = join(staging, "data", "gateway.sqlite");
   const beforeSchema = schema(databasePath);
-  execFileSync("docker", ["run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", `${statSync(staging).uid}:${statSync(staging).gid}`, "--mount", `type=bind,src=${staging},dst=${definition.runtimeMount}`, "--entrypoint", "node", image.imageId, ...definition.entrypoint.slice(1), "--database", definition.databasePath], { stdio: ["ignore", "pipe", "pipe"] });
+  execFileSync("docker", ["run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", `${statSync(staging).uid}:${statSync(staging).gid}`, "--mount", `type=bind,src=${staging},dst=${definition.runtimeMount}`, image.imageId, ...definition.entrypoint, "--database", definition.databasePath], { stdio: ["ignore", "pipe", "pipe"] });
   const afterSchema = schema(databasePath);
   if (afterSchema !== receipt.release.schemaHead) throw new Error("CANDIDATE_MIGRATION_HEAD_MISMATCH");
   const inventory = inventoryTree(staging);

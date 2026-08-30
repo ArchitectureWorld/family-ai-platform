@@ -10,12 +10,12 @@ import Database from "better-sqlite3";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
-const builtCli = join(root, "apps/gateway/dist/provisionFederationService.js");
-const builtMigrateCli = join(root, "apps/gateway/dist/migrate.js");
+const lockLauncher = join(root, "apps/gateway/runtime/gateway_lock_exec.py");
 
 function migrateDatabase(databasePath) {
-  const result = spawnSync(process.execPath, [
-    builtMigrateCli,
+  const result = spawnSync("python3", [
+    lockLauncher,
+    "--role", "migrate",
     "--database", databasePath
   ], {
     cwd: root,
@@ -26,26 +26,26 @@ function migrateDatabase(databasePath) {
   assert.equal(result.stderr, "");
 }
 
-test("production package command uses the built CLI and keeps tsx explicit to development", () => {
+test("production package commands route built database entrypoints through the lock launcher", () => {
   assert.equal(
     packageJson.scripts["provision:federation-service"],
-    "node apps/gateway/dist/provisionFederationService.js"
+    "python3 apps/gateway/runtime/gateway_lock_exec.py --role provision --"
   );
   assert.equal(
     packageJson.scripts["provision:federation-service:dev"],
-    "tsx apps/gateway/src/provisionFederationService.ts"
+    "npm run build:gateway && python3 apps/gateway/runtime/gateway_lock_exec.py --role provision --"
   );
 });
 
-test("built production CLI imports native runtime dependencies without secrets or files", () => {
-  const result = spawnSync(process.execPath, [builtCli, "--self-check"], {
+test("built production lock launcher passes its no-database self-check", () => {
+  const result = spawnSync("python3", [lockLauncher, "--self-check"], {
     cwd: root,
     encoding: "utf8",
     env: { ...process.env, NODE_ENV: "production" }
   });
 
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "");
+  assert.equal(result.stdout, "GATEWAY_DATABASE_LOCK_SELF_CHECK_OK\n");
   assert.equal(result.stderr, "");
 });
 
@@ -59,12 +59,14 @@ test("built production CLI provisions one disposable V15 service without secret 
     writeFileSync(credentialPath, credential, { mode: 0o600 });
     chmodSync(credentialPath, 0o600);
 
-    const result = spawnSync(process.execPath, [
-      builtCli,
+    const result = spawnSync("python3", [
+      lockLauncher,
+      "--role", "provision",
+      "--database", databasePath,
+      "--",
       "--service-ref", "service:canvas-built",
       "--product", "canvas",
-      "--credential-file", credentialPath,
-      "--database", databasePath
+      "--credential-file", credentialPath
     ], {
       cwd: root,
       encoding: "utf8",
@@ -109,12 +111,14 @@ test("built production CLI rejects extra and altered persistent service views", 
       writeFileSync(credentialPath, credential, { mode: 0o600 });
       chmodSync(credentialPath, 0o600);
 
-      const result = spawnSync(process.execPath, [
-        builtCli,
+      const result = spawnSync("python3", [
+        lockLauncher,
+        "--role", "provision",
+        "--database", databasePath,
+        "--",
         "--service-ref", `service:canvas-view-${label}`,
         "--product", "canvas",
-        "--credential-file", credentialPath,
-        "--database", databasePath
+        "--credential-file", credentialPath
       ], {
         cwd: root,
         encoding: "utf8",
@@ -153,12 +157,14 @@ test("built production CLI ignores SQLite-owned ANALYZE objects", () => {
     writeFileSync(credentialPath, "Built-Internal-Credential-0001", { mode: 0o600 });
     chmodSync(credentialPath, 0o600);
 
-    const result = spawnSync(process.execPath, [
-      builtCli,
+    const result = spawnSync("python3", [
+      lockLauncher,
+      "--role", "provision",
+      "--database", databasePath,
+      "--",
       "--service-ref", "service:canvas-internal",
       "--product", "canvas",
-      "--credential-file", credentialPath,
-      "--database", databasePath
+      "--credential-file", credentialPath
     ], { cwd: root, encoding: "utf8", env: { ...process.env, NODE_ENV: "production" } });
 
     assert.equal(result.status, 0);
@@ -177,7 +183,7 @@ test("final Docker runtime runs the built self-check after prune, copy and non-r
   );
   const nonRoot = dockerfile.indexOf("USER 65532:65532", copiedCli);
   const selfCheck = dockerfile.indexOf(
-    "node apps/gateway/dist/provisionFederationService.js --self-check",
+    "python3 apps/gateway/runtime/gateway_lock_exec.py --self-check",
     nonRoot
   );
 

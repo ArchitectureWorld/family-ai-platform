@@ -100,6 +100,7 @@ NODE
 }
 
 CLIENT_VERSION="$(json_field "$CAPABILITY_RECEIPT" release.clientDatabaseVersion)"
+SCHEMA_HEAD="$(json_field "$CAPABILITY_RECEIPT" release.schemaHead)"
 [[ "$CLIENT_VERSION" =~ ^[1-9][0-9]*$ ]] || fail CLIENT_DATABASE_VERSION_INVALID
 RELEASE_INPUTS_SHA="$(json_field "$INPUT_RECEIPT" releaseBuildInputsSha256)"
 BUILD_INPUT_TREE_HASH="$(json_field "$INPUT_RECEIPT" buildInputTreeHash)"
@@ -123,6 +124,7 @@ IMAGE_TAG="family-ai-platform/gateway:$SOURCE_COMMIT"
 docker build --platform "$PLATFORM" --pull=false \
   --build-arg "SOURCE_COMMIT=$SOURCE_COMMIT" \
   --build-arg "CLIENT_DATABASE_VERSION=$CLIENT_VERSION" \
+  --build-arg "SCHEMA_HEAD=$SCHEMA_HEAD" \
   --build-arg "RELEASE_CAPABILITY_RECEIPT_SHA256=$CAPABILITY_SHA" \
   --build-arg "RELEASE_BUILD_INPUTS_SHA256=$RELEASE_INPUTS_SHA" \
   --build-arg "BUILD_INPUT_TREE_HASH=$BUILD_INPUT_TREE_HASH" \
@@ -144,6 +146,8 @@ inspect_label() {
 }
 [[ "$(inspect_label org.opencontainers.image.revision)" == "$SOURCE_COMMIT" ]] || fail REVISION_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.client-database-version)" == "$CLIENT_VERSION" ]] || fail CLIENT_VERSION_LABEL_MISMATCH
+[[ "$(inspect_label org.architectureworld.family-ai.schema-head)" == "$SCHEMA_HEAD" ]] || fail SCHEMA_HEAD_LABEL_MISMATCH
+[[ "$(inspect_label org.architectureworld.family-ai.gateway-database-flock-v1)" == true ]] || fail DATABASE_FLOCK_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.release-capability-receipt-sha256)" == "$CAPABILITY_SHA" ]] || fail CAPABILITY_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.release-build-inputs-sha256)" == "$RELEASE_INPUTS_SHA" ]] || fail BUILD_INPUT_MANIFEST_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.build-input-tree-hash)" == "$BUILD_INPUT_TREE_HASH" ]] || fail BUILD_INPUT_TREE_LABEL_MISMATCH
@@ -163,18 +167,20 @@ REPO_DIGESTS="$(docker image inspect --format '{{json .RepoDigests}}' "$IMAGE_ID
 
 node --input-type=module - \
   "$OUTPUT_DIR/gateway-image-manifest.json" "$SOURCE_COMMIT" "$IMAGE_ID" "$ARCHIVE_SHA" \
-  "$CLIENT_VERSION" "$CAPABILITY_SHA" "$RELEASE_INPUTS_SHA" "$BUILD_INPUT_TREE_HASH" \
+  "$CLIENT_VERSION" "$SCHEMA_HEAD" "$CAPABILITY_SHA" "$RELEASE_INPUTS_SHA" "$BUILD_INPUT_TREE_HASH" \
   "$BASE_REF" "$BASE_DIGEST" "$PLATFORM" "$RESOLVED_BASE" "$DEBIAN_SNAPSHOT" \
   "$DEBIAN_SECURITY_SNAPSHOT" "$TOOLCHAIN_MATERIAL" "$REPO_DIGESTS" <<'NODE'
 import { chmodSync, writeFileSync } from "node:fs";
 const [
-  path, sourceCommit, imageId, archiveSha256, clientVersion, capabilitySha,
+  path, sourceCommit, imageId, archiveSha256, clientVersion, schemaHead, capabilitySha,
   releaseInputsSha, inputTreeHash, baseRef, baseDigest, platform, resolvedBase,
   debianSnapshot, debianSecuritySnapshot, toolchainMaterial, repoDigestsJson
 ] = process.argv.slice(2);
 const labels = {
   "org.opencontainers.image.revision": sourceCommit,
   "org.architectureworld.family-ai.client-database-version": clientVersion,
+  "org.architectureworld.family-ai.schema-head": schemaHead,
+  "org.architectureworld.family-ai.gateway-database-flock-v1": "true",
   "org.architectureworld.family-ai.release-capability-receipt-sha256": capabilitySha,
   "org.architectureworld.family-ai.release-build-inputs-sha256": releaseInputsSha,
   "org.architectureworld.family-ai.build-input-tree-hash": inputTreeHash,
@@ -189,6 +195,8 @@ const manifest = {
   imageId,
   archiveSha256,
   clientDatabaseVersion: Number(clientVersion),
+  schemaHead: Number(schemaHead),
+  gatewayDatabaseFlockV1: true,
   releaseCapabilityReceiptSha256: capabilitySha,
   releaseBuildInputsSha256: releaseInputsSha,
   buildInputTreeHash: inputTreeHash,

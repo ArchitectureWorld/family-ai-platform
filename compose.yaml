@@ -15,7 +15,7 @@ services:
     image: family-ai-platform-foundation/gateway:local-unverified
     init: true
     restart: unless-stopped
-    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    user: "1000:1000"
     env_file:
       - ${FAMILY_AI_GATEWAY_ENV_FILE:-./.runtime/config/gateway.env}
     environment:

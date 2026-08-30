@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { openGatewayDatabase } from "../src/database.js";
+import { spawnLockedSource } from "./helpers/launchLockedNode.js";
 
 const root = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const cli = join(root, "apps/gateway/src/migrate.ts");
@@ -16,16 +16,14 @@ describe("Gateway migration-only CLI", () => {
     if (directory) rmSync(directory, { recursive: true, force: true });
   });
 
-  const run = (databasePath: string) => spawnSync(
-    process.execPath,
-    ["--import", "tsx", cli, "--database", databasePath],
-    {
-      cwd: root,
-      encoding: "utf8",
-      env: { ...process.env, NODE_ENV: "test" },
-      timeout: 20_000
-    }
-  );
+  const run = (databasePath: string) => spawnLockedSource({
+    root,
+    role: "migrate",
+    databasePath,
+    target: cli,
+    args: ["--database", databasePath],
+    timeout: 20_000
+  });
 
   it.each(["fresh", "v14"])(
     "migrates a %s database to exact V15 and replays idempotently",

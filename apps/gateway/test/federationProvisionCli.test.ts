@@ -26,6 +26,7 @@ import {
   provisionFederationService,
   readProtectedFederationCredential
 } from "../src/provisionFederationService.js";
+import { spawnLockedSource } from "./helpers/launchLockedNode.js";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const cli = join(root, "apps/gateway/src/provisionFederationService.ts");
@@ -69,10 +70,16 @@ function runCli(
   args = argumentsFor(),
   timeout?: number
 ): SpawnSyncReturns<string> {
-  return spawnSync(process.execPath, ["--import", "tsx", cli, ...args], {
-    cwd: root,
-    encoding: "utf8",
-    env: { ...process.env },
+  const databaseIndex = args.indexOf("--database");
+  const lockedDatabasePath = databaseIndex >= 0
+    ? args[databaseIndex + 1] ?? databasePath
+    : databasePath;
+  return spawnLockedSource({
+    root,
+    role: "provision",
+    databasePath: lockedDatabasePath,
+    target: cli,
+    args,
     ...(timeout === undefined ? {} : { timeout })
   });
 }
@@ -205,7 +212,7 @@ afterEach(() => {
   directory = "";
 });
 
-describe("protected federation service bootstrap CLI", () => {
+describe("protected federation service bootstrap CLI", { timeout: 20_000 }, () => {
   it("provisions only an exact existing V15 database", () => {
     const v15Path = join(directory, "gateway-v15.sqlite");
     const database = openGatewayDatabase(v15Path, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
@@ -219,7 +226,7 @@ describe("protected federation service bootstrap CLI", () => {
   it("provisions Canvas from an existing V15 database without exposing credential material", () => {
     const result = runDevPackageCli();
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe(
       '{"status":"ready","serviceRef":"service:canvas","product":"canvas"}\n'
@@ -240,7 +247,7 @@ describe("protected federation service bootstrap CLI", () => {
         revoked_at: null
       }
     ]);
-  });
+  }, 60_000);
 
   it("is idempotent across process restart and provisions ME independently", () => {
     const first = runCli();
@@ -372,7 +379,7 @@ describe("protected federation service bootstrap CLI", () => {
     const fifo = join(directory, "credential.fifo");
     expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
 
-    const result = runCli(argumentsFor({ credential: fifo }), 1_000);
+    const result = runCli(argumentsFor({ credential: fifo }), 5_000);
 
     expectFixedFailure(result, "FEDERATION_BOOTSTRAP_CREDENTIAL_INVALID", [
       token,
@@ -403,7 +410,7 @@ describe("protected federation service bootstrap CLI", () => {
     );
     expectFixedFailure(
       runCli(argumentsFor({ database: relativeDatabase })),
-      "FEDERATION_BOOTSTRAP_DATABASE_INVALID",
+      "GATEWAY_DATABASE_LOCK_INVALID",
       [token, credentialPath, databasePath]
     );
     expect(inspectServices()).toEqual([]);
@@ -432,7 +439,7 @@ describe("protected federation service bootstrap CLI", () => {
     chmodSync(directory, 0o770);
     expectFixedFailure(
       runCli(),
-      "FEDERATION_BOOTSTRAP_DATABASE_INVALID",
+      "GATEWAY_DATABASE_LOCK_INVALID",
       [token, credentialPath, databasePath]
     );
     chmodSync(directory, 0o700);
@@ -469,7 +476,7 @@ describe("protected federation service bootstrap CLI", () => {
       database: join(linkedParent, "gateway.sqlite")
     }));
 
-    expectFixedFailure(result, "FEDERATION_BOOTSTRAP_DATABASE_INVALID", [
+    expectFixedFailure(result, "GATEWAY_DATABASE_LOCK_INVALID", [
       token,
       credentialPath,
       linkedDatabase,

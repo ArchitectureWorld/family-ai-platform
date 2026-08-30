@@ -4,6 +4,7 @@
   "schemaHead": 15,
   "clientDatabaseVersion": 2,
   "databaseNameScheme": "identity-scoped-v2",
+  "gatewayDatabaseFlockV1": true,
   "rollbackClientRequired": false,
   "rollbackClientBundleFormat": "none",
   "rollbackGuardFormat": "none"

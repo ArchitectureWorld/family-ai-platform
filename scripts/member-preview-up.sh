@@ -737,7 +737,7 @@ case "$gateway_state" in
 esac
 
 if [[ "$gateway_state" == absent ]]; then
-  nohup /bin/bash -c 'set -a; . "$1"; set +a; exec node "$2"' preview-runtime "$CONFIG_DIR/gateway.env" "$ROOT_DIR/apps/gateway/dist/index.js" >>"$GATEWAY_LOG" 2>&1 </dev/null &
+  nohup /bin/bash -c 'set -a; . "$1"; set +a; exec python3 "$2" --role gateway' preview-runtime "$CONFIG_DIR/gateway.env" "$ROOT_DIR/apps/gateway/runtime/gateway_lock_exec.py" >>"$GATEWAY_LOG" 2>&1 </dev/null &
   NEW_GATEWAY_PID="$!"
   NEW_GATEWAY_STARTTIME="$(awk '{print $22}' "/proc/$NEW_GATEWAY_PID/stat")" || fail PREVIEW_GATEWAY_OWNERSHIP_FAILED
   wait_health http://127.0.0.1:8791 1200 || fail PREVIEW_GATEWAY_START_FAILED

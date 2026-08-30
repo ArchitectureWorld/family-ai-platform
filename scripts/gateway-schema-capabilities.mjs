@@ -96,6 +96,7 @@ if (
   !Number.isInteger(release.clientDatabaseVersion) ||
   release.clientDatabaseVersion <= 0 ||
   typeof release.databaseNameScheme !== "string" ||
+  release.gatewayDatabaseFlockV1 !== true ||
   typeof release.rollbackClientRequired !== "boolean"
 ) {
   fail("RELEASE_CAPABILITIES_INVALID");

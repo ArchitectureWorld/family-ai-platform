@@ -31,15 +31,15 @@ npm --silent run provision:federation-service -- \
 Use `service:me` and `--product me` for ME-System. The command prints only the fixed ready status,
 serviceRef and product. Exact replay is safe; drift and revoked identities fail closed.
 
-For an immutable container image, mount the protected runtime directory so that its numeric owner
-matches the image process uid, stop the normal Gateway container, and override the entrypoint for
-the one-shot command:
+For an immutable container image, mount the protected runtime directory with numeric owner
+1000:1000, stop the normal Gateway container, and select the provision role on the image's protected
+launcher entrypoint:
 
 ```bash
 docker run --rm \
   --mount type=bind,src=/absolute/protected/runtime,dst=/runtime \
-  --entrypoint node FAMILY_IMAGE \
-  apps/gateway/dist/provisionFederationService.js \
+  FAMILY_IMAGE \
+  --role provision -- \
   --service-ref service:canvas \
   --product canvas \
   --credential-file /runtime/canvas.credential \

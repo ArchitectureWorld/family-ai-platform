@@ -10,6 +10,7 @@ import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
 import { openGatewayDatabase } from "./database.js";
+import { requireInheritedGatewayDatabaseLock } from "./databaseLock.js";
 import { FederationRepository, type FederationServiceProduct } from "./federationRepository.js";
 
 type BootstrapErrorCode =
@@ -302,6 +303,7 @@ export function provisionFederationService(
 }
 
 function runCli(): void {
+  process.umask(0o077);
   try {
     if (process.argv.length === 3 && process.argv[2] === "--self-check") {
       const database = new Database(":memory:");
@@ -315,10 +317,22 @@ function runCli(): void {
       }
       return;
     }
-    const result = provisionFederationService(process.argv.slice(2));
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    const args = process.argv.slice(2);
+    const input = parseArguments(args);
+    const launchLock = requireInheritedGatewayDatabaseLock({
+      role: "provision",
+      databasePath: input.databasePath
+    });
+    try {
+      const result = provisionFederationService(args);
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    } finally {
+      launchLock.close();
+    }
   } catch (error) {
-    const code = error instanceof BootstrapError
+    const code = error instanceof Error && error.message === "GATEWAY_DATABASE_LOCK_INVALID"
+      ? "GATEWAY_DATABASE_LOCK_INVALID"
+      : error instanceof BootstrapError
       ? error.code
       : "FEDERATION_BOOTSTRAP_FAILED";
     process.stderr.write(`${code}\n`);
