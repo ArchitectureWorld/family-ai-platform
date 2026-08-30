@@ -41,14 +41,14 @@ test("built Gateway image exposes only the approved CMD-through-launcher contrac
   )).digest("hex");
   const contract = spawnSync(process.execPath, [
     join(root, "scripts/gateway-image-runtime-contract.mjs"),
-    "inspect", "--image-id", image,
+    "inspect", "--image-id", inspected.Id,
     "--expected-launcher-sha256", expectedLauncherSha256,
     "--expected-python-version", "3.11.2"
   ], { encoding: "utf8" });
   assert.equal(contract.status, 0, contract.stderr);
   const wrongSource = spawnSync(process.execPath, [
     join(root, "scripts/gateway-image-runtime-contract.mjs"),
-    "inspect", "--image-id", image,
+    "inspect", "--image-id", inspected.Id,
     "--expected-launcher-sha256", "0".repeat(64),
     "--expected-python-version", "3.11.2"
   ], { encoding: "utf8" });
