@@ -72,6 +72,7 @@ export class DeviceSyncHarness {
 
   async openApp(): Promise<void> {
     this.app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: this.databasePath,
       deviceToken: bootstrapToken,
       mode: "test",

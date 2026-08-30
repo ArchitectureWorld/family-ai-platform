@@ -23,7 +23,7 @@ describe("Chat Work domain foundation", () => {
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-chat-work-"));
     databasePath = join(directory, "gateway.sqlite");
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const familyRepository = new FamilyDomainRepository(db);
     const onboarding = familyRepository.initializeFamily({
       familyName: "测试家庭",
@@ -620,7 +620,7 @@ describe("Chat Work domain foundation", () => {
     )).toBeNull();
 
     db.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     repository = new ChatWorkDomainRepository(db, () => currentNow);
 
     expect(repository.getHomeChat(ownerPersonRef)).toEqual({

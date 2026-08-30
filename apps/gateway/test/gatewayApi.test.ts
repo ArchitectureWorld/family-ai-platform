@@ -51,6 +51,7 @@ describe("local Family AI Gateway API", () => {
   async function openApp(providerAdapter = new FakeProviderAdapter()) {
     adapter = providerAdapter;
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -190,7 +191,7 @@ describe("local Family AI Gateway API", () => {
       retryable: false
     });
 
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const timestamp = new Date().toISOString();
     db.prepare(
       "INSERT INTO agents (agent_ref, display_name, created_at) VALUES (?, ?, ?)"

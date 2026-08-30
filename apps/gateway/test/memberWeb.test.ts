@@ -27,6 +27,7 @@ describe("Member Web product entry", () => {
   it("makes the normal product workbench the root experience in every mode", async () => {
     for (const mode of ["test", "development", "production"] as const) {
       const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
         databasePath: databasePathFor(mode),
         deviceToken: token,
         mode,
@@ -62,6 +63,7 @@ describe("Member Web product entry", () => {
 
   it("serves every focused product module with strict no-store protections", async () => {
     const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: databasePathFor("product-assets"),
       deviceToken: token,
       mode: "development"
@@ -119,6 +121,7 @@ describe("Member Web product entry", () => {
   it("does not allow production to default to the development Fake Provider", async () => {
     await expect(
       buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
         databasePath: databasePathFor("production-without-provider"),
         deviceToken: token,
         mode: "production"
@@ -128,6 +131,7 @@ describe("Member Web product entry", () => {
 
   it("accepts an explicit Provider Router as the production runtime boundary", async () => {
     const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: databasePathFor("production-with-router"),
       deviceToken: token,
       mode: "production",

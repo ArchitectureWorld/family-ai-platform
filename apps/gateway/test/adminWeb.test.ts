@@ -23,6 +23,7 @@ afterEach(() => {
 describe("development Admin Web product entry", () => {
   it("serves an explicit protected admin state machine without taking over the member root", async () => {
     const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: databasePathFor("development"),
       deviceToken: token,
       mode: "development"
@@ -92,6 +93,7 @@ describe("development Admin Web product entry", () => {
   it("does not expose Admin Web routes outside development mode", async () => {
     for (const mode of ["test", "production"] as const) {
       const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
         databasePath: databasePathFor(mode),
         deviceToken: token,
         mode,

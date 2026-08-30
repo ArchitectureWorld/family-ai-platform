@@ -20,7 +20,7 @@ describe("attachment metadata repository", () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-attachment-repository-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const onboarding = new FamilyDomainRepository(db).initializeFamily({
       familyName: "附件测试家庭",
       ownerName: "附件测试成员",

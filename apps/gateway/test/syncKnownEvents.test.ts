@@ -41,7 +41,7 @@ describe("Gateway known Event Sync producers", () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-sync-known-events-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const family = new FamilyDomainRepository(db);
     const onboarding = family.initializeFamily({
       familyName: "测试家庭",

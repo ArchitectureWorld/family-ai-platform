@@ -324,6 +324,7 @@ describe("Family federation routes", () => {
       })
     ] as const));
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken: DEVICE_TOKEN,
       mode: "test",
@@ -372,7 +373,7 @@ describe("Family federation routes", () => {
     expect(createdMember.statusCode).toBe(201);
     memberPersonRef = String((createdMember.json() as { member: { personRef: string } }).member.personRef);
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const events = new DomainEventStore(db, () => now);
     for (const personRef of [ownerPersonRef, memberPersonRef]) {
       events.append({
@@ -1065,6 +1066,7 @@ describe("Family federation routes", () => {
 
   it("returns accepted for the same ref/hash from a second Gateway without another Broker call", async () => {
     secondApp = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken: DEVICE_TOKEN,
       mode: "test",

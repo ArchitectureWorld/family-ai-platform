@@ -55,6 +55,7 @@ describe("Admin system workspace routes", () => {
     jarvisAdapter = new FakeProviderAdapter({ clock: now });
     codexAdapter = new FakeProviderAdapter({ clock: now });
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -168,6 +169,7 @@ describe("Admin system workspace routes", () => {
       }
     ];
     const openBrokerApp = () => buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test" as const,
@@ -195,7 +197,7 @@ describe("Admin system workspace routes", () => {
     admin = initialized.json().entries.admin as Entry;
     ownerPersonRef = initialized.json().owner.personRef as string;
 
-    const dirty = openGatewayDatabase(databasePath);
+    const dirty = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     dirty.prepare(
       `INSERT INTO admin_agent_assignments(
          assignment_ref, family_ref, person_ref, agent_ref, provider_profile_ref,
@@ -225,7 +227,7 @@ describe("Admin system workspace routes", () => {
     const jarvis = await getChat("agent:hermes-jarvis");
     expect(jarvis.chat.agentRef).toBe("agent:hermes-jarvis");
 
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       expect(db.prepare(
         `SELECT agent_ref, provider_profile_ref, status
@@ -296,7 +298,7 @@ describe("Admin system workspace routes", () => {
       "provider-profile:codex-cli"
     );
 
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       const contexts = db.prepare(
         `SELECT thread_ref, assignment_ref, agent_ref, provider_profile_ref,
@@ -395,7 +397,7 @@ describe("Admin system workspace routes", () => {
     expect(codexWorks.json().conversations).toEqual([]);
     await sendMessage(work.threadRef, "jarvis-work");
 
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       db.prepare(
         `INSERT INTO work_progress_snapshots

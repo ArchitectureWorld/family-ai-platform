@@ -7,6 +7,7 @@ import {
 const config = loadGatewayConfig();
 const runtime = buildProviderRuntime(config.providerRuntime);
 const app = await buildGatewayApp({
+  databaseOpenRequest: { intent: "gateway-existing" },
   databasePath: config.databasePath,
   attachmentRoot: config.attachmentRoot,
   attachmentQuotaBytes: config.attachmentQuotaBytes,

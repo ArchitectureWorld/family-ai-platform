@@ -73,6 +73,7 @@ describe("Admin Agent routes", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-agent-routes-"));
     databasePath = join(directory, "gateway.sqlite");
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -103,7 +104,7 @@ describe("Admin Agent routes", () => {
   });
 
   function setRuntimeStatus(status: "active" | "disabled") {
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       db.prepare(
         "UPDATE agent_runtime_bindings SET status = ? WHERE agent_ref = ?"
@@ -114,7 +115,7 @@ describe("Admin Agent routes", () => {
   }
 
   function personalAssignment() {
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       return db.prepare(
         `SELECT status, is_default
@@ -212,7 +213,7 @@ describe("Admin Agent routes", () => {
     });
     expect(ownerMounted.statusCode).toBe(201);
 
-    const before = openGatewayDatabase(databasePath);
+    const before = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const beforeVersion = before.prepare(
       `SELECT assignment_version FROM person_agent_assignment_versions
        WHERE person_ref = ?`
@@ -248,7 +249,7 @@ describe("Admin Agent routes", () => {
         });
       }
     }
-    const verified = openGatewayDatabase(databasePath);
+    const verified = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       expect(verified.prepare(
         `SELECT assignment_version FROM person_agent_assignment_versions

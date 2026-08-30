@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -40,10 +40,14 @@ const migrationVersions = [
   { version: 15 }
 ];
 
-const openAtVersion = openGatewayDatabase as unknown as (
+const openAtVersion = (
   databasePath: string,
   options: { migrationLimit: number }
-) => GatewayDatabase;
+): GatewayDatabase => openGatewayDatabase(databasePath, {
+  intent: "test-create-or-existing",
+  simulate: "migrate-create-or-existing",
+  migrationLimit: options.migrationLimit as 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
+});
 
 const mobilePairingColumnNames = [
   "pairing_ref",
@@ -76,14 +80,14 @@ describe("gateway database", () => {
   it("applies numbered migrations once and starts the formal Family domain empty", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-db-"));
     const databasePath = join(directory, "gateway.sqlite");
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
     ).toEqual(migrationVersions);
     expect(db.prepare("SELECT COUNT(*) AS count FROM families").get()).toEqual({ count: 0 });
     expect(db.pragma("foreign_key_check")).toEqual([]);
     db.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
     ).toEqual(migrationVersions);
@@ -92,7 +96,7 @@ describe("gateway database", () => {
 
   it("creates the mobile pairing schema without weakening the V2 identity model", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-mobile-schema-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
 
     const pairingTable = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
@@ -124,7 +128,7 @@ describe("gateway database", () => {
 
   it("adds bounded Web Claim replay metadata", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-web-replay-schema-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const columns = db
       .prepare("PRAGMA table_info(mobile_pairing_codes)")
       .all()
@@ -252,8 +256,9 @@ describe("gateway database", () => {
          '2026-07-25T01:00:00.000Z', 'device:one', NULL);
     `);
     legacy.close();
+    chmodSync(databasePath, 0o600);
 
-    db = openGatewayDatabase(databasePath, { migrationLimit: 7 });
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing", migrationLimit: 7 });
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
     ).toEqual(migrationVersions.slice(0, 7));
@@ -321,15 +326,16 @@ describe("gateway database", () => {
       VALUES(16, '2026-07-25T00:00:00.000Z');
     `);
     legacy.close();
+    chmodSync(databasePath, 0o600);
 
-    expect(() => openGatewayDatabase(databasePath)).toThrow(
-      "Unsupported Gateway schema version: 16"
+    expect(() => openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" })).toThrow(
+      "GATEWAY_DATABASE_SCHEMA_INVALID"
     );
   });
 
   it("keeps federation authority tables limited to bounded metadata columns", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-federation-schema-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
 
     const expectedColumns = {
       federation_services: [
@@ -416,7 +422,7 @@ describe("gateway database", () => {
       .toEqual({ version: 10 });
     db.close();
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version").all())
       .toEqual(migrationVersions);
     const first = db.prepare(
@@ -426,7 +432,7 @@ describe("gateway database", () => {
     ).all();
     db.close();
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(db.prepare(
       `SELECT name, sql FROM sqlite_master
        WHERE type = 'table' AND name LIKE 'federation_%'
@@ -442,7 +448,7 @@ describe("gateway database", () => {
     db = openAtVersion(databasePath, { migrationLimit: 11 });
     db.close();
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(db.prepare("PRAGMA table_info(federation_session_bindings)").all().map(
       (column) => String((column as { name: unknown }).name)
     )).toEqual([
@@ -487,7 +493,7 @@ describe("gateway database", () => {
     db = openAtVersion(databasePath, { migrationLimit: 11 });
     expect(() => new DomainEventStore(db!)).not.toThrow();
     db.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(() => new DomainEventStore(db!)).not.toThrow();
   });
 
@@ -503,7 +509,7 @@ describe("gateway database", () => {
     });
     db.close();
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(db.prepare("PRAGMA table_info(person_federation_context_versions)").all().map(
       (column) => String((column as { name: unknown }).name)
     )).toEqual(["person_ref", "context_version", "updated_at"]);
@@ -565,7 +571,7 @@ describe("gateway database", () => {
     );
     db.close();
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
       .toEqual({ version: 15 });
     expect(db.prepare(
@@ -600,7 +606,7 @@ describe("gateway database", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
 
     db.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(db.prepare(
       "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 14"
     ).get()).toEqual({ count: 1 });
@@ -630,7 +636,7 @@ describe("gateway database", () => {
     );
     db.close();
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
       .toEqual({ version: 15 });
     expect(db.prepare("PRAGMA table_info(federation_actor_contexts)").all().map(
@@ -666,7 +672,7 @@ describe("gateway database", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
 
     db.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(db.prepare(
       "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 15"
     ).get()).toEqual({ count: 1 });
@@ -674,7 +680,7 @@ describe("gateway database", () => {
 
   it("enforces V15 service and canonical role constraints for every new shape", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-federation-v15-constraints-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const minimumServiceRef = "service:aa";
     const maximumServiceRef = `service:${"a".repeat(127)}`;
     const invalidShortServiceRef = "service:a";
@@ -763,7 +769,7 @@ describe("gateway database", () => {
     db.close();
 
     const started = Date.now();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(Date.now() - started).toBeLessThan(30_000);
     expect(db.prepare("SELECT COUNT(*) AS count FROM federation_actor_contexts").get())
       .toEqual({ count: 1 });
@@ -775,7 +781,7 @@ describe("gateway database", () => {
 
   it("creates the formal Chat Work domain schema with thread-scoped uniqueness", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-chat-work-schema-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
 
     const tables = db
       .prepare(
@@ -829,7 +835,7 @@ describe("gateway database", () => {
 
   it("creates durable Thread Provider contexts and turns", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-provider-turn-schema-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
 
     const tables = db
       .prepare(
@@ -889,7 +895,7 @@ describe("gateway database", () => {
   it("installs the versioned Person event, Device Sync and transactional outbox subsystem", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-domain-event-schema-"));
     const databasePath = join(directory, "gateway.sqlite");
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     new DomainEventStore(db, () => new Date("2026-07-23T18:00:00.000Z"));
 
     expect(db.prepare(
@@ -974,7 +980,7 @@ describe("gateway database", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
 
     db.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     new DomainEventStore(db, () => new Date("2026-07-23T18:01:00.000Z"));
     expect(db.prepare(
       "SELECT version FROM domain_event_schema_migrations ORDER BY version"
@@ -983,7 +989,7 @@ describe("gateway database", () => {
 
   it("bootstraps missing development records without overwriting operational state", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-bootstrap-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     runDevelopmentBootstrap(db, bootstrap);
 
     const original = db

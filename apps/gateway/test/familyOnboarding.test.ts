@@ -87,6 +87,7 @@ describe("Family onboarding and dual-entry sessions", () => {
 
   async function openApp(configuredAgentRuntimes?: readonly ConfiguredAgentRuntime[]) {
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -236,6 +237,7 @@ describe("Family onboarding and dual-entry sessions", () => {
       ] as const)
     );
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -337,7 +339,7 @@ describe("Family onboarding and dual-entry sessions", () => {
       defaultAgentRef: null
     });
 
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(db.prepare(
       `SELECT status FROM agent_runtime_bindings
        WHERE provider_profile_ref = 'provider-profile:fake-local'
@@ -353,7 +355,7 @@ describe("Family onboarding and dual-entry sessions", () => {
   it("creates one active default Personal assignment during onboarding", async () => {
     const result = await initialize();
     await app.close();
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       expect(db.prepare(
         `SELECT COUNT(*) AS count
@@ -381,7 +383,7 @@ describe("Family onboarding and dual-entry sessions", () => {
     const otherPersonRef = member.json().member.personRef as string;
 
     await app.close();
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     let otherThreadRef = "";
     try {
       expect(db.prepare(

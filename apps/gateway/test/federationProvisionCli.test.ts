@@ -194,10 +194,10 @@ async function runRaceCli(
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "family-federation-bootstrap-"));
   databasePath = join(directory, "gateway.sqlite");
-  const database = openGatewayDatabase(databasePath, { migrationLimit: 14 });
+  const database = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing", migrationLimit: 15 });
   database.close();
   credentialPath = writeCredential("canvas.credential", token);
-});
+}, 30_000);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -206,7 +206,17 @@ afterEach(() => {
 });
 
 describe("protected federation service bootstrap CLI", () => {
-  it("provisions Canvas from an existing V14 database without exposing credential material", () => {
+  it("provisions only an exact existing V15 database", () => {
+    const v15Path = join(directory, "gateway-v15.sqlite");
+    const database = openGatewayDatabase(v15Path, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    database.close();
+    const result = runCli(argumentsFor({ database: v15Path }));
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(inspectServicesAt(v15Path)).toHaveLength(1);
+  });
+
+  it("provisions Canvas from an existing V15 database without exposing credential material", () => {
     const result = runDevPackageCli();
 
     expect(result.status).toBe(0);
@@ -452,7 +462,7 @@ describe("protected federation service bootstrap CLI", () => {
     const linkedParent = join(directory, "linked-parent");
     symlinkSync(realParent, linkedParent);
     const linkedDatabase = join(realParent, "gateway.sqlite");
-    const database = openGatewayDatabase(linkedDatabase, { migrationLimit: 14 });
+    const database = openGatewayDatabase(linkedDatabase, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing", migrationLimit: 15 });
     database.close();
 
     const result = runCli(argumentsFor({
@@ -492,7 +502,7 @@ describe("protected federation service bootstrap CLI", () => {
     async (targetStage, replacementKind) => {
       const originalPath = join(directory, `original-${targetStage}.sqlite`);
       const replacementPath = join(directory, `replacement-${targetStage}.sqlite`);
-      const replacement = openGatewayDatabase(replacementPath, { migrationLimit: 14 });
+      const replacement = openGatewayDatabase(replacementPath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing", migrationLimit: 15 });
       replacement.close();
 
       const result = await runRaceCli(targetStage, () => {
@@ -537,10 +547,18 @@ describe("protected federation service bootstrap CLI", () => {
     expect(inspectServices()).toEqual([]);
   });
 
-  it("rejects V13 and wrong SQLite schemas without migrating them", () => {
+  it("rejects V13, V14 and wrong SQLite schemas without migrating them", () => {
     const v13Path = join(directory, "gateway-v13.sqlite");
-    const v13 = openGatewayDatabase(v13Path, { migrationLimit: 13 });
+    const v13 = openGatewayDatabase(v13Path, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing", migrationLimit: 13 });
     v13.close();
+    const v14Path = join(directory, "gateway-v14.sqlite");
+    const v14 = openGatewayDatabase(v14Path, {
+      intent: "test-create-or-existing",
+      simulate: "migrate-create-or-existing",
+      migrationLimit: 14
+    });
+    v14.close();
+    const v14Before = databaseFilesystemSnapshot(v14Path);
     const wrongPath = join(directory, "wrong.sqlite");
     const wrong = new Database(wrongPath);
     wrong.exec(
@@ -550,8 +568,9 @@ describe("protected federation service bootstrap CLI", () => {
       "INSERT INTO schema_migrations(version, applied_at) VALUES(14, ?)"
     ).run("2026-08-29T00:00:00.000Z");
     wrong.close();
+    chmodSync(wrongPath, 0o600);
 
-    for (const hostile of [v13Path, wrongPath]) {
+    for (const hostile of [v13Path, v14Path, wrongPath]) {
       const result = runCli(argumentsFor({ database: hostile }));
       expectFixedFailure(result, "FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID", [
         token,
@@ -563,10 +582,17 @@ describe("protected federation service bootstrap CLI", () => {
     expect(verifyV13.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
       .toEqual({ version: 13 });
     verifyV13.close();
+    expect(databaseFilesystemSnapshot(v14Path)).toEqual(v14Before);
+    const verifyV14 = new Database(v14Path, { readonly: true, fileMustExist: true });
+    expect(verifyV14.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
+      .toEqual({ version: 14 });
+    expect(verifyV14.prepare("SELECT COUNT(*) AS count FROM federation_services").get())
+      .toEqual({ count: 0 });
+    verifyV14.close();
     expect(inspectServices()).toEqual([]);
   });
 
-  it("rejects a weak V14 lookalike with identical federation service columns", () => {
+  it("rejects a weak V15 lookalike with identical federation service columns", () => {
     const weak = new Database(databasePath, { fileMustExist: true });
     weak.pragma("foreign_keys = OFF");
     weak.exec(`DROP TABLE federation_services;
@@ -592,7 +618,7 @@ describe("protected federation service bootstrap CLI", () => {
 
   it("rejects a closed WAL-mode lookalike without database content, schema, size, mtime, or sidecar mutation", () => {
     const invalid = new Database(databasePath, { fileMustExist: true });
-    expect(invalid.pragma("journal_mode", { simple: true })).toBe("wal");
+    expect(invalid.pragma("journal_mode = WAL", { simple: true })).toBe("wal");
     invalid.pragma("foreign_keys = OFF");
     invalid.exec(`DROP TABLE federation_services;
       CREATE TABLE federation_services (
@@ -667,7 +693,7 @@ describe("protected federation service bootstrap CLI", () => {
     expect(inspectServices()).toEqual([]);
   });
 
-  it("rejects an altered V14 trigger with all protected tables unchanged", () => {
+  it("rejects an altered V15 trigger with all protected tables unchanged", () => {
     const hostile = new Database(databasePath, { fileMustExist: true });
     hostile.exec(`DROP TRIGGER person_federation_context_person_update;
       CREATE TRIGGER person_federation_context_person_update
@@ -695,7 +721,7 @@ describe("protected federation service bootstrap CLI", () => {
       `CREATE TRIGGER permissive_service_trigger AFTER INSERT ON federation_services
        BEGIN SELECT 1; END`
     ]
-  ])("rejects an extra permissive V14 %s object", (_kind, sql) => {
+  ])("rejects an extra permissive V15 %s object", (_kind, sql) => {
     const hostile = new Database(databasePath, { fileMustExist: true });
     hostile.exec(sql);
     hostile.close();
@@ -711,7 +737,7 @@ describe("protected federation service bootstrap CLI", () => {
     expect(inspectServices()).toEqual([]);
   });
 
-  it("rejects V14 when the required invocation scope index is absent", () => {
+  it("rejects V15 when the required invocation scope index is absent", () => {
     const weak = new Database(databasePath, { fileMustExist: true });
     weak.exec("DROP INDEX agent_invocation_audit_scope_idx");
     weak.close();
@@ -778,14 +804,12 @@ describe("protected federation service bootstrap CLI", () => {
   });
 
   it.each([10, 13])(
-    "accepts one exact V%d-to-V14 migration fingerprint and reopens it idempotently",
+    "accepts one exact V%d-to-V15 migration fingerprint and reopens it idempotently",
     (migrationLimit) => {
-      const migratedPath = join(directory, `gateway-v${migrationLimit}-to-v14.sqlite`);
-      const legacy = openGatewayDatabase(migratedPath, {
-        migrationLimit: migrationLimit as 10 | 13
-      });
+      const migratedPath = join(directory, `gateway-v${migrationLimit}-to-v15.sqlite`);
+      const legacy = openGatewayDatabase(migratedPath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing", migrationLimit: migrationLimit as 10 | 13 });
       legacy.close();
-      const migrated = openGatewayDatabase(migratedPath, { migrationLimit: 14 });
+      const migrated = openGatewayDatabase(migratedPath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing", migrationLimit: 15 });
       migrated.close();
       const args = argumentsFor({
         serviceRef: `service:canvas-v${migrationLimit}`,
@@ -793,7 +817,7 @@ describe("protected federation service bootstrap CLI", () => {
       });
 
       const first = runCli(args);
-      const reopened = openGatewayDatabase(migratedPath, { migrationLimit: 14 });
+      const reopened = openGatewayDatabase(migratedPath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing", migrationLimit: 15 });
       reopened.close();
       const replay = runCli(args);
 

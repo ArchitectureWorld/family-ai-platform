@@ -119,6 +119,7 @@ describe("Chat Work SSE HTTP route", () => {
     origin = "";
     directory = mkdtempSync(join(tmpdir(), "family-ai-event-stream-routes-"));
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "test",

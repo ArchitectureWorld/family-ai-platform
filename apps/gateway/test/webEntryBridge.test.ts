@@ -41,6 +41,7 @@ describe("Web Entry Cookie bridge", () => {
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-web-entry-bridge-"));
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "test",

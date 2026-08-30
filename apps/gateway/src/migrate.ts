@@ -9,7 +9,9 @@ const databasePath = resolve(args[1]!);
 if (databasePath !== args[1] || databasePath === "/") {
   throw new Error("MIGRATION_ONLY_DATABASE_PATH_INVALID");
 }
-const database = openGatewayDatabase(databasePath);
+const database = openGatewayDatabase(databasePath, {
+  intent: "migrate-create-or-existing"
+});
 try {
   const quick = database.pragma("quick_check", { simple: true });
   const foreign = database.pragma("foreign_key_check") as unknown[];

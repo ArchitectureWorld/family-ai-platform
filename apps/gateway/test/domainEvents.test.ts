@@ -18,7 +18,7 @@ describe("DomainEventStore", () => {
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-domain-events-"));
     databasePath = join(directory, "gateway.sqlite");
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const family = new FamilyDomainRepository(db);
     const onboarding = family.initializeFamily({
       familyName: "测试家庭",
@@ -263,7 +263,7 @@ describe("DomainEventStore", () => {
     });
     db.close();
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     store = new DomainEventStore(db, () => new Date("2026-07-23T18:05:00.000Z"));
     expect(store.listPersonEvents({ personRef: ownerPersonRef }).events).toEqual([event]);
     const claimed = store.claimOutboxBatch({

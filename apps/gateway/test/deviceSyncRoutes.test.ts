@@ -51,6 +51,7 @@ describe("Device Sync HTTP routes", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-device-sync-routes-"));
     databasePath = join(directory, "gateway.sqlite");
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -156,7 +157,7 @@ describe("Device Sync HTTP routes", () => {
     expect(firstBody.events.map((event) => event.eventSequence)).toEqual([1]);
     expect(JSON.stringify(firstBody)).not.toContain(onboarding.entries.personal.token);
 
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       expect(db.prepare("SELECT COUNT(*) AS count FROM device_sync_cursors").get())
         .toEqual({ count: 0 });
@@ -206,7 +207,7 @@ describe("Device Sync HTTP routes", () => {
       (item) => item.eventSequence
     )).toEqual([1]);
 
-    const verify = openGatewayDatabase(databasePath);
+    const verify = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       expect(verify.prepare(
         `SELECT acknowledged_sequence FROM device_sync_cursors
@@ -219,7 +220,7 @@ describe("Device Sync HTTP routes", () => {
   });
 
   it("paginates more than 200 events in strict order without changing the Cursor", async () => {
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       const events = new DomainEventStore(
         db,
@@ -260,7 +261,7 @@ describe("Device Sync HTTP routes", () => {
     expect(secondBody.events.map((event) => event.eventSequence)).toEqual([201, 202, 203, 204, 205]);
     expect(secondBody.nextAfterSequence).toBeNull();
 
-    const verify = openGatewayDatabase(databasePath);
+    const verify = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       expect(verify.prepare("SELECT COUNT(*) AS count FROM device_sync_cursors").get())
         .toEqual({ count: 0 });
@@ -356,7 +357,7 @@ describe("Device Sync HTTP routes", () => {
     });
     expect(member.statusCode).toBe(201);
     const adultPersonRef = String(member.json().member.personRef);
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     let adultEvent: DomainEvent;
     try {
       adultEvent = new DomainEventStore(

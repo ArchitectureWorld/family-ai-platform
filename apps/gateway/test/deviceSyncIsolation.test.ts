@@ -38,7 +38,7 @@ describe("Device Sync Device and Person isolation", () => {
     expect(secondState.events.map((item) => item.eventSequence)).toEqual([1]);
     await harness.acknowledge(second.entry, secondState.events[0]!);
 
-    const db = openGatewayDatabase(harness.databasePath);
+    const db = openGatewayDatabase(harness.databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       const rows = db.prepare(
         `SELECT device_ref, person_ref, acknowledged_sequence
@@ -79,7 +79,7 @@ describe("Device Sync Device and Person isolation", () => {
     await harness.acknowledge(harness.initialized.entries.personal, ownerState.events[0]!);
     await harness.acknowledge(adult.entry, adultState.events[0]!);
 
-    const db = openGatewayDatabase(harness.databasePath);
+    const db = openGatewayDatabase(harness.databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       const rows = db.prepare(
         `SELECT device_ref, person_ref, acknowledged_sequence

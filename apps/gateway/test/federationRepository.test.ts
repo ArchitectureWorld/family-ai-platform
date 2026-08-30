@@ -51,7 +51,7 @@ describe("FederationRepository", () => {
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-federation-repository-"));
     databasePath = join(directory, "gateway.sqlite");
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const onboarding = new FamilyDomainRepository(db).initializeFamily({
       familyName: "联邦测试家庭",
       ownerName: "联邦测试成员",
@@ -450,7 +450,7 @@ describe("FederationRepository", () => {
 
   it("serializes two writers and converges both repositories on one reusable context", () => {
     repository.provisionService({ ...CANVAS_SERVICE, token: CANVAS_TOKEN });
-    const secondDb = openGatewayDatabase(databasePath);
+    const secondDb = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     secondDb.pragma("busy_timeout = 1");
     db.pragma("busy_timeout = 1");
     try {
@@ -878,7 +878,7 @@ describe("FederationRepository", () => {
       kind: "acquired",
       claim: { invocationRef: input.invocationRef }
     });
-    const secondDb = openGatewayDatabase(databasePath);
+    const secondDb = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       const second = new FederationRepository(secondDb, { now: () => now });
       expect(second.claimInvocation(input)).toMatchObject({

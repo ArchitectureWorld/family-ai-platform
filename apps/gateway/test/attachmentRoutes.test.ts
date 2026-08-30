@@ -74,6 +74,7 @@ describe("attachment upload and download routes", () => {
     currentNow = new Date("2026-07-29T08:00:00.000Z");
     provider = new MissingSessionOnceProvider({ clock: () => currentNow });
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       attachmentRoot: join(directory, "attachments"),
       attachmentQuotaBytes: 20000,

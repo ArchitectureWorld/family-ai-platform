@@ -53,6 +53,7 @@ describe("Admin system workspace privacy", () => {
     databasePath = join(directory, "gateway.sqlite");
     const now = () => new Date("2026-07-28T10:00:00.000Z");
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -185,7 +186,7 @@ describe("Admin system workspace privacy", () => {
     expect(member.statusCode).toBe(201);
     const otherPersonRef = member.json().member.personRef as string;
     const otherAdminThreadRef = "thread:other-admin-thread";
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       db.prepare(
         `INSERT INTO admin_agent_assignments

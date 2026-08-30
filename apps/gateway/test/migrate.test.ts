@@ -33,7 +33,7 @@ describe("Gateway migration-only CLI", () => {
       directory = mkdtempSync(join(tmpdir(), `family-ai-migrate-${fixture}-`));
       const databasePath = join(directory, "gateway.sqlite");
       if (fixture === "v14") {
-        openGatewayDatabase(databasePath, { migrationLimit: 14 }).close();
+        openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing", migrationLimit: 14 }).close();
       }
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -44,7 +44,7 @@ describe("Gateway migration-only CLI", () => {
           '{"schemaVersion":15,"quickCheck":"ok","foreignKeyViolations":0}\n'
         );
       }
-      const database = openGatewayDatabase(databasePath);
+      const database = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
       expect(database.prepare(
         "SELECT MAX(version) AS version FROM schema_migrations"
       ).get()).toEqual({ version: 15 });

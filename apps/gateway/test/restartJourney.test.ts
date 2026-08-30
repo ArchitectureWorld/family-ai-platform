@@ -36,6 +36,7 @@ describe("Gateway restart journey", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-restart-"));
     const databasePath = join(directory, "gateway.sqlite");
     const firstApp = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken: token,
       mode: "test"
@@ -59,7 +60,7 @@ describe("Gateway restart journey", () => {
     }
     await firstApp.close();
 
-    const inspection = openGatewayDatabase(databasePath);
+    const inspection = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(
       inspection
         .prepare(
@@ -77,6 +78,7 @@ describe("Gateway restart journey", () => {
     inspection.close();
 
     const secondApp = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken: token,
       mode: "test"

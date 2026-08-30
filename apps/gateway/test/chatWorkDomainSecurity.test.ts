@@ -28,7 +28,7 @@ describe("Chat Work message provenance", () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-chat-work-provenance-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const familyRepository = new FamilyDomainRepository(db);
     const onboarding = familyRepository.initializeFamily({
       familyName: "来源校验家庭",

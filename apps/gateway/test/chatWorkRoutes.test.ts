@@ -61,6 +61,7 @@ describe("Chat Work HTTP routes", () => {
 
   async function openApp() {
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -437,7 +438,7 @@ describe("Chat Work HTTP routes", () => {
     const workConversationRef = conversion.json().conversation.workConversationRef as string;
     await app.close();
 
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const repository = new ChatWorkDomainRepository(db, () => currentNow);
     repository.saveWorkProgressSnapshot({
       personRef: ownerPersonRef,

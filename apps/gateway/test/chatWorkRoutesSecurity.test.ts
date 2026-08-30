@@ -52,6 +52,7 @@ describe("Chat Work HTTP route security", () => {
 
   async function openApp(now: Date = testNow) {
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -63,7 +64,7 @@ describe("Chat Work HTTP route security", () => {
     familyRef: string;
     personRef: string;
   }): EntryCredential & { deviceRef: string } {
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const now = testNow.toISOString();
     const expiresAt = "2026-08-24T06:30:00.000Z";
     const deviceRef = `device:${randomUUID()}`;
@@ -195,7 +196,7 @@ describe("Chat Work HTTP route security", () => {
       message: { messageRef: string; content: { text: string } };
     };
     let assistantMessageRef = "";
-    const evidenceDb = openGatewayDatabase(databasePath);
+    const evidenceDb = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       evidenceDb.pragma("query_only = ON");
       const turn = evidenceDb.prepare(
@@ -466,7 +467,7 @@ describe("Chat Work HTTP route security", () => {
 
     await app.close();
     const second = createSecondPersonalEntry({ familyRef, personRef: secondPersonRef });
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const repository = new ChatWorkDomainRepository(db, () => testNow);
     repository.saveWorkProgressSnapshot({
       personRef: ownerPersonRef,
@@ -535,7 +536,7 @@ describe("Chat Work HTTP route security", () => {
 
   it("hides admin conversion state and blocks durable personal progress after unmount", async () => {
     await app.close();
-    let db = openGatewayDatabase(databasePath);
+    let db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const repository = new ChatWorkDomainRepository(db, () => testNow);
     const chat = repository.ensureHomeChat({
       personRef: ownerPersonRef,
@@ -655,7 +656,7 @@ describe("Chat Work HTTP route security", () => {
     });
 
     await app.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     new AgentManagementRepository(db, () => testNow).unmountMemberAgent({
       familyRef,
       personRef: ownerPersonRef,
@@ -687,7 +688,7 @@ describe("Chat Work HTTP route security", () => {
 
   it("rejects expired sessions and revoked devices before Chat Work access", async () => {
     await app.close();
-    let db = openGatewayDatabase(databasePath);
+    let db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     db.prepare(
       "UPDATE entry_sessions SET expires_at = ? WHERE entry_session_ref = ?"
     ).run("2026-07-23T00:00:00.000Z", personal.entrySessionRef);
@@ -707,7 +708,7 @@ describe("Chat Work HTTP route security", () => {
     });
 
     await app.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     db.prepare(
       `UPDATE entry_sessions
        SET status = 'active', expires_at = ?

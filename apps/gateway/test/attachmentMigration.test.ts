@@ -9,10 +9,14 @@ import {
 } from "../src/database.js";
 import { FamilyDomainRepository } from "../src/familyDomain.js";
 
-const openAtVersion = openGatewayDatabase as unknown as (
+const openAtVersion = (
   databasePath: string,
   options: { migrationLimit: 7 | 8 | 9 | 10 | 11 | 12 | 13 }
-) => GatewayDatabase;
+): GatewayDatabase => openGatewayDatabase(databasePath, {
+  intent: "test-create-or-existing",
+  simulate: "migrate-create-or-existing",
+  migrationLimit: options.migrationLimit
+});
 
 describe("attachment metadata migration", () => {
   let directory = "";
@@ -81,7 +85,7 @@ describe("attachment metadata migration", () => {
     db.close();
     db = null;
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(
       db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()
     ).toEqual({ version: 15 });
@@ -199,7 +203,7 @@ describe("attachment metadata migration", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
 
     db.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM message_attachments").get()
     ).toEqual({ count: 1 });

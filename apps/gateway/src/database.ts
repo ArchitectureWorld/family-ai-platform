@@ -1,8 +1,12 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import type { MessageEnvelope } from "@family-ai/contracts";
+import {
+  openSecureDatabaseFile,
+  type DatabaseSecurityHooks,
+  type GatewayDatabaseIntent,
+  type GatewayDatabaseOpenRequest
+} from "./databaseSecurity.js";
 
 export type GatewayDatabase = Database.Database;
 
@@ -1467,21 +1471,71 @@ function applyMigrations(
   }
 }
 
-export interface GatewayDatabaseOpenOptions {
-  migrationLimit?: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
-}
+export type { GatewayDatabaseIntent, GatewayDatabaseOpenRequest };
+
+export type SecureGatewayDatabaseLease = GatewayDatabase & {
+  database: GatewayDatabase;
+  intent: GatewayDatabaseIntent;
+  assertBound: () => void;
+};
 
 export function openGatewayDatabase(
   databasePath: string,
-  options: GatewayDatabaseOpenOptions = {}
-): GatewayDatabase {
-  mkdirSync(dirname(databasePath), { recursive: true });
-  const db = new Database(databasePath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.pragma("busy_timeout = 5000");
-  applyMigrations(db, options.migrationLimit ?? 15);
-  return db;
+  request: GatewayDatabaseOpenRequest,
+  hooks: DatabaseSecurityHooks = {}
+): SecureGatewayDatabaseLease {
+  if (request === undefined || request === null) {
+    throw new Error("GATEWAY_DATABASE_INTENT_REQUIRED");
+  }
+  const secure = openSecureDatabaseFile(databasePath, request, hooks);
+  const db = secure.database;
+  try {
+    db.pragma("foreign_keys = ON");
+    db.pragma("busy_timeout = 5000");
+    if (secure.effectiveIntent === "migrate-create-or-existing") {
+      db.pragma("journal_mode = DELETE");
+      db.pragma("foreign_keys = OFF");
+      try {
+        db.exec("BEGIN EXCLUSIVE");
+        try {
+          applyMigrations(db, secure.migrationLimit);
+          if (
+            db.pragma("quick_check", { simple: true }) !== "ok"
+            || (db.pragma("foreign_key_check") as unknown[]).length !== 0
+          ) {
+            throw new Error("GATEWAY_DATABASE_SCHEMA_INVALID");
+          }
+          secure.assertBound();
+          hooks.checkpoint?.("beforeMigrationCommit");
+          secure.assertBound();
+          db.exec("COMMIT");
+        } catch (error) {
+          if (db.inTransaction) db.exec("ROLLBACK");
+          throw error;
+        }
+      } finally {
+        db.pragma("foreign_keys = ON");
+      }
+    } else if (secure.effectiveIntent === "gateway-existing") {
+      db.pragma("journal_mode = WAL");
+    } else {
+      db.pragma("journal_mode = DELETE");
+    }
+    secure.assertBound();
+    hooks.checkpoint?.("beforeReturn");
+    secure.assertBound();
+    const lease = db as SecureGatewayDatabaseLease;
+    Object.defineProperties(lease, {
+      database: { value: db, enumerable: false },
+      intent: { value: secure.intent, enumerable: false },
+      assertBound: { value: secure.assertBound, enumerable: false },
+      close: { value: secure.close, enumerable: false }
+    });
+    return lease;
+  } catch (error) {
+    secure.close();
+    throw error;
+  }
 }
 
 export function sha256(value: string): string {

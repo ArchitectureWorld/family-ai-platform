@@ -46,6 +46,7 @@ async function initializedPreview(label = "initialized") {
   const databasePath = join(directory, "gateway.sqlite");
   const adminEntryPath = join(configDir, "admin-entry.json");
   const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
     databasePath,
     deviceToken,
     mode: "development",
@@ -223,6 +224,7 @@ describe("development Admin Preview direct access", () => {
       const configDir = join(directory, "config");
       mkdirSync(configDir, { mode: 0o700 });
       const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
         databasePath: join(directory, "gateway.sqlite"),
         deviceToken,
         mode,

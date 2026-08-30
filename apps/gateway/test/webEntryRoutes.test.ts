@@ -91,6 +91,7 @@ describe("Web Entry HTTP routes", () => {
     currentTime = new Date("2026-07-25T09:00:00.000Z");
     directory = mkdtempSync(join(tmpdir(), "family-ai-web-entry-routes-"));
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "test",
@@ -371,7 +372,7 @@ describe("Web Entry HTTP routes", () => {
   it("returns a strict empty Web context when the authenticated member has no mount", async () => {
     const claimed = await claim();
     expect(claimed.statusCode).toBe(204);
-    const database = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    const database = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       new AgentManagementRepository(database, () => currentTime).unmountMemberAgent({
         familyRef,

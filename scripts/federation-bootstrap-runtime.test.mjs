@@ -5,11 +5,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import Database from "better-sqlite3";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
 const builtCli = join(root, "apps/gateway/dist/provisionFederationService.js");
+const builtMigrateCli = join(root, "apps/gateway/dist/migrate.js");
+
+function migrateDatabase(databasePath) {
+  const result = spawnSync(process.execPath, [
+    builtMigrateCli,
+    "--database", databasePath
+  ], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, NODE_ENV: "production" }
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+}
 
 test("production package command uses the built CLI and keeps tsx explicit to development", () => {
   assert.equal(
@@ -34,17 +49,13 @@ test("built production CLI imports native runtime dependencies without secrets o
   assert.equal(result.stderr, "");
 });
 
-test("built production CLI provisions one disposable V14 service without secret output", async () => {
+test("built production CLI provisions one disposable V15 service without secret output", () => {
   const directory = mkdtempSync(join(tmpdir(), "family-built-bootstrap-"));
   const databasePath = join(directory, "gateway.sqlite");
   const credentialPath = join(directory, "canvas.credential");
   const credential = "Built-Canvas-Credential-0001";
   try {
-    const { openGatewayDatabase } = await import(
-      "../apps/gateway/dist/database.js"
-    );
-    const database = openGatewayDatabase(databasePath, { migrationLimit: 14 });
-    database.close();
+    migrateDatabase(databasePath);
     writeFileSync(credentialPath, credential, { mode: 0o600 });
     chmodSync(credentialPath, 0o600);
 
@@ -74,10 +85,7 @@ test("built production CLI provisions one disposable V14 service without secret 
   }
 });
 
-test("built production CLI rejects extra and altered persistent service views", async () => {
-  const { openGatewayDatabase } = await import(
-    "../apps/gateway/dist/database.js"
-  );
+test("built production CLI rejects extra and altered persistent service views", () => {
   for (const [label, viewSql] of [
     [
       "extra",
@@ -94,7 +102,8 @@ test("built production CLI rejects extra and altered persistent service views", 
     const credentialPath = join(directory, "canvas.credential");
     const credential = `Built-View-Credential-${label}-0001`;
     try {
-      const database = openGatewayDatabase(databasePath, { migrationLimit: 14 });
+      migrateDatabase(databasePath);
+      const database = new Database(databasePath, { fileMustExist: true });
       database.exec(viewSql);
       database.close();
       writeFileSync(credentialPath, credential, { mode: 0o600 });
@@ -117,7 +126,10 @@ test("built production CLI rejects extra and altered persistent service views", 
       assert.equal(result.stderr, "FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID\n");
       assert.equal(`${result.stdout}${result.stderr}`.includes(credential), false);
       assert.equal(`${result.stdout}${result.stderr}`.includes(databasePath), false);
-      const verification = openGatewayDatabase(databasePath, { migrationLimit: 14 });
+      const verification = new Database(databasePath, {
+        readonly: true,
+        fileMustExist: true
+      });
       assert.deepEqual(
         verification.prepare("SELECT COUNT(*) AS count FROM federation_services").get(),
         { count: 0 }
@@ -129,15 +141,13 @@ test("built production CLI rejects extra and altered persistent service views", 
   }
 });
 
-test("built production CLI ignores SQLite-owned ANALYZE objects", async () => {
+test("built production CLI ignores SQLite-owned ANALYZE objects", () => {
   const directory = mkdtempSync(join(tmpdir(), "family-built-internal-schema-"));
   const databasePath = join(directory, "gateway.sqlite");
   const credentialPath = join(directory, "canvas.credential");
   try {
-    const { openGatewayDatabase } = await import(
-      "../apps/gateway/dist/database.js"
-    );
-    const database = openGatewayDatabase(databasePath, { migrationLimit: 14 });
+    migrateDatabase(databasePath);
+    const database = new Database(databasePath, { fileMustExist: true });
     database.exec("ANALYZE");
     database.close();
     writeFileSync(credentialPath, "Built-Internal-Credential-0001", { mode: 0o600 });

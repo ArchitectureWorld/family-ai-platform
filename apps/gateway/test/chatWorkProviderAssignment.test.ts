@@ -20,7 +20,7 @@ describe("Chat Work Provider assignment transitions", () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-provider-assignment-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const familyRepository = new FamilyDomainRepository(db);
     const onboarding = familyRepository.initializeFamily({
       familyName: "测试家庭",

@@ -513,7 +513,7 @@ describe("Gateway configuration", () => {
   it("reconciles runtime catalog and existing owner Admin assignments idempotently", async () => {
     const fixture = runtimeFixture();
     const databasePath = join(fixture.root, "gateway.sqlite");
-    const seed = openGatewayDatabase(databasePath);
+    const seed = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     new FamilyDomainRepository(seed).initializeFamily({
       familyName: "Runtime Family",
       ownerName: "Runtime Owner",
@@ -527,6 +527,7 @@ describe("Gateway configuration", () => {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
         databasePath,
         deviceToken: token,
         mode: "development",
@@ -537,7 +538,7 @@ describe("Gateway configuration", () => {
       await app.close();
     }
 
-    const verified = openGatewayDatabase(databasePath);
+    const verified = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(verified.prepare(
       `SELECT COUNT(*) AS count
        FROM admin_agent_assignments

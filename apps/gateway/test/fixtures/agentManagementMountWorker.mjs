@@ -7,7 +7,10 @@ const port = parentPort;
 if (!port) throw new Error("Agent mount worker requires a parent port");
 
 const input = workerData;
-const db = openGatewayDatabase(input.databasePath);
+const db = openGatewayDatabase(input.databasePath, {
+  intent: "test-create-or-existing",
+  simulate: "migrate-create-or-existing"
+});
 const repository = new AgentManagementRepository(db, () => new Date(input.now));
 
 port.postMessage({ type: "ready" });

@@ -43,7 +43,8 @@ import {
   openGatewayDatabase,
   runDevelopmentBootstrap,
   type AuthenticatedDevice,
-  type DevelopmentBootstrapInput
+  type DevelopmentBootstrapInput,
+  type GatewayDatabaseOpenRequest
 } from "./database.js";
 import { DeviceSyncRepository } from "./deviceSync.js";
 import { registerDeviceSyncRoutes } from "./deviceSyncRoutes.js";
@@ -81,6 +82,7 @@ export type GatewayMode = "test" | "development" | "production";
 
 export interface BuildGatewayAppOptions {
   databasePath: string;
+  databaseOpenRequest: GatewayDatabaseOpenRequest;
   attachmentRoot?: string;
   attachmentQuotaBytes?: number;
   deviceToken: string;
@@ -260,7 +262,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     options.attachmentRoot ??
       join(dirname(options.databasePath), "attachments")
   );
-  const db = openGatewayDatabase(options.databasePath);
+  const db = openGatewayDatabase(options.databasePath, options.databaseOpenRequest);
   const now = options.now ?? (() => new Date());
   const domainEventStore = new DomainEventStore(db, now);
   if (options.mode !== "production") {
