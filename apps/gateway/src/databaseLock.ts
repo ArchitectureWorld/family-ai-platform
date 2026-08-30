@@ -99,7 +99,7 @@ export function gatewayDatabaseLockMetadataMatchesForTest(input: {
 function requireInheritedGatewayDatabaseLockWithIdentity(input: {
   role: GatewayDatabaseLockRole;
   databasePath: string;
-}, identity: GatewayDatabaseLockIdentity): GatewayDatabaseLockLease {
+}, identity: GatewayDatabaseLockIdentity, testIdentity = false): GatewayDatabaseLockLease {
   if (
     !Number.isSafeInteger(identity.uid)
     || identity.uid < 0
@@ -137,7 +137,22 @@ function requireInheritedGatewayDatabaseLockWithIdentity(input: {
     ) {
       fail();
     }
-    const asserted = spawnSync("python3", [
+    const asserted = spawnSync("python3", testIdentity ? [
+      "-c",
+      [
+        "import importlib.util,sys",
+        "sys.dont_write_bytecode=True",
+        "spec=importlib.util.spec_from_file_location('gateway_lock',sys.argv[1])",
+        "gateway_lock=importlib.util.module_from_spec(spec)",
+        "spec.loader.exec_module(gateway_lock)",
+        "gateway_lock.assert_inherited(3,sys.argv[2],sys.argv[3],int(sys.argv[4]),int(sys.argv[5]))"
+      ].join(";"),
+      launcher,
+      input.role,
+      databasePath,
+      String(identity.uid),
+      String(identity.gid)
+    ] : [
       launcher,
       "--assert-inherited-fd", "3",
       "--database", databasePath
@@ -186,5 +201,5 @@ export function requireInheritedGatewayDatabaseLockForTest(input: {
   databasePath: string;
 }, identity: GatewayDatabaseLockIdentity): GatewayDatabaseLockLease {
   if (process.env.NODE_ENV !== "test") fail();
-  return requireInheritedGatewayDatabaseLockWithIdentity(input, identity);
+  return requireInheritedGatewayDatabaseLockWithIdentity(input, identity, true);
 }

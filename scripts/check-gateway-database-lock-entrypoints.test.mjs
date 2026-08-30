@@ -16,6 +16,28 @@ import test from "node:test";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const checker = "scripts/check-gateway-database-lock-entrypoints.mjs";
 
+test("documents one exact npm database identity", () => {
+  const documentation = readFileSync(
+    join(root, "docs/development/2026-08-29-federation-service-bootstrap.md"),
+    "utf8"
+  );
+  assert.match(
+    documentation,
+    /GATEWAY_DATABASE_PATH=\/absolute\/protected\/runtime\/gateway\.sqlite npm --silent run provision:federation-service -- \\\n(?:.*\n){3}  --database \/absolute\/protected\/runtime\/gateway\.sqlite/u
+  );
+});
+
+test("keeps production fixed-identity launcher success out of host runtime tests", () => {
+  const runtimeTest = readFileSync(
+    join(root, "scripts/federation-bootstrap-runtime.test.mjs"),
+    "utf8"
+  );
+  assert.doesNotMatch(
+    runtimeTest,
+    /spawnSync\("python3", \[\s*lockLauncher,\s*"--database-from-env"/u
+  );
+});
+
 test("accepts only launcher-bound Gateway database entrypoints and manifests", () => {
   const result = spawnSync(process.execPath, [checker], {
     cwd: root,
@@ -40,6 +62,7 @@ test("rejects every independent direct-node or missing-manifest launcher bypass"
     "scripts/build-gateway-image.sh",
     "scripts/member-preview-up.sh",
     "scripts/test-runtime-retained-fixture.sh",
+    "scripts/federation-bootstrap-runtime.test.mjs",
     "docs/development/2026-08-29-federation-service-bootstrap.md",
     "scripts/runtime-tool-manifest.mjs",
     "scripts/gateway-release-capabilities.json",
@@ -62,7 +85,9 @@ test("rejects every independent direct-node or missing-manifest launcher bypass"
       ["scripts/build-gateway-image.sh", /EXPECTED_LAUNCHER_SHA=.*gateway_lock_exec\.py/u, 'EXPECTED_LAUNCHER_SHA="$(printf 0%.0s {1..64})"'],
       ["scripts/member-preview-up.sh", /exec python3 "\$2" --database-from-env GATEWAY_DATABASE_PATH -- node apps\/gateway\/dist\/index\.js/u, 'exec node "$2"'],
       ["scripts/test-runtime-retained-fixture.sh", /python3 "\$ROOT_DIR\/apps\/gateway\/runtime\/gateway_lock_exec\.py"/u, 'node "$ROOT_DIR/apps/gateway/dist/migrate.js"'],
+      ["scripts/federation-bootstrap-runtime.test.mjs", /const lockLauncher = join\(root, "apps\/gateway\/runtime\/gateway_lock_exec\.py"\);/u, '$&\nspawnSync("python3", [\n  lockLauncher,\n  "--database-from-env", "GATEWAY_DATABASE_PATH"\n]);'],
       ["docs/development/2026-08-29-federation-service-bootstrap.md", /FAMILY_IMAGE/u, "--entrypoint node FAMILY_IMAGE"],
+      ["docs/development/2026-08-29-federation-service-bootstrap.md", /GATEWAY_DATABASE_PATH=\/absolute\/protected\/runtime\/gateway\.sqlite npm/u, "GATEWAY_DATABASE_PATH=/absolute/protected/runtime/other.sqlite npm"],
       ["docs/development/2026-08-29-federation-service-bootstrap.md", /--env GATEWAY_DATABASE_PATH=\/runtime\/gateway\.sqlite/u, "--env GATEWAY_DATABASE_PATH=/runtime/other.sqlite"],
       ["scripts/runtime-tool-manifest.mjs", /apps\/gateway\/runtime\/gateway_lock_exec\.py/u, "apps/gateway/runtime/missing.py"],
       ["scripts/runtime-tool-manifest.mjs", /scripts\/gateway-image-runtime-contract\.mjs/u, "scripts/missing-image-contract.mjs"],
@@ -100,6 +125,7 @@ test("rejects additive workspace bypasses, shell indirection, and duplicate Dock
     "scripts/build-gateway-image.sh",
     "scripts/member-preview-up.sh",
     "scripts/test-runtime-retained-fixture.sh",
+    "scripts/federation-bootstrap-runtime.test.mjs",
     "docs/development/2026-08-29-federation-service-bootstrap.md",
     "scripts/runtime-tool-manifest.mjs",
     "scripts/gateway-release-capabilities.json",

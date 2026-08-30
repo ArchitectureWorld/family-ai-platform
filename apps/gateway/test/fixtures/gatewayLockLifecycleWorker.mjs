@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import Fastify from "fastify";
 import { tsImport } from "tsx/esm/api";
 
-const { requireInheritedGatewayDatabaseLock } = await tsImport(
+const { requireInheritedGatewayDatabaseLockForTest } = await tsImport(
   "../../src/databaseLock.ts",
   import.meta.url
 );
@@ -14,10 +14,13 @@ const { createGatewayProcessLifecycle } = await tsImport(
   import.meta.url
 );
 
-const [databasePath, mode, readyPath, closingPath, releasePath, dbClosedPath, closeErrorPath, portRaw] =
+const [databasePath, mode, readyPath, closingPath, releasePath, dbClosedPath, closeErrorPath, portRaw, uidRaw, gidRaw] =
   process.argv.slice(2);
 
-const lock = requireInheritedGatewayDatabaseLock({ role: "gateway", databasePath });
+const lock = requireInheritedGatewayDatabaseLockForTest(
+  { role: "gateway", databasePath },
+  { uid: Number(uidRaw), gid: Number(gidRaw) }
+);
 const database = new Database(databasePath);
 const app = Fastify({ logger: false });
 app.addHook("onClose", async () => {

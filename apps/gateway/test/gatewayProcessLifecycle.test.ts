@@ -16,6 +16,18 @@ import { afterEach, describe, expect, it } from "vitest";
 const root = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const worker = join(root, "apps/gateway/test/fixtures/gatewayLockLifecycleWorker.mjs");
 const launcher = join(root, "apps/gateway/runtime/gateway_lock_exec.py");
+const currentUid = process.getuid?.();
+const currentGid = process.getgid?.();
+if (currentUid === undefined || currentGid === undefined) {
+  throw new Error("Gateway lifecycle tests require POSIX uid/gid");
+}
+const loadLauncher = String.raw`
+import importlib.util, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("gateway_lock", sys.argv[1])
+gateway_lock = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gateway_lock)
+`;
 const harness = String.raw`
 import fcntl, os, sys
 database, node, worker, *args = sys.argv[1:]
@@ -52,19 +64,25 @@ describe("Gateway process lock lifecycle", () => {
     expect(existsSync(path)).toBe(true);
   };
   const contender = (databasePath: string) => spawnSync("python3", [
-    launcher, "--database-from-env", "GATEWAY_DATABASE_PATH", "--",
-    "node", "apps/gateway/test/fixtures/authorizedLockProbe.mjs",
-    "--database", databasePath
+    "-c",
+    `${loadLauncher}\ntry:\n parent, lock = gateway_lock.claim_lock(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))\n print("GATEWAY_DATABASE_LOCK_PROBE_OK")\nexcept gateway_lock.LockFailure as error:\n print(error.code, file=sys.stderr)\n raise SystemExit(1)`,
+    launcher,
+    databasePath,
+    String(currentUid),
+    String(currentGid)
   ], {
     cwd: root,
-    encoding: "utf8",
-    env: { ...process.env, NODE_ENV: "test", GATEWAY_DATABASE_PATH: databasePath }
+    encoding: "utf8"
   });
   const start = (input: Record<string, string>, mode: string, port = "0") => spawn("python3", [
     "-c", harness, input["gateway.sqlite"]!, process.execPath, worker,
     mode, input.ready!, input.closing!, input.release!, input["db-closed"]!,
-    input["close-error"]!, port
-  ], { cwd: root, stdio: ["ignore", "ignore", "pipe"] });
+    input["close-error"]!, port, String(currentUid), String(currentGid)
+  ], {
+    cwd: root,
+    env: { ...process.env, NODE_ENV: "test" },
+    stdio: ["ignore", "ignore", "pipe"]
+  });
 
   it("keeps the lock through the real database close barrier across double signals", async () => {
     const input = paths();

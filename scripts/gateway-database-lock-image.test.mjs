@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -84,18 +84,32 @@ test("runtime provenance rejects an image that copied different launcher bytes",
 }, () => {
   const fixture = mkdtempSync(join(tmpdir(), "family-lock-wrong-launcher-"));
   const tag = `family-lock-wrong-launcher:${process.pid}`;
+  const baseTag = /^sha256:[0-9a-f]{64}$/u.test(image ?? "")
+    ? `family-lock-provenance-base:${process.pid}-${randomUUID()}`
+    : undefined;
   try {
+    if (baseTag !== undefined) {
+      const tagged = spawnSync("docker", ["image", "tag", image, baseTag], {
+        encoding: "utf8"
+      });
+      assert.equal(tagged.status, 0, tagged.stderr);
+      const taggedIdentity = spawnSync("docker", [
+        "image", "inspect", "--format", "{{.Id}}", baseTag
+      ], { encoding: "utf8" });
+      assert.equal(taggedIdentity.status, 0, taggedIdentity.stderr);
+      assert.equal(taggedIdentity.stdout.trim(), image);
+    }
     writeFileSync(join(fixture, "gateway_lock_exec.py"), "#!/usr/bin/env python3\nraise SystemExit(1)\n");
     chmodSync(join(fixture, "gateway_lock_exec.py"), 0o755);
     writeFileSync(join(fixture, "Dockerfile"), [
-      `FROM ${image}`,
+      `FROM ${baseTag ?? image}`,
       "USER root",
       "COPY --chown=1000:1000 gateway_lock_exec.py /app/apps/gateway/runtime/gateway_lock_exec.py",
       "RUN chmod 0755 /app/apps/gateway/runtime/gateway_lock_exec.py",
       "USER node",
       ""
     ].join("\n"));
-    const built = spawnSync("docker", ["build", "--quiet", "--tag", tag, fixture], {
+    const built = spawnSync("docker", ["build", "--pull=false", "--quiet", "--tag", tag, fixture], {
       encoding: "utf8",
       timeout: 90_000
     });
@@ -116,6 +130,9 @@ test("runtime provenance rejects an image that copied different launcher bytes",
     assert.equal(result.stderr, "GATEWAY_IMAGE_RUNTIME_INVALID\n");
   } finally {
     spawnSync("docker", ["image", "rm", "--force", tag]);
+    if (baseTag !== undefined) {
+      spawnSync("docker", ["image", "rm", "--force", baseTag]);
+    }
     rmSync(fixture, { recursive: true, force: true });
   }
 });

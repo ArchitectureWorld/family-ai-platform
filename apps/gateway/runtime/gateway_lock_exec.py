@@ -30,26 +30,32 @@ def exact_database_path(value: str) -> str:
     return value
 
 
-def protected_parent(info: os.stat_result) -> bool:
+def protected_parent(
+    info: os.stat_result, expected_uid: int, expected_gid: int
+) -> bool:
     return (
         stat.S_ISDIR(info.st_mode)
-        and info.st_uid == APP_UID
-        and info.st_gid == APP_GID
+        and info.st_uid == expected_uid
+        and info.st_gid == expected_gid
         and stat.S_IMODE(info.st_mode) == 0o700
     )
 
 
-def protected_lock(info: os.stat_result) -> bool:
+def protected_lock(
+    info: os.stat_result, expected_uid: int, expected_gid: int
+) -> bool:
     return (
         stat.S_ISREG(info.st_mode)
-        and info.st_uid == APP_UID
-        and info.st_gid == APP_GID
+        and info.st_uid == expected_uid
+        and info.st_gid == expected_gid
         and info.st_nlink == 1
         and stat.S_IMODE(info.st_mode) == 0o600
     )
 
 
-def open_validated_lock(database_path: str) -> tuple[int, int]:
+def open_validated_lock(
+    database_path: str, expected_uid: int, expected_gid: int
+) -> tuple[int, int]:
     parent_path = os.path.dirname(database_path)
     try:
         parent_fd = os.open(
@@ -60,7 +66,7 @@ def open_validated_lock(database_path: str) -> tuple[int, int]:
         fail("GATEWAY_DATABASE_LOCK_INVALID")
     lock_fd = -1
     try:
-        if not protected_parent(os.fstat(parent_fd)):
+        if not protected_parent(os.fstat(parent_fd), expected_uid, expected_gid):
             fail("GATEWAY_DATABASE_LOCK_INVALID")
         lock_fd = os.open(
             LOCK_NAME,
@@ -71,8 +77,8 @@ def open_validated_lock(database_path: str) -> tuple[int, int]:
         descriptor = os.fstat(lock_fd)
         path_info = os.stat(LOCK_NAME, dir_fd=parent_fd, follow_symlinks=False)
         if (
-            not protected_lock(descriptor)
-            or not protected_lock(path_info)
+            not protected_lock(descriptor, expected_uid, expected_gid)
+            or not protected_lock(path_info, expected_uid, expected_gid)
             or descriptor.st_dev != path_info.st_dev
             or descriptor.st_ino != path_info.st_ino
         ):
@@ -85,8 +91,12 @@ def open_validated_lock(database_path: str) -> tuple[int, int]:
         raise
 
 
-def claim_lock(database_path: str) -> tuple[int, int]:
-    parent_fd, lock_fd = open_validated_lock(database_path)
+def claim_lock(
+    database_path: str, expected_uid: int, expected_gid: int
+) -> tuple[int, int]:
+    parent_fd, lock_fd = open_validated_lock(
+        database_path, expected_uid, expected_gid
+    )
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -100,15 +110,23 @@ def claim_lock(database_path: str) -> tuple[int, int]:
     return parent_fd, lock_fd
 
 
-def assert_inherited(fd: int, role: str, database_path: str):
+def assert_inherited(
+    fd: int,
+    role: str,
+    database_path: str,
+    expected_uid: int,
+    expected_gid: int,
+):
     if fd != 3 or role not in ROLES:
         fail("GATEWAY_DATABASE_LOCK_INVALID")
-    parent_fd, path_fd = open_validated_lock(database_path)
+    parent_fd, path_fd = open_validated_lock(
+        database_path, expected_uid, expected_gid
+    )
     try:
         inherited = os.fstat(fd)
         current = os.fstat(path_fd)
         if (
-            not protected_lock(inherited)
+            not protected_lock(inherited, expected_uid, expected_gid)
             or inherited.st_dev != current.st_dev
             or inherited.st_ino != current.st_ino
             or os.get_inheritable(fd) is False
@@ -204,10 +222,16 @@ def main():
         role = os.environ.get("FAMILY_AI_GATEWAY_LOCK_ROLE")
         if role not in ROLES:
             fail("GATEWAY_DATABASE_LOCK_INVALID")
-        assert_inherited(int(argv[1]), role, exact_database_path(argv[3]))
+        assert_inherited(
+            int(argv[1]),
+            role,
+            exact_database_path(argv[3]),
+            APP_UID,
+            APP_GID,
+        )
         return
     role, database, command = parse_normal(argv)
-    parent_fd, lock_fd = claim_lock(database)
+    parent_fd, lock_fd = claim_lock(database, APP_UID, APP_GID)
     try:
         os.close(parent_fd)
         if lock_fd != 3:

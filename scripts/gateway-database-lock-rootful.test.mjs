@@ -21,8 +21,9 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const launcher = join(root, "apps/gateway/runtime/gateway_lock_exec.py");
 const image = "python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de";
 const load = "import sys;sys.dont_write_bytecode=True;import importlib.util;spec=importlib.util.spec_from_file_location('lock','/launcher.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)";
-const claim = `${load};p,l=m.claim_lock(__import__('sys').argv[1]);print('LOCKED',flush=True)`;
-const fixedClaim = `${load};\ntry:p,l=m.claim_lock(__import__('sys').argv[1]);print('LOCKED')\nexcept m.LockFailure as e:print(e.code,file=__import__('sys').stderr);raise SystemExit(1)`;
+const hostLoad = "import sys;sys.dont_write_bytecode=True;import importlib.util;spec=importlib.util.spec_from_file_location('lock',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)";
+const claim = `${load};p,l=m.claim_lock(__import__('sys').argv[1],1000,1000);print('LOCKED',flush=True)`;
+const fixedClaim = `${load};\ntry:p,l=m.claim_lock(__import__('sys').argv[1],1000,1000);print('LOCKED')\nexcept m.LockFailure as e:print(e.code,file=__import__('sys').stderr);raise SystemExit(1)`;
 const builtImage = process.env.GATEWAY_LOCK_TEST_IMAGE;
 
 function docker(args, options = {}) {
@@ -30,14 +31,16 @@ function docker(args, options = {}) {
 }
 
 function authorizedHost(databasePath) {
-  return spawnSync("python3", [
-    launcher, "--database-from-env", "GATEWAY_DATABASE_PATH", "--",
-    "node", "apps/gateway/dist/migrate.js", "--database", databasePath
-  ], {
-    cwd: root,
-    encoding: "utf8",
-    env: { ...process.env, NODE_ENV: "production", GATEWAY_DATABASE_PATH: databasePath }
-  });
+  return spawnSync("python3", ["-c", [
+    hostLoad,
+    "import os,sys",
+    "try:",
+    " p,l=m.claim_lock(sys.argv[2],os.getuid(),os.getgid())",
+    " print('LOCKED')",
+    "except m.LockFailure as e:",
+    " print(e.code,file=sys.stderr)",
+    " raise SystemExit(1)"
+  ].join("\n"), launcher, databasePath], { cwd: root, encoding: "utf8" });
 }
 
 test("rootful containers and host contend on one lock inode across bind aliases and crash release", async () => {
@@ -106,7 +109,7 @@ test("rootful containers and host contend on one lock inode across bind aliases 
     assert.equal(docker(["wait", second]).status, 0);
     const afterKill = authorizedHost(hostProbePath);
     assert.equal(afterKill.status, 0, afterKill.stderr);
-    assert.equal(afterKill.stdout, '{"schemaVersion":15,"quickCheck":"ok","foreignKeyViolations":0}\n');
+    assert.equal(afterKill.stdout, "LOCKED\n");
 
     const lock = statSync(join(directory, ".family-ai-gateway.lock"));
     assert.equal(lock.uid, 1000);
@@ -232,7 +235,7 @@ test("exact built image runs real roles with one immutable loser boundary", {
     assert.equal(docker(["wait", second]).status, 0);
     const afterKill = authorizedHost(hostProbePath);
     assert.equal(afterKill.status, 0, afterKill.stderr);
-    assert.equal(afterKill.stdout, '{"schemaVersion":15,"quickCheck":"ok","foreignKeyViolations":0}\n');
+    assert.equal(afterKill.stdout, "LOCKED\n");
   } finally {
     cleanup();
   }

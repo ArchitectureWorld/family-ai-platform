@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   rmSync,
   writeFileSync
 } from "node:fs";
@@ -18,6 +19,29 @@ import { gatewayDatabaseLockMetadataMatchesForTest } from "../src/databaseLock.j
 const root = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const worker = join(root, "apps/gateway/test/fixtures/databaseLockWorker.mjs");
 const launcher = join(root, "apps/gateway/runtime/gateway_lock_exec.py");
+const loadLauncher = String.raw`
+import importlib.util, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("gateway_lock", sys.argv[1])
+gateway_lock = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gateway_lock)
+`;
+const currentUid = process.getuid?.();
+const currentGid = process.getgid?.();
+if (currentUid === undefined || currentGid === undefined) {
+  throw new Error("Gateway lock tests require POSIX uid/gid");
+}
+
+function claimHostLock(databasePath: string) {
+  return spawnSync("python3", [
+    "-c",
+    `${loadLauncher}\ntry:\n parent, lock = gateway_lock.claim_lock(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))\n print("LOCKED")\nexcept gateway_lock.LockFailure as error:\n print(error.code, file=sys.stderr)\n raise SystemExit(1)`,
+    launcher,
+    databasePath,
+    String(currentUid),
+    String(currentGid)
+  ], { cwd: root, encoding: "utf8" });
+}
 
 const harness = String.raw`
 import fcntl, os, sys
@@ -118,39 +142,33 @@ describe("Gateway database launch lock", () => {
 
   it("derives the migrate role only from the exact CMD after the database-from-env boundary", () => {
     const databasePath = fixture();
-    rmSync(databasePath);
     const exact = spawnSync("python3", [
+      "-c",
+      `${loadLauncher}\nimport json, os\nos.environ["GATEWAY_DATABASE_PATH"] = sys.argv[2]\nprint(json.dumps(gateway_lock.parse_normal(sys.argv[3:])))`,
       launcher,
-      "--database-from-env", "GATEWAY_DATABASE_PATH",
-      "--",
-      "node", "apps/gateway/dist/migrate.js",
-      "--database", databasePath
+      databasePath,
+      "--database-from-env", "GATEWAY_DATABASE_PATH", "--",
+      "node", "apps/gateway/dist/migrate.js", "--database", databasePath
     ], {
       cwd: root,
-      encoding: "utf8",
-      env: { ...process.env, GATEWAY_DATABASE_PATH: databasePath }
+      encoding: "utf8"
     });
     expect(exact.status, exact.stderr).toBe(0);
     expect(exact.stdout).toBe(
-      '{"schemaVersion":15,"quickCheck":"ok","foreignKeyViolations":0}\n'
+      `["migrate", "${databasePath}", ["node", "apps/gateway/dist/migrate.js", "--database", "${databasePath}"]]\n`
     );
 
-    rmSync(databasePath);
     const legacyRole = spawnSync("python3", [
       launcher, "--role", "migrate", "--database", databasePath
     ], { cwd: root, encoding: "utf8" });
     expect(legacyRole.status).toBe(1);
     expect(legacyRole.stdout).toBe("");
     expect(legacyRole.stderr).toBe("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID\n");
-    expect(existsSync(databasePath)).toBe(false);
+    expect(readFileSync(databasePath, "utf8")).toBe("fixture");
   }, 20_000);
 
   it("injects unit identities without allowing production identity overrides", () => {
     const databasePath = fixture();
-    const currentUid = process.getuid?.();
-    const currentGid = process.getgid?.();
-    expect(currentUid).toBeTypeOf("number");
-    expect(currentGid).toBeTypeOf("number");
     const accepted = spawnSync("python3", [
       "-c", harness, databasePath, "gateway", process.execPath, worker,
       "valid", "", "", String(currentUid), String(currentGid)
@@ -181,6 +199,24 @@ describe("Gateway database launch lock", () => {
     )).toBe(false);
   });
 
+  it("lets host units inject current lock identity while production main stays fixed", () => {
+    const databasePath = fixture();
+    const claimed = claimHostLock(databasePath);
+    expect(claimed.status, claimed.stderr).toBe(0);
+    expect(claimed.stdout).toBe("LOCKED\n");
+
+    const simulated = spawnSync("python3", [
+      "-c",
+      `${loadLauncher}\nimport stat, types\nparent = types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=1234, st_gid=2345)\nlock = types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=1234, st_gid=2345, st_nlink=1)\nprint(gateway_lock.protected_parent(parent, 1234, 2345), gateway_lock.protected_lock(lock, 1234, 2345), gateway_lock.protected_parent(parent, gateway_lock.APP_UID, gateway_lock.APP_GID), gateway_lock.protected_lock(lock, gateway_lock.APP_UID, gateway_lock.APP_GID))`,
+      launcher
+    ], { cwd: root, encoding: "utf8" });
+    expect(simulated.status, simulated.stderr).toBe(0);
+    expect(simulated.stdout).toBe("True True False False\n");
+    expect(readFileSync(launcher, "utf8")).toContain(
+      "claim_lock(database, APP_UID, APP_GID)"
+    );
+  });
+
   it("fails nonblocking contention and releases after holder SIGKILL", async () => {
     const databasePath = fixture();
     const ready = join(directory, "ready");
@@ -194,33 +230,16 @@ describe("Gateway database launch lock", () => {
     }
     expect(existsSync(ready)).toBe(true);
 
-    const busy = spawnSync("python3", [
-      launcher, "--database-from-env", "GATEWAY_DATABASE_PATH", "--",
-      "node", "apps/gateway/dist/migrate.js", "--database", databasePath
-    ], {
-      cwd: root,
-      encoding: "utf8",
-      env: { ...process.env, GATEWAY_DATABASE_PATH: databasePath }
-    });
+    const busy = claimHostLock(databasePath);
     expect(busy.status).toBe(1);
     expect(busy.stdout).toBe("");
     expect(busy.stderr).toBe("GATEWAY_DATABASE_LOCK_BUSY\n");
 
     holder.kill("SIGKILL");
     await new Promise<void>((resolveExit) => holder.once("close", () => resolveExit()));
-    rmSync(databasePath);
-    const after = spawnSync("python3", [
-      launcher, "--database-from-env", "GATEWAY_DATABASE_PATH", "--",
-      "node", "apps/gateway/dist/migrate.js", "--database", databasePath
-    ], {
-      cwd: root,
-      encoding: "utf8",
-      env: { ...process.env, GATEWAY_DATABASE_PATH: databasePath }
-    });
+    const after = claimHostLock(databasePath);
     expect(after.status, after.stderr).toBe(0);
     expect(after.stderr).toBe("");
-    expect(after.stdout).toBe(
-      '{"schemaVersion":15,"quickCheck":"ok","foreignKeyViolations":0}\n'
-    );
+    expect(after.stdout).toBe("LOCKED\n");
   }, 20_000);
 });

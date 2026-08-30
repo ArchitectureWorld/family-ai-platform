@@ -21,7 +21,7 @@ holds one exclusive transaction through provisioning. Normal Gateway startup exp
 WAL again. Run exactly once for each product identity:
 
 ```bash
-npm --silent run provision:federation-service -- \
+GATEWAY_DATABASE_PATH=/absolute/protected/runtime/gateway.sqlite npm --silent run provision:federation-service -- \
   --service-ref service:canvas \
   --product canvas \
   --credential-file /absolute/protected/runtime/canvas.credential \

@@ -178,7 +178,9 @@ try {
   requireOnce("scripts/test-runtime-retained-fixture.sh", /--database-from-env GATEWAY_DATABASE_PATH -- \\\n+  node apps\/gateway\/dist\/migrate\.js/u, "RETAINED_COMMAND");
   requireOnce("scripts/test-runtime-retained-fixture.sh", /command:\["node","apps\/gateway\/dist\/migrate\.js","--database","\/runtime\/data\/gateway\.sqlite"\]/u, "RETAINED_DEFINITION");
   rejectText("scripts/test-runtime-retained-fixture.sh", /(?:^|\n)\s*node "\$ROOT_DIR\/apps\/gateway\/dist\/(?:index|migrate|provisionFederationService|recoverGatewayDatabase)\.js"/u, "RETAINED_DIRECT_NODE");
+  rejectText("scripts/federation-bootstrap-runtime.test.mjs", /spawnSync\("python3", \[\s*lockLauncher,\s*"--database-from-env"/u, "HOST_PRODUCTION_LAUNCHER");
   rejectText("docs/development/2026-08-29-federation-service-bootstrap.md", /--entrypoint\s+node|--role\b/u, "DOCS_DIRECT_NODE");
+  requireOnce("docs/development/2026-08-29-federation-service-bootstrap.md", /GATEWAY_DATABASE_PATH=\/absolute\/protected\/runtime\/gateway\.sqlite npm --silent run provision:federation-service -- \\\n+(?:.*\n){3}  --database \/absolute\/protected\/runtime\/gateway\.sqlite/u, "DOCS_NPM_DATABASE_IDENTITY");
   requireOnce("docs/development/2026-08-29-federation-service-bootstrap.md", /--env GATEWAY_DATABASE_PATH=\/runtime\/gateway\.sqlite/u, "DOCS_DATABASE_ENV");
   requireOnce("docs/development/2026-08-29-federation-service-bootstrap.md", /--database \/runtime\/gateway\.sqlite/u, "DOCS_DATABASE_ARGUMENT");
 
