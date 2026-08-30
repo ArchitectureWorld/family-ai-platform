@@ -60,6 +60,7 @@ function assertStrictProbeRequest(request: FastifyRequest): void {
       || name === "transfer-encoding"
       || name.startsWith("x-entry-")
       || name.startsWith("x-actor-")
+      || name.startsWith("x-device-")
       || name.startsWith("x-family-ai-")
     ) {
       invalidProbeRequest();

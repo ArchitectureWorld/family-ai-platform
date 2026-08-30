@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import http, { type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   federationAgentListV1Schema,
   federationInvocationResponseV1Schema,
@@ -409,6 +409,7 @@ describe("Family federation routes", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     db?.close();
     await secondApp?.close();
     await app?.close();
@@ -558,6 +559,43 @@ describe("Family federation routes", () => {
       ).get()).toEqual(auditsBefore);
       expect(brokerCalls).toBe(brokerBefore);
     }
+  });
+
+  it("rejects every device header before auth for valid and unknown Bearer values", async () => {
+    const authenticate = vi.spyOn(
+      FederationService.prototype,
+      "authenticateService"
+    );
+    const inspect = vi.spyOn(FederationService.prototype, "inspectService");
+    const counts = () => db.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM federation_services) AS services,
+         (SELECT COUNT(*) FROM federation_actor_contexts) AS contexts,
+         (SELECT COUNT(*) FROM agent_discovery_observations) AS observations,
+         (SELECT COUNT(*) FROM agent_invocation_audit) AS audits`
+    ).get();
+    const before = counts();
+    const brokerBefore = brokerCalls;
+
+    for (const [authorization, headerName, headerValue] of [
+      [`Bearer ${CANVAS_TOKEN}`, "x-device-ref", "device:forged"],
+      ["Bearer deliberately-unknown-token", "x-device-ref", "device:forged"],
+      [`Bearer ${CANVAS_TOKEN}`, "x-device-arbitrary", ""],
+      ["Bearer deliberately-unknown-token", "x-device-empty", ""]
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/federation/service",
+        headers: { authorization, [headerName]: headerValue }
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "FEDERATION_REQUEST_INVALID" });
+    }
+
+    expect(authenticate).not.toHaveBeenCalled();
+    expect(inspect).not.toHaveBeenCalled();
+    expect(counts()).toEqual(before);
+    expect(brokerCalls).toBe(brokerBefore);
   });
 
   it("rejects an actual probe body before authentication and side effects", async () => {
