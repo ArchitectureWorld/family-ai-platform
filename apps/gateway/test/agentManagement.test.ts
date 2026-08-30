@@ -1,8 +1,8 @@
+import { fork, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AgentManagementRepository,
@@ -19,13 +19,13 @@ const configuredAgents: readonly ConfiguredAgentRuntime[] = [
 ];
 
 type MountWorkerMessage =
-  | { type: "ready" }
+  | { type: "ready"; pid: number }
   | { type: "mounting" }
   | { type: "result"; mount: ReturnType<AgentManagementRepository["mountMemberAgent"]> }
   | { type: "error"; code: string; message: string };
 
 function waitForWorkerMessage(
-  worker: Worker,
+  worker: ChildProcess,
   expectedType: MountWorkerMessage["type"]
 ): Promise<MountWorkerMessage> {
   return new Promise((resolve, reject) => {
@@ -54,7 +54,7 @@ function waitForWorkerMessage(
   });
 }
 
-function startWorkerMount(worker: Worker) {
+function startWorkerMount(worker: ChildProcess) {
   const mounting = waitForWorkerMessage(worker, "mounting");
   const result = new Promise<ReturnType<AgentManagementRepository["mountMemberAgent"]>>(
     (resolve, reject) => {
@@ -67,8 +67,16 @@ function startWorkerMount(worker: Worker) {
       worker.once("error", reject);
     }
   );
-  worker.postMessage({ type: "mount" });
+  worker.send({ type: "mount" });
   return { mounting, result };
+}
+
+async function stopWorker(worker: ChildProcess): Promise<void> {
+  if (worker.exitCode !== null || worker.signalCode !== null) return;
+  await new Promise<void>((resolve) => {
+    worker.once("exit", () => resolve());
+    worker.kill("SIGTERM");
+  });
 }
 
 describe("Agent management repository", () => {
@@ -181,17 +189,30 @@ describe("Agent management repository", () => {
       now: "2026-07-28T10:00:00.000Z"
     };
     const workers = [
-      new Worker(new URL("./fixtures/agentManagementMountWorker.mjs", import.meta.url), {
-        workerData: workerInput
+      fork(new URL("./fixtures/agentManagementMountWorker.mjs", import.meta.url), [], {
+        env: {
+          ...process.env,
+          AGENT_MANAGEMENT_MOUNT_INPUT: JSON.stringify(workerInput)
+        },
+        stdio: ["ignore", "ignore", "inherit", "ipc"]
       }),
-      new Worker(new URL("./fixtures/agentManagementMountWorker.mjs", import.meta.url), {
-        workerData: workerInput
+      fork(new URL("./fixtures/agentManagementMountWorker.mjs", import.meta.url), [], {
+        env: {
+          ...process.env,
+          AGENT_MANAGEMENT_MOUNT_INPUT: JSON.stringify(workerInput)
+        },
+        stdio: ["ignore", "ignore", "inherit", "ipc"]
       })
     ];
     let lockHeld = false;
 
     try {
-      await Promise.all(workers.map((worker) => waitForWorkerMessage(worker, "ready")));
+      const ready = await Promise.all(
+        workers.map((worker) => waitForWorkerMessage(worker, "ready"))
+      );
+      expect(new Set(ready.map((message) => (
+        message.type === "ready" ? message.pid : undefined
+      ))).size).toBe(2);
       db.exec("BEGIN IMMEDIATE");
       lockHeld = true;
 
@@ -205,7 +226,7 @@ describe("Agent management repository", () => {
       expect(second!.assignmentRef).toBe(first!.assignmentRef);
     } finally {
       if (lockHeld) db.exec("ROLLBACK");
-      await Promise.all(workers.map((worker) => worker.terminate()));
+      await Promise.all(workers.map(stopWorker));
     }
 
     expect(db.prepare(
