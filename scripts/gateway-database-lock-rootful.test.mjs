@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import {
-  readFileSync,
-  readdirSync,
-  statSync
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +14,90 @@ const load = "import sys;sys.dont_write_bytecode=True;import importlib.util;spec
 const claim = `${load};p,l=m.claim_lock(__import__('sys').argv[1],1000,1000);print('LOCKED',flush=True)`;
 const fixedClaim = `${load};\ntry:p,l=m.claim_lock(__import__('sys').argv[1],1000,1000);print('LOCKED')\nexcept m.LockFailure as e:print(e.code,file=__import__('sys').stderr);raise SystemExit(1)`;
 const builtImage = process.env.GATEWAY_LOCK_TEST_IMAGE;
+const rootfulTestFile = fileURLToPath(import.meta.url);
+const fixtureHelper = String.raw`
+import base64, hashlib, json, os, shutil, stat, sys
+action, directory = sys.argv[1:3]
+basename = os.path.basename(directory)
+if not os.path.isabs(directory) or not basename.startswith("family-ai-"):
+    raise SystemExit(64)
+def exact_name(name):
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        raise SystemExit(65)
+    return name
+def file_hash(parent_fd, name):
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    try:
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                return digest.hexdigest()
+            digest.update(chunk)
+    finally:
+        os.close(descriptor)
+def inspect_tree():
+    parent_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parent = os.fstat(parent_fd)
+        entries = []
+        for name in sorted(os.listdir(parent_fd)):
+            exact_name(name)
+            state = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            row = {"name": name, "uid": state.st_uid, "gid": state.st_gid,
+                   "mode": stat.S_IMODE(state.st_mode), "nlink": state.st_nlink}
+            if stat.S_ISREG(state.st_mode):
+                row.update({"type": "file", "size": state.st_size,
+                            "sha256": file_hash(parent_fd, name)})
+            elif stat.S_ISDIR(state.st_mode):
+                row["type"] = "directory"
+            else:
+                row["type"] = "unsupported"
+            entries.append(row)
+        return {"directory": {"uid": parent.st_uid, "gid": parent.st_gid,
+                              "mode": stat.S_IMODE(parent.st_mode),
+                              "nlink": parent.st_nlink}, "entries": entries}
+    finally:
+        os.close(parent_fd)
+if action == "prepare":
+    payload = json.load(sys.stdin)
+    os.mkdir(directory, 0o700)
+    os.chown(directory, 1000, 1000)
+    os.chmod(directory, 0o700)
+    parent_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for name in payload.get("directories", []):
+            name = exact_name(name)
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+            os.chown(name, 1000, 1000, dir_fd=parent_fd, follow_symlinks=False)
+        for name, encoded in payload.get("files", {}).items():
+            name = exact_name(name)
+            contents = base64.b64decode(encoded, validate=True)
+            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=parent_fd)
+            try:
+                os.fchown(descriptor, 1000, 1000)
+                os.fchmod(descriptor, 0o600)
+                os.write(descriptor, contents)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+    output = {"action": action, "tree": inspect_tree()}
+elif action == "inspect":
+    output = {"action": action, "tree": inspect_tree()}
+elif action == "cleanup":
+    tree = inspect_tree()
+    if tree["directory"]["uid"] != 1000 or tree["directory"]["mode"] != 0o700:
+        raise SystemExit(66)
+    shutil.rmtree(directory)
+    output = {"action": action, "removed": not os.path.lexists(directory)}
+else:
+    raise SystemExit(67)
+print(json.dumps(output, separators=(",", ":"), sort_keys=True))
+`;
 
 function docker(args, options = {}) {
   return spawnSync("docker", args, { encoding: "utf8", timeout: 15_000, ...options });
@@ -100,75 +180,203 @@ function fixturePath(prefix) {
   return join(tmpdir(), `${prefix}${process.pid}-${randomUUID()}`);
 }
 
+function runFixtureHelper(action, directory, payload = {}) {
+  const result = runAsHost1000([
+    "python3", "-c", fixtureHelper, action, directory
+  ], { input: JSON.stringify(payload) });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.ok(result.stdout.length > 0 && result.stdout.length <= 32_768);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.action, action);
+  return output;
+}
+
 function prepareFixture(prefix, input = {}) {
   const directory = fixturePath(prefix);
-  const created = runAsHost1000([
-    "install", "-d", "-m", "0700", "-o", "1000", "-g", "1000", directory
-  ]);
-  assert.equal(created.status, 0, created.stderr);
-  const directoryState = statSync(directory);
-  assert.equal(directoryState.uid, 1000);
-  assert.equal(directoryState.gid, 1000);
-  assert.equal(directoryState.mode & 0o777, 0o700);
-  for (const [name, contents] of Object.entries(input.files ?? {})) {
-    const written = runAsHost1000([
-      "python3", "-c",
-      "import os,sys;p=sys.argv[1];d=sys.stdin.buffer.read();f=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.write(f,d);os.fsync(f);os.close(f)",
-      join(directory, name)
-    ], { input: contents });
-    assert.equal(written.status, 0, written.stderr);
-    assertProtectedFile(join(directory, name));
-  }
-  for (const name of input.directories ?? []) {
-    const made = runAsHost1000([
-      "install", "-d", "-m", "0700", "-o", "1000", "-g", "1000",
-      join(directory, name)
-    ]);
-    assert.equal(made.status, 0, made.stderr);
-    const state = statSync(join(directory, name));
-    assert.equal(state.uid, 1000);
-    assert.equal(state.gid, 1000);
-    assert.equal(state.mode & 0o777, 0o700);
-  }
+  const files = Object.fromEntries(Object.entries(input.files ?? {}).map(
+    ([name, contents]) => [name, Buffer.from(contents).toString("base64")]
+  ));
+  const output = runFixtureHelper("prepare", directory, {
+    files,
+    directories: input.directories ?? []
+  });
+  assertProtectedDirectoryTree(output.tree);
   return directory;
 }
 
-function assertProtectedFile(path) {
-  const state = statSync(path);
-  assert.equal(state.uid, 1000);
-  assert.equal(state.gid, 1000);
-  assert.equal(state.mode & 0o777, 0o600);
-  assert.equal(state.nlink, 1);
+function assertProtectedDirectoryTree(tree) {
+  assert.deepEqual(
+    { uid: tree.directory.uid, gid: tree.directory.gid, mode: tree.directory.mode },
+    { uid: 1000, gid: 1000, mode: 0o700 }
+  );
+}
+
+function assertProtectedFile(directory, name) {
+  const output = runFixtureHelper("inspect", directory);
+  assertProtectedDirectoryTree(output.tree);
+  const state = output.tree.entries.find((entry) => entry.name === name);
+  assert.ok(state);
+  assert.deepEqual(
+    { type: state.type, uid: state.uid, gid: state.gid, mode: state.mode, nlink: state.nlink },
+    { type: "file", uid: 1000, gid: 1000, mode: 0o600, nlink: 1 }
+  );
 }
 
 function cleanupFixture(directory) {
-  const expectedPrefix = join(tmpdir(), "family-ai-");
-  assert.equal(directory.startsWith(expectedPrefix), true);
-  const removed = runAsHost1000(["rm", "-rf", "--", directory]);
-  assert.equal(removed.status, 0, removed.stderr);
+  const output = runFixtureHelper("cleanup", directory);
+  assert.equal(output.removed, true);
 }
 
 function snapshot(directory) {
-  return JSON.stringify(readdirSync(directory).sort().map((name) => {
-    const path = join(directory, name);
-    const state = statSync(path);
-    return state.isFile() ? {
-      name,
-      uid: state.uid,
-      gid: state.gid,
-      mode: state.mode & 0o777,
-      nlink: state.nlink,
-      size: state.size,
-      sha256: createHash("sha256").update(readFileSync(path)).digest("hex")
-    } : {
-      name,
-      type: "directory",
-      uid: state.uid,
-      gid: state.gid,
-      mode: state.mode & 0o777
-    };
-  }));
+  const output = runFixtureHelper("inspect", directory);
+  assertProtectedDirectoryTree(output.tree);
+  return JSON.stringify(output.tree);
 }
+
+function dockerSocketGid() {
+  const result = spawnSync("stat", ["-c", "%g", "/var/run/docker.sock"], {
+    encoding: "utf8"
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^\d+\n$/u);
+  return result.stdout.trim();
+}
+
+function childTestArguments(sourceRoot = root, nodePath = process.execPath) {
+  return [
+    nodePath,
+    "--test",
+    "--test-name-pattern",
+    "^rootful containers and host contend on one lock inode",
+    join(sourceRoot, "scripts/gateway-database-lock-rootful.test.mjs")
+  ];
+}
+
+function runRootOrchestratedNon1000Parent() {
+  if (process.env.GATEWAY_ROOTFUL_FORCE_CONTAINER_PARENT === "1") return undefined;
+  const uid = process.getuid?.();
+  const prefix = uid === 0
+    ? []
+    : spawnSync("sudo", ["-n", "true"], { encoding: "utf8" }).status === 0
+      ? ["sudo", "-n"]
+      : undefined;
+  if (prefix === undefined) return undefined;
+  const harness = fixturePath("family-ai-rootful-harness-");
+  const mountedRoot = join(harness, "repo");
+  const runRoot = (argv) => {
+    const command = [...prefix, ...argv];
+    return spawnSync(command[0], command.slice(1), { encoding: "utf8" });
+  };
+  let mounted = false;
+  try {
+    const prepared = runRoot([
+      "install", "-d", "-m", "0755", "-o", "0", "-g", "0", harness, mountedRoot
+    ]);
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const bound = runRoot(["mount", "--bind", root, mountedRoot]);
+    assert.equal(bound.status, 0, bound.stderr);
+    mounted = true;
+    const readonly = runRoot(["mount", "-o", "remount,bind,ro", mountedRoot]);
+    assert.equal(readonly.status, 0, readonly.stderr);
+    const parent = [
+      ...prefix,
+      "setpriv",
+      "--reuid=1234",
+      "--regid=1234",
+      "--groups", dockerSocketGid(),
+      "--inh-caps", "+setuid,+setgid",
+      "--ambient-caps", "+setuid,+setgid",
+      "--bounding-set", "+setuid,+setgid",
+      "--",
+      "/usr/bin/env",
+      "GATEWAY_ROOTFUL_NON1000_CHILD=1",
+      "HOME=/tmp",
+      "DOCKER_CONFIG=/tmp/family-ai-empty-docker-config",
+      `PATH=${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`,
+      ...childTestArguments(mountedRoot)
+    ];
+    return spawnSync(parent[0], parent.slice(1), {
+      cwd: mountedRoot,
+      encoding: "utf8",
+      timeout: 90_000
+    });
+  } finally {
+    if (mounted) {
+      const unmounted = runRoot(["umount", "--", mountedRoot]);
+      assert.equal(unmounted.status, 0, unmounted.stderr);
+    }
+    const removed = runRoot(["rm", "-rf", "--", harness]);
+    assert.equal(removed.status, 0, removed.stderr);
+  }
+}
+
+function runContainerizedNon1000Parent() {
+  if (builtImage === undefined) {
+    return {
+      status: 1,
+      stdout: "",
+      stderr: "GATEWAY_ROOTFUL_QUALITY_IMAGE_UNAVAILABLE\n"
+    };
+  }
+  const orchestration = fixturePath("family-ai-rootful-quality-");
+  mkdirSync(orchestration, { mode: 0o777 });
+  chmodSync(orchestration, 0o777);
+  try {
+    const dockerWrapper = join(orchestration, "docker");
+    writeFileSync(
+      dockerWrapper,
+      "#!/bin/sh\nexec /host-lib/ld-linux-x86-64.so.2 --library-path /host-lib /host-bin/docker \"$@\"\n",
+      { mode: 0o755 }
+    );
+    chmodSync(dockerWrapper, 0o755);
+    return docker([
+      "run", "--rm",
+      "--user", "0:0",
+      "--group-add", dockerSocketGid(),
+      "--cap-add", "SETUID",
+      "--cap-add", "SETGID",
+      "--network", "none",
+      "--workdir", root,
+      "--mount", `type=bind,src=${root},dst=${root},readonly`,
+      "--mount", `type=bind,src=${orchestration},dst=${orchestration}`,
+      "--mount", "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock",
+      "--mount", "type=bind,src=/usr/bin/docker,dst=/host-bin/docker,readonly",
+      "--mount", "type=bind,src=/lib/x86_64-linux-gnu/libc.so.6,dst=/host-lib/libc.so.6,readonly",
+      "--mount", "type=bind,src=/lib64/ld-linux-x86-64.so.2,dst=/host-lib/ld-linux-x86-64.so.2,readonly",
+      "--mount", `type=bind,src=${dockerWrapper},dst=/quality-bin/docker,readonly`,
+      "--entrypoint", "/usr/bin/setpriv",
+      builtImage,
+      "--reuid=1234",
+      "--regid=1234",
+      "--groups", dockerSocketGid(),
+      "--inh-caps", "+setuid,+setgid",
+      "--ambient-caps", "+setuid,+setgid",
+      "--bounding-set", "+setuid,+setgid",
+      "--",
+      "env",
+      `TMPDIR=${orchestration}`,
+      "GATEWAY_ROOTFUL_NON1000_CHILD=1",
+      "HOME=/tmp",
+      "DOCKER_CONFIG=/tmp/family-ai-empty-docker-config",
+      "PATH=/quality-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      ...childTestArguments(root, "node")
+    ], { timeout: 90_000 });
+  } finally {
+    rmSync(orchestration, { recursive: true, force: true });
+  }
+}
+
+test("runs the full contention gate from a real uid1234 parent", {
+  skip: process.env.GATEWAY_ROOTFUL_NON1000_CHILD === "1",
+  timeout: 100_000
+}, () => {
+  const orchestrated = runRootOrchestratedNon1000Parent();
+  const result = orchestrated ?? runContainerizedNon1000Parent();
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.match(result.stdout, /# pass 1\b/u);
+  assert.match(result.stdout, /# fail 0\b/u);
+});
 
 test("selects an explicit uid1000 host runner without implicit inheritance", () => {
   assert.deepEqual(selectHost1000Runner({
@@ -229,6 +437,10 @@ function authorizedHost(databasePath) {
 }
 
 test("rootful containers and host contend on one lock inode across bind aliases and crash release", async (context) => {
+  if (process.env.GATEWAY_ROOTFUL_NON1000_CHILD === "1") {
+    assert.equal(process.getuid?.(), 1234);
+    assert.equal(process.getgid?.(), 1234);
+  }
   if (!requireHost1000Capability(context)) return;
   const directory = prepareFixture("family-ai-rootful-lock-", {
     files: {
@@ -238,6 +450,16 @@ test("rootful containers and host contend on one lock inode across bind aliases 
   });
   const databasePath = join(directory, "gateway.sqlite");
   const hostProbePath = join(directory, "host-probe.sqlite");
+  if (process.env.GATEWAY_ROOTFUL_NON1000_CHILD === "1") {
+    const denied = spawnSync("python3", [
+      "-c",
+      "import errno,os,sys\ntry: os.close(os.open(sys.argv[1],os.O_RDONLY|os.O_NOFOLLOW));print('READABLE');raise SystemExit(1)\nexcept PermissionError as error:\n print('EACCES' if error.errno==errno.EACCES else 'OTHER')",
+      databasePath
+    ], { encoding: "utf8" });
+    assert.equal(denied.status, 0, denied.stderr);
+    assert.equal(denied.stdout, "EACCES\n");
+    assert.equal(denied.stderr, "");
+  }
   const holder = `family-lock-holder-${process.pid}`;
   const second = `family-lock-second-${process.pid}`;
   const cleanup = () => {
@@ -305,16 +527,8 @@ test("rootful containers and host contend on one lock inode across bind aliases 
     assert.equal(afterKill.status, 0, afterKill.stderr);
     assert.equal(afterKill.stdout, '{"schemaVersion":15,"quickCheck":"ok","foreignKeyViolations":0}\n');
 
-    const lock = statSync(join(directory, ".family-ai-gateway.lock"));
-    const database = statSync(databasePath);
-    assert.equal(lock.uid, 1000);
-    assert.equal(lock.gid, 1000);
-    assert.equal(lock.mode & 0o777, 0o600);
-    assert.equal(lock.nlink, 1);
-    assert.equal(database.uid, 1000);
-    assert.equal(database.gid, 1000);
-    assert.equal(database.mode & 0o777, 0o600);
-    assert.equal(database.nlink, 1);
+    assertProtectedFile(directory, ".family-ai-gateway.lock");
+    assertProtectedFile(directory, "gateway.sqlite");
   } finally {
     cleanup();
   }
@@ -362,17 +576,16 @@ test("exact built image runs real roles with one immutable loser boundary", {
     cleanupFixture(directory);
   };
   try {
-    assert.equal(statSync(directory).uid, 1000);
-    assert.equal(statSync(directory).gid, 1000);
+    assertProtectedDirectoryTree(runFixtureHelper("inspect", directory).tree);
     const migrate = docker([
       "run", "--rm", ...common(), builtImage,
       "node", "apps/gateway/dist/migrate.js", "--database", "/data/gateway.sqlite"
     ], { timeout: 30_000 });
     assert.equal(migrate.status, 0, migrate.stderr);
     assert.equal(migrate.stdout, '{"schemaVersion":15,"quickCheck":"ok","foreignKeyViolations":0}\n');
-    assertProtectedFile(databasePath);
-    assertProtectedFile(join(directory, ".family-ai-gateway.lock"));
-    assertProtectedFile(credentialPath);
+    assertProtectedFile(directory, "gateway.sqlite");
+    assertProtectedFile(directory, ".family-ai-gateway.lock");
+    assertProtectedFile(directory, "canvas.credential");
 
     const provision = docker([
       "run", "--rm", ...common(), builtImage,
