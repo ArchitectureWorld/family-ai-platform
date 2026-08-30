@@ -38,8 +38,9 @@ launcher entrypoint:
 ```bash
 docker run --rm \
   --mount type=bind,src=/absolute/protected/runtime,dst=/runtime \
+  --env GATEWAY_DATABASE_PATH=/runtime/gateway.sqlite \
   FAMILY_IMAGE \
-  --role provision -- \
+  node apps/gateway/dist/provisionFederationService.js \
   --service-ref service:canvas \
   --product canvas \
   --credential-file /runtime/canvas.credential \

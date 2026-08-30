@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import Database from "better-sqlite3";
+import { inspectGatewayImageRuntime } from "./gateway-image-runtime-contract.mjs";
 import {
   copyInventory, die, fsyncTree, inventoryDigest, inventoryTree, parseArgs,
   readJson, requireAbsolute, requireRegular0600, requireSafeId, sealJson,
@@ -24,8 +25,8 @@ function schema(path) {
 function imageRecord(path) {
   requireAbsolute(path, "CANDIDATE_IMAGE_MANIFEST", { type: "file" });
   const manifest = readJson(path, "CANDIDATE_IMAGE_MANIFEST");
-  if (manifest.manifestKind === "gateway-image-v1") return manifest;
-  if (manifest.manifestKind === "release-candidate-v1" && manifest.gatewayImage?.manifestKind === "gateway-image-v1") return manifest.gatewayImage;
+  if (manifest.manifestKind === "gateway-image-v1" && manifest.runtimeContract) return manifest;
+  if (manifest.manifestKind === "release-candidate-v1" && manifest.gatewayImage?.manifestKind === "gateway-image-v1" && manifest.gatewayImage.runtimeContract) return manifest.gatewayImage;
   throw new Error("CANDIDATE_IMAGE_MANIFEST_KIND_INVALID");
 }
 
@@ -33,10 +34,12 @@ function validateDefinition(path, image, receiptSha) {
   requireRegular0600(path, "CANDIDATE_DEFINITION");
   const value = readJson(path, "CANDIDATE_DEFINITION");
   const keys = Object.keys(value).sort().join(",");
-  if (keys !== "attachmentRoot,databasePath,entrypoint,imageId,manifestKind,networkMode,releaseCapabilityReceiptSha256,runtimeMount,workerDisabled" ||
+  if (keys !== "attachmentRoot,command,databasePath,imageId,manifestKind,networkMode,releaseCapabilityReceiptSha256,runtimeMount,workerDisabled" ||
       value.manifestKind !== "gateway-migration-definition-v1" || value.imageId !== image.imageId ||
       value.releaseCapabilityReceiptSha256 !== receiptSha || value.networkMode !== "none" || value.workerDisabled !== true ||
-      JSON.stringify(value.entrypoint) !== JSON.stringify(["--role", "migrate"]) ||
+      JSON.stringify(value.command) !== JSON.stringify([
+        "node", "apps/gateway/dist/migrate.js", "--database", "/runtime/data/gateway.sqlite"
+      ]) ||
       value.runtimeMount !== "/runtime" || value.databasePath !== "/runtime/data/gateway.sqlite" || value.attachmentRoot !== "/runtime/data/attachments") {
     throw new Error("CANDIDATE_DEFINITION_INVALID");
   }
@@ -73,7 +76,8 @@ async function main() {
   if (image.releaseCapabilityReceiptSha256 !== receiptSha || image.sourceCommit !== image.labels?.["org.opencontainers.image.revision"] || image.labels?.["org.architectureworld.family-ai.gateway-database-flock-v1"] !== "true" || !/^sha256:[0-9a-f]{64}$/.test(image.imageId ?? "")) throw new Error("CANDIDATE_IMAGE_BINDING_INVALID");
   const inspectedImage = JSON.parse(execFileSync("docker", ["image", "inspect", image.imageId], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }))[0];
   const actualLabels = inspectedImage?.Config?.Labels ?? {};
-  if (inspectedImage?.Id !== image.imageId || actualLabels["org.opencontainers.image.revision"] !== image.sourceCommit || actualLabels["org.architectureworld.family-ai.release-capability-receipt-sha256"] !== receiptSha || actualLabels["org.architectureworld.family-ai.gateway-database-flock-v1"] !== "true" || Number(actualLabels["org.architectureworld.family-ai.client-database-version"]) !== receipt.release.clientDatabaseVersion) throw new Error("CANDIDATE_IMAGE_RUNTIME_PROVENANCE_INVALID");
+  if (inspectedImage?.Id !== image.imageId || actualLabels["org.opencontainers.image.revision"] !== image.sourceCommit || actualLabels["org.architectureworld.family-ai.release-capability-receipt-sha256"] !== receiptSha || actualLabels["org.architectureworld.family-ai.release-build-inputs-sha256"] !== image.releaseBuildInputsSha256 || actualLabels["org.architectureworld.family-ai.build-input-tree-hash"] !== image.buildInputTreeHash || actualLabels["org.architectureworld.family-ai.gateway-database-flock-v1"] !== "true" || Number(actualLabels["org.architectureworld.family-ai.client-database-version"]) !== receipt.release.clientDatabaseVersion) throw new Error("CANDIDATE_IMAGE_RUNTIME_PROVENANCE_INVALID");
+  if (JSON.stringify(inspectGatewayImageRuntime(image.imageId)) !== JSON.stringify(image.runtimeContract)) throw new Error("CANDIDATE_IMAGE_RUNTIME_CONTRACT_INVALID");
   if (receipt.release?.schemaHead !== Number(image.labels?.["org.architectureworld.family-ai.schema-head"] ?? receipt.release?.schemaHead)) throw new Error("CANDIDATE_SCHEMA_HEAD_MISMATCH");
   const definition = validateDefinition(args["--candidate-definition"], image, receiptSha);
   const parent = requireAbsolute(args["--target-parent"], "TARGET_PARENT", { type: "dir", mode: 0o700 });
@@ -90,7 +94,7 @@ async function main() {
   chmodSync(staging, 0o700);
   const databasePath = join(staging, "data", "gateway.sqlite");
   const beforeSchema = schema(databasePath);
-  execFileSync("docker", ["run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", `${statSync(staging).uid}:${statSync(staging).gid}`, "--mount", `type=bind,src=${staging},dst=${definition.runtimeMount}`, image.imageId, ...definition.entrypoint, "--database", definition.databasePath], { stdio: ["ignore", "pipe", "pipe"] });
+  execFileSync("docker", ["run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", `${statSync(staging).uid}:${statSync(staging).gid}`, "--mount", `type=bind,src=${staging},dst=${definition.runtimeMount}`, "--env", `GATEWAY_DATABASE_PATH=${definition.databasePath}`, image.imageId, ...definition.command], { stdio: ["ignore", "pipe", "pipe"] });
   const afterSchema = schema(databasePath);
   if (afterSchema !== receipt.release.schemaHead) throw new Error("CANDIDATE_MIGRATION_HEAD_MISMATCH");
   const inventory = inventoryTree(staging);

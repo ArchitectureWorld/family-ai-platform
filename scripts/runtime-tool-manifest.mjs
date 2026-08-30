@@ -25,6 +25,7 @@ const toolPaths = [
   "scripts/runtime-rollback-assets.mjs",
   "scripts/runtime-candidate-stage.sh",
   "scripts/runtime-candidate-manifest.mjs",
+  "scripts/gateway-image-runtime-contract.mjs",
   "scripts/runtime-exchange-preflight.mjs",
   "scripts/atomic-dir-exchange.c",
   "scripts/build-atomic-dir-exchange.sh",

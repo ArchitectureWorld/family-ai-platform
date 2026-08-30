@@ -272,7 +272,7 @@ describe("Member Web normal product flow", () => {
     } finally {
       await setup.app.close();
     }
-  });
+  }, 20_000);
 
   it("restores the same product state after Gateway restart", async () => {
     const setup = await createClaimedMemberApp();

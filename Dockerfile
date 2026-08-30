@@ -143,5 +143,5 @@ RUN node --input-type=module -e 'await import("@family-ai/contracts"); await imp
 USER node
 EXPOSE 8790
 
-ENTRYPOINT ["python3", "apps/gateway/runtime/gateway_lock_exec.py"]
-CMD ["--role", "gateway"]
+ENTRYPOINT ["python3", "apps/gateway/runtime/gateway_lock_exec.py", "--database-from-env", "GATEWAY_DATABASE_PATH", "--"]
+CMD ["node", "apps/gateway/dist/index.js"]

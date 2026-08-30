@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { requireInheritedGatewayDatabaseLock } from "./databaseLock.js";
+import { createGatewayProcessLifecycle } from "./gatewayProcessLifecycle.js";
 
 process.umask(0o077);
 const launchDatabasePath = resolve(
@@ -7,6 +8,7 @@ const launchDatabasePath = resolve(
 );
 
 let launchLock;
+let lifecycle: ReturnType<typeof createGatewayProcessLifecycle> | undefined;
 try {
   launchLock = requireInheritedGatewayDatabaseLock({
     role: "gateway",
@@ -48,20 +50,25 @@ try {
           previewAdminOrigin: config.previewAdminOrigin!
         })
   });
-  app.addHook("onClose", async () => launchLock.close());
+  lifecycle = createGatewayProcessLifecycle({ app, lock: launchLock });
 
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, "shutting down Family AI Gateway");
-    await app.close();
+    await lifecycle!.close();
     process.exit(0);
   };
 
-  process.once("SIGINT", () => void shutdown("SIGINT"));
-  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  const requestShutdown = (signal: string) => {
+    void shutdown(signal).catch((error: unknown) => {
+      setImmediate(() => { throw error; });
+    });
+  };
+  process.once("SIGINT", () => requestShutdown("SIGINT"));
+  process.once("SIGTERM", () => requestShutdown("SIGTERM"));
 
   await app.listen({ host: config.host, port: config.port });
 } catch (error) {
-  launchLock.close();
+  if (lifecycle !== undefined) await lifecycle.close();
   if (error instanceof Error && error.message === "GATEWAY_DATABASE_LOCK_INVALID") {
     process.stderr.write("GATEWAY_DATABASE_LOCK_INVALID\n");
   }

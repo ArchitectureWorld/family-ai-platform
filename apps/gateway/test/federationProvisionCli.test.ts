@@ -94,7 +94,7 @@ function runDevPackageCli(args = argumentsFor()): SpawnSyncReturns<string> {
   ], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env }
+    env: { ...process.env, GATEWAY_DATABASE_PATH: databasePath }
   });
 }
 

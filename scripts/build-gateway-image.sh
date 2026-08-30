@@ -155,6 +155,9 @@ inspect_label() {
 [[ "$(inspect_label org.architectureworld.family-ai.target-platform)" == "$PLATFORM" ]] || fail PLATFORM_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.debian-snapshot)" == "$DEBIAN_SNAPSHOT" ]] || fail SNAPSHOT_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.toolchain-material)" == "$TOOLCHAIN_MATERIAL" ]] || fail TOOLCHAIN_LABEL_MISMATCH
+RUNTIME_CONTRACT="$(node "$WORKTREE_DIR/scripts/gateway-image-runtime-contract.mjs" \
+  inspect --image-id "$IMAGE_ID")" || fail RUNTIME_CONTRACT_INVALID
+[[ -n "$RUNTIME_CONTRACT" ]] || fail RUNTIME_CONTRACT_INVALID
 
 mkdir -m 700 "$OUTPUT_DIR"
 OUTPUT_CREATED=true
@@ -169,12 +172,13 @@ node --input-type=module - \
   "$OUTPUT_DIR/gateway-image-manifest.json" "$SOURCE_COMMIT" "$IMAGE_ID" "$ARCHIVE_SHA" \
   "$CLIENT_VERSION" "$SCHEMA_HEAD" "$CAPABILITY_SHA" "$RELEASE_INPUTS_SHA" "$BUILD_INPUT_TREE_HASH" \
   "$BASE_REF" "$BASE_DIGEST" "$PLATFORM" "$RESOLVED_BASE" "$DEBIAN_SNAPSHOT" \
-  "$DEBIAN_SECURITY_SNAPSHOT" "$TOOLCHAIN_MATERIAL" "$REPO_DIGESTS" <<'NODE'
+  "$DEBIAN_SECURITY_SNAPSHOT" "$TOOLCHAIN_MATERIAL" "$RUNTIME_CONTRACT" "$REPO_DIGESTS" <<'NODE'
 import { chmodSync, writeFileSync } from "node:fs";
 const [
   path, sourceCommit, imageId, archiveSha256, clientVersion, schemaHead, capabilitySha,
   releaseInputsSha, inputTreeHash, baseRef, baseDigest, platform, resolvedBase,
-  debianSnapshot, debianSecuritySnapshot, toolchainMaterial, repoDigestsJson
+  debianSnapshot, debianSecuritySnapshot, toolchainMaterial, runtimeContractJson,
+  repoDigestsJson
 ] = process.argv.slice(2);
 const labels = {
   "org.opencontainers.image.revision": sourceCommit,
@@ -208,6 +212,7 @@ const manifest = {
   debianSnapshot,
   debianSecuritySnapshot,
   toolchainMaterial,
+  runtimeContract: JSON.parse(runtimeContractJson),
   labels,
   repoDigests: JSON.parse(repoDigestsJson ?? "null")
 };

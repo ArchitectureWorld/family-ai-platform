@@ -27,6 +27,7 @@ expect_failure() {
 
 for required in \
   scripts/build-gateway-image.sh \
+  scripts/gateway-image-runtime-contract.mjs \
   scripts/gateway-schema-capabilities.mjs \
   scripts/gateway-schema-capabilities.json \
   scripts/gateway-release-capabilities.json \
@@ -41,6 +42,8 @@ grep -Fq 'manifestKind: "gateway-image-v1"' "$ROOT_DIR/scripts/build-gateway-ima
   || fail 'build wrapper does not write the gateway-image-v1 manifest'
 grep -Fq 'buildInputTreeHash' "$ROOT_DIR/scripts/build-gateway-image.sh" \
   || fail 'build wrapper does not bind the canonical build input tree'
+grep -Fq 'runtimeContract: JSON.parse(runtimeContractJson)' "$ROOT_DIR/scripts/build-gateway-image.sh" \
+  || fail 'build wrapper does not bind the inspected runtime contract'
 grep -Fq 'RUN rm /app/node_modules/@family-ai/contracts /app/node_modules/@family-ai/provider-adapter-sdk' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image still depends on npm workspace symlinks'
 grep -Fq '/app/node_modules/@family-ai/contracts/package.json' "$ROOT_DIR/Dockerfile" \

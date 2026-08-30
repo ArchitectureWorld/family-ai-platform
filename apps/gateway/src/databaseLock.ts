@@ -35,25 +35,42 @@ function exactDatabasePath(path: string): string {
   return path;
 }
 
-function protectedDirectory(state: BigIntStats): boolean {
+interface GatewayDatabaseLockIdentity {
+  uid: number;
+  gid: number;
+}
+
+function protectedDirectory(
+  state: BigIntStats,
+  identity: GatewayDatabaseLockIdentity
+): boolean {
   return state.isDirectory()
-    && state.uid === BigInt(APP_UID)
-    && state.gid === BigInt(APP_GID)
+    && state.uid === BigInt(identity.uid)
+    && state.gid === BigInt(identity.gid)
     && (state.mode & 0o777n) === 0o700n;
 }
 
-function protectedLock(state: BigIntStats): boolean {
+function protectedLock(
+  state: BigIntStats,
+  identity: GatewayDatabaseLockIdentity
+): boolean {
   return state.isFile()
-    && state.uid === BigInt(APP_UID)
-    && state.gid === BigInt(APP_GID)
+    && state.uid === BigInt(identity.uid)
+    && state.gid === BigInt(identity.gid)
     && state.nlink === 1n
     && (state.mode & 0o777n) === 0o600n;
 }
 
-export function requireInheritedGatewayDatabaseLock(input: {
+function requireInheritedGatewayDatabaseLockWithIdentity(input: {
   role: GatewayDatabaseLockRole;
   databasePath: string;
-}): GatewayDatabaseLockLease {
+}, identity: GatewayDatabaseLockIdentity): GatewayDatabaseLockLease {
+  if (
+    !Number.isSafeInteger(identity.uid)
+    || identity.uid < 0
+    || !Number.isSafeInteger(identity.gid)
+    || identity.gid < 0
+  ) fail();
   const databasePath = exactDatabasePath(input.databasePath);
   if (
     process.env.FAMILY_AI_GATEWAY_LOCK_ROLE !== input.role
@@ -74,12 +91,12 @@ export function requireInheritedGatewayDatabaseLock(input: {
     const inherited = fstatSync(LOCK_DESCRIPTOR, { bigint: true });
     const pathState = lstatSync(lockPath, { bigint: true });
     if (
-      !protectedDirectory(parentFd)
-      || !protectedDirectory(parentPath)
+      !protectedDirectory(parentFd, identity)
+      || !protectedDirectory(parentPath, identity)
       || parentFd.dev !== parentPath.dev
       || parentFd.ino !== parentPath.ino
-      || !protectedLock(inherited)
-      || !protectedLock(pathState)
+      || !protectedLock(inherited, identity)
+      || !protectedLock(pathState, identity)
       || inherited.dev !== pathState.dev
       || inherited.ino !== pathState.ino
     ) {
@@ -88,7 +105,6 @@ export function requireInheritedGatewayDatabaseLock(input: {
     const asserted = spawnSync("python3", [
       launcher,
       "--assert-inherited-fd", "3",
-      "--role", input.role,
       "--database", databasePath
     ], {
       encoding: "utf8",
@@ -118,4 +134,22 @@ export function requireInheritedGatewayDatabaseLock(input: {
   } finally {
     if (parentDescriptor !== undefined) closeSync(parentDescriptor);
   }
+}
+
+export function requireInheritedGatewayDatabaseLock(input: {
+  role: GatewayDatabaseLockRole;
+  databasePath: string;
+}): GatewayDatabaseLockLease {
+  return requireInheritedGatewayDatabaseLockWithIdentity(input, {
+    uid: APP_UID,
+    gid: APP_GID
+  });
+}
+
+export function requireInheritedGatewayDatabaseLockForTest(input: {
+  role: GatewayDatabaseLockRole;
+  databasePath: string;
+}, identity: GatewayDatabaseLockIdentity): GatewayDatabaseLockLease {
+  if (process.env.NODE_ENV !== "test") fail();
+  return requireInheritedGatewayDatabaseLockWithIdentity(input, identity);
 }

@@ -24,8 +24,8 @@
     "check": "npm run test && npm run typecheck && npm run build && npm run test:federation-bootstrap-runtime",
     "test:federation-bootstrap-runtime": "node --test scripts/federation-bootstrap-runtime.test.mjs",
     "test:gateway-database-lock-rootful": "node --test scripts/gateway-database-lock-rootful.test.mjs",
-    "provision:federation-service": "python3 apps/gateway/runtime/gateway_lock_exec.py --role provision --",
-    "provision:federation-service:dev": "npm run build:gateway && python3 apps/gateway/runtime/gateway_lock_exec.py --role provision --",
+    "provision:federation-service": "python3 apps/gateway/runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node apps/gateway/dist/provisionFederationService.js",
+    "provision:federation-service:dev": "npm run build:gateway && python3 apps/gateway/runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node apps/gateway/dist/provisionFederationService.js",
     "start": "npm run start -w @family-ai/gateway"
   },
   "devDependencies": {

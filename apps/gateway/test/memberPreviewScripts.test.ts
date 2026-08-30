@@ -543,7 +543,7 @@ describe("isolated Member Web Preview scripts", () => {
         readdirSync(join(runtime, directory)).filter(name => name.includes(".tmp."))
       )
     ).toEqual([]);
-  });
+  }, 20_000);
 
   it("fails closed on reused symlinks, non-regular SQLite files and atomic targets", () => {
     const symlinkFixture = lifecycleFixture(

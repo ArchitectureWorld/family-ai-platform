@@ -2,7 +2,6 @@
 import errno
 import fcntl
 import os
-import shutil
 import stat
 import sys
 
@@ -132,66 +131,58 @@ def assert_inherited(fd: int, role: str, database_path: str):
     sys.stdout.write("GATEWAY_DATABASE_LOCK_OK\n")
 
 
-def parse_normal(argv: list[str]) -> tuple[str, str, list[str]]:
-    passthrough: list[str] = []
-    if "--" in argv:
-        split = argv.index("--")
-        passthrough = argv[split + 1 :]
-        argv = argv[:split]
-    role = None
-    database = None
-    index = 0
-    while index < len(argv):
-        if index + 1 >= len(argv):
-            fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
-        flag, value = argv[index], argv[index + 1]
-        if flag == "--role" and role is None:
-            role = value
-        elif flag == "--database" and database is None:
-            database = value
-        else:
-            fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
-        index += 2
-    if role not in ROLES:
+def command_role(command: list[str], database: str) -> str:
+    if len(command) < 2 or command[0] != "node":
         fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+    targets = {
+        "apps/gateway/dist/index.js": "gateway",
+        "dist/index.js": "gateway",
+        "apps/gateway/dist/migrate.js": "migrate",
+        "dist/migrate.js": "migrate",
+        "apps/gateway/dist/provisionFederationService.js": "provision",
+        "dist/provisionFederationService.js": "provision",
+    }
+    role = targets.get(command[1])
+    if role is None:
+        fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+    arguments = command[2:]
     if role == "gateway":
-        if passthrough:
+        if arguments:
             fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
-        database = database or os.environ.get("GATEWAY_DATABASE_PATH") or os.path.abspath(
-            ".runtime/data/gateway.sqlite"
-        )
-    elif role == "migrate":
-        if passthrough or database is None:
+        return role
+    if len(arguments) % 2 != 0:
+        fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+    pairs: dict[str, str] = {}
+    for index in range(0, len(arguments), 2):
+        flag, value = arguments[index], arguments[index + 1]
+        if flag in pairs:
             fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
-    elif database is None:
-        database_positions = [
-            index for index, value in enumerate(passthrough) if value == "--database"
-        ]
-        if len(database_positions) != 1:
-            fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
-        position = database_positions[0]
-        if position + 1 >= len(passthrough):
-            fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
-        database = passthrough[position + 1]
-        passthrough = passthrough[:position] + passthrough[position + 2 :]
-    return role, exact_database_path(database or ""), passthrough
-
-
-def fixed_command(root: str, role: str, database: str, passthrough: list[str]) -> list[str]:
-    node = shutil.which("node")
-    if not node or not os.path.isabs(node):
-        fail("GATEWAY_DATABASE_LOCK_EXEC_FAILED")
-    target = {
-        "gateway": "index.js",
-        "migrate": "migrate.js",
-        "provision": "provisionFederationService.js",
-    }[role]
-    command = [node, os.path.join(root, "apps", "gateway", "dist", target)]
+        pairs[flag] = value
     if role == "migrate":
-        command.extend(["--database", database])
-    elif role == "provision":
-        command.extend([*passthrough, "--database", database])
-    return command
+        if pairs != {"--database": database}:
+            fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+        return role
+    if set(pairs) != {"--service-ref", "--product", "--credential-file", "--database"}:
+        fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+    if pairs["--database"] != database:
+        fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+    return role
+
+
+def parse_normal(argv: list[str]) -> tuple[str, str, list[str]]:
+    if len(argv) < 4 or argv[2] != "--":
+        fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+    if argv[0] == "--database-from-env":
+        if argv[1] != "GATEWAY_DATABASE_PATH":
+            fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+        database = os.environ.get("GATEWAY_DATABASE_PATH")
+    elif argv[0] == "--database":
+        database = argv[1]
+    else:
+        fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+    database_path = exact_database_path(database or "")
+    command = argv[3:]
+    return command_role(command, database_path), database_path, command
 
 
 def main():
@@ -200,12 +191,15 @@ def main():
     if argv == ["--self-check"]:
         sys.stdout.write("GATEWAY_DATABASE_LOCK_SELF_CHECK_OK\n")
         return
-    if len(argv) == 6 and argv[0] == "--assert-inherited-fd":
-        if argv[2] != "--role" or argv[4] != "--database":
+    if len(argv) == 4 and argv[0] == "--assert-inherited-fd":
+        if argv[2] != "--database":
             fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
-        assert_inherited(int(argv[1]), argv[3], exact_database_path(argv[5]))
+        role = os.environ.get("FAMILY_AI_GATEWAY_LOCK_ROLE")
+        if role not in ROLES:
+            fail("GATEWAY_DATABASE_LOCK_INVALID")
+        assert_inherited(int(argv[1]), role, exact_database_path(argv[3]))
         return
-    role, database, passthrough = parse_normal(argv)
+    role, database, command = parse_normal(argv)
     parent_fd, lock_fd = claim_lock(database)
     try:
         os.close(parent_fd)
@@ -217,10 +211,7 @@ def main():
             os.set_inheritable(lock_fd, True)
         os.environ["FAMILY_AI_GATEWAY_LOCK_ROLE"] = role
         os.environ["FAMILY_AI_GATEWAY_LOCK_DATABASE"] = database
-        root = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-        os.execvpe(fixed_command(root, role, database, passthrough)[0], fixed_command(
-            root, role, database, passthrough
-        ), os.environ)
+        os.execvpe(command[0], command, os.environ)
     except LockFailure:
         raise
     except OSError:

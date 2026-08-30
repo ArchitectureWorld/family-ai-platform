@@ -2,14 +2,22 @@ import { existsSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { tsImport } from "tsx/esm/api";
 
-const { requireInheritedGatewayDatabaseLock } = await tsImport(
+const {
+  requireInheritedGatewayDatabaseLock,
+  requireInheritedGatewayDatabaseLockForTest
+} = await tsImport(
   "../../src/databaseLock.ts",
   import.meta.url
 );
 
-const [role, databasePath, readyPath, releasePath] = process.argv.slice(2);
+const [role, databasePath, readyPath, releasePath, uidRaw, gidRaw] = process.argv.slice(2);
 try {
-  const lease = requireInheritedGatewayDatabaseLock({ role, databasePath });
+  const lease = uidRaw === undefined
+    ? requireInheritedGatewayDatabaseLock({ role, databasePath })
+    : requireInheritedGatewayDatabaseLockForTest(
+      { role, databasePath },
+      { uid: Number(uidRaw), gid: Number(gidRaw) }
+    );
   try {
     if (readyPath) writeFileSync(readyPath, "ready\n", { mode: 0o600, flag: "wx" });
     process.stdout.write("GATEWAY_DATABASE_LOCK_READY\n");

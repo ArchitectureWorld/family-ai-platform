@@ -96,6 +96,17 @@ command -v docker >/dev/null 2>&1 || fail DOCKER_UNAVAILABLE
 docker load --input "$ARTIFACT_DIR/gateway-image.tar" >/dev/null
 [[ "$(docker image inspect --format '{{.Id}}' "$IMAGE_ID" 2>/dev/null || true)" == "$IMAGE_ID" ]] \
   || fail LOADED_IMAGE_ID_MISMATCH
+ACTUAL_RUNTIME_CONTRACT="$(node "$ROOT_DIR/scripts/gateway-image-runtime-contract.mjs" \
+  inspect --image-id "$IMAGE_ID")" || fail IMAGE_RUNTIME_CONTRACT_INVALID
+if ! node --input-type=module - "$MANIFEST" "$ACTUAL_RUNTIME_CONTRACT" <<'NODE'
+import { readFileSync } from "node:fs";
+const [manifestPath, actualJson] = process.argv.slice(2);
+const expected = JSON.parse(readFileSync(manifestPath, "utf8")).runtimeContract;
+if (JSON.stringify(expected) !== JSON.stringify(JSON.parse(actualJson))) process.exit(1);
+NODE
+then
+  fail IMAGE_RUNTIME_CONTRACT_MISMATCH
+fi
 label() { docker image inspect --format "{{index .Config.Labels \"$1\"}}" "$IMAGE_ID"; }
 [[ "$(label org.opencontainers.image.revision)" == "$SOURCE_COMMIT" ]] || fail REVISION_LABEL_MISMATCH
 [[ "$(label org.architectureworld.family-ai.client-database-version)" == "$CLIENT_VERSION" ]] || fail CLIENT_LABEL_MISMATCH

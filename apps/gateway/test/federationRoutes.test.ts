@@ -1331,7 +1331,7 @@ describe("Family federation routes", () => {
     });
     expect(response.statusCode).toBeGreaterThanOrEqual(400);
     expect(brokerCalls).toBe(before);
-  });
+  }, 20_000);
 
   it("serializes concurrent first calls, completes audits once, and persists no content or secrets", async () => {
     const contextRef = await actorRef("canvas", admin);

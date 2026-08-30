@@ -19,8 +19,11 @@ umask 077
 chmod 700 "$TEST_ROOT"
 mkdir -m 700 "$TEST_ROOT/runtime" "$TEST_ROOT/runtime/data" "$TEST_ROOT/runtime/data/attachments" "$TEST_ROOT/snapshot-output" "$TEST_ROOT/evidence"
 
-python3 "$ROOT_DIR/apps/gateway/runtime/gateway_lock_exec.py" \
-  --role migrate --database "$TEST_ROOT/runtime/data/gateway.sqlite" >/dev/null
+GATEWAY_DATABASE_PATH="$TEST_ROOT/runtime/data/gateway.sqlite" \
+  python3 "$ROOT_DIR/apps/gateway/runtime/gateway_lock_exec.py" \
+  --database-from-env GATEWAY_DATABASE_PATH -- \
+  node apps/gateway/dist/migrate.js \
+  --database "$TEST_ROOT/runtime/data/gateway.sqlite" >/dev/null
 chmod 600 "$TEST_ROOT/runtime/data/gateway.sqlite"
 printf 'fixture-attachment\n' > "$TEST_ROOT/runtime/data/attachments/example.txt"
 chmod 600 "$TEST_ROOT/runtime/data/attachments/example.txt"
@@ -94,7 +97,7 @@ bash "$ROOT_DIR/scripts/runtime-backup.sh" \
   --expected-backup-tool-manifest-sha256 "$TOOL_SHA" > "$TEST_ROOT/snapshot-path"
 SNAPSHOT="$(<"$TEST_ROOT/snapshot-path")"
 
-node -e 'const fs=require("node:fs"); const [path,image,receipt]=process.argv.slice(1); fs.writeFileSync(path, JSON.stringify({manifestKind:"gateway-migration-definition-v1",imageId:image,releaseCapabilityReceiptSha256:receipt,entrypoint:["--role","migrate"],workerDisabled:true,networkMode:"none",runtimeMount:"/runtime",databasePath:"/runtime/data/gateway.sqlite",attachmentRoot:"/runtime/data/attachments"},null,2)+"\n",{mode:0o600,flag:"wx"});' \
+node -e 'const fs=require("node:fs"); const [path,image,receipt]=process.argv.slice(1); fs.writeFileSync(path, JSON.stringify({manifestKind:"gateway-migration-definition-v1",imageId:image,releaseCapabilityReceiptSha256:receipt,command:["node","apps/gateway/dist/migrate.js","--database","/runtime/data/gateway.sqlite"],workerDisabled:true,networkMode:"none",runtimeMount:"/runtime",databasePath:"/runtime/data/gateway.sqlite",attachmentRoot:"/runtime/data/attachments"},null,2)+"\n",{mode:0o600,flag:"wx"});' \
   "$TEST_ROOT/evidence/migration.json" "$IMAGE_ID" "$CAPABILITY_SHA"
 bash "$ROOT_DIR/scripts/runtime-candidate-stage.sh" \
   --release-id fixture-a5 --source-snapshot "$SNAPSHOT" \

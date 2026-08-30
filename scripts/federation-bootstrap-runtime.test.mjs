@@ -15,12 +15,14 @@ const lockLauncher = join(root, "apps/gateway/runtime/gateway_lock_exec.py");
 function migrateDatabase(databasePath) {
   const result = spawnSync("python3", [
     lockLauncher,
-    "--role", "migrate",
+    "--database-from-env", "GATEWAY_DATABASE_PATH",
+    "--",
+    "node", "apps/gateway/dist/migrate.js",
     "--database", databasePath
   ], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, NODE_ENV: "production" }
+    env: { ...process.env, NODE_ENV: "production", GATEWAY_DATABASE_PATH: databasePath }
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "");
@@ -29,11 +31,11 @@ function migrateDatabase(databasePath) {
 test("production package commands route built database entrypoints through the lock launcher", () => {
   assert.equal(
     packageJson.scripts["provision:federation-service"],
-    "python3 apps/gateway/runtime/gateway_lock_exec.py --role provision --"
+    "python3 apps/gateway/runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node apps/gateway/dist/provisionFederationService.js"
   );
   assert.equal(
     packageJson.scripts["provision:federation-service:dev"],
-    "npm run build:gateway && python3 apps/gateway/runtime/gateway_lock_exec.py --role provision --"
+    "npm run build:gateway && python3 apps/gateway/runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node apps/gateway/dist/provisionFederationService.js"
   );
 });
 
@@ -61,16 +63,17 @@ test("built production CLI provisions one disposable V15 service without secret 
 
     const result = spawnSync("python3", [
       lockLauncher,
-      "--role", "provision",
-      "--database", databasePath,
+      "--database-from-env", "GATEWAY_DATABASE_PATH",
       "--",
+      "node", "apps/gateway/dist/provisionFederationService.js",
       "--service-ref", "service:canvas-built",
       "--product", "canvas",
-      "--credential-file", credentialPath
+      "--credential-file", credentialPath,
+      "--database", databasePath
     ], {
       cwd: root,
       encoding: "utf8",
-      env: { ...process.env, NODE_ENV: "production" }
+      env: { ...process.env, NODE_ENV: "production", GATEWAY_DATABASE_PATH: databasePath }
     });
 
     assert.equal(result.status, 0);
@@ -113,16 +116,17 @@ test("built production CLI rejects extra and altered persistent service views", 
 
       const result = spawnSync("python3", [
         lockLauncher,
-        "--role", "provision",
-        "--database", databasePath,
+        "--database-from-env", "GATEWAY_DATABASE_PATH",
         "--",
+        "node", "apps/gateway/dist/provisionFederationService.js",
         "--service-ref", `service:canvas-view-${label}`,
         "--product", "canvas",
-        "--credential-file", credentialPath
+        "--credential-file", credentialPath,
+        "--database", databasePath
       ], {
         cwd: root,
         encoding: "utf8",
-        env: { ...process.env, NODE_ENV: "production" }
+        env: { ...process.env, NODE_ENV: "production", GATEWAY_DATABASE_PATH: databasePath }
       });
 
       assert.equal(result.status, 1);
@@ -159,13 +163,18 @@ test("built production CLI ignores SQLite-owned ANALYZE objects", () => {
 
     const result = spawnSync("python3", [
       lockLauncher,
-      "--role", "provision",
-      "--database", databasePath,
+      "--database-from-env", "GATEWAY_DATABASE_PATH",
       "--",
+      "node", "apps/gateway/dist/provisionFederationService.js",
       "--service-ref", "service:canvas-internal",
       "--product", "canvas",
-      "--credential-file", credentialPath
-    ], { cwd: root, encoding: "utf8", env: { ...process.env, NODE_ENV: "production" } });
+      "--credential-file", credentialPath,
+      "--database", databasePath
+    ], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, NODE_ENV: "production", GATEWAY_DATABASE_PATH: databasePath }
+    });
 
     assert.equal(result.status, 0);
     assert.equal(result.stderr, "");

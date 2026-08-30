@@ -20,7 +20,7 @@ const launcher = join(root, "apps/gateway/runtime/gateway_lock_exec.py");
 
 const harness = String.raw`
 import fcntl, os, sys
-database, role, node, worker, mode, ready, release = sys.argv[1:]
+database, role, node, worker, mode, ready, release, *worker_args = sys.argv[1:]
 parent = os.path.dirname(database)
 lock_path = os.path.join(parent, ".family-ai-gateway.lock")
 fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -37,7 +37,7 @@ if mode == "replace":
     os.close(replacement)
 os.environ["FAMILY_AI_GATEWAY_LOCK_ROLE"] = role
 os.environ["FAMILY_AI_GATEWAY_LOCK_DATABASE"] = database
-os.execv(node, [node, "--import", "tsx", worker, role, database, ready, release])
+os.execv(node, [node, "--import", "tsx", worker, role, database, ready, release, *worker_args])
 `;
 
 describe("Gateway database launch lock", () => {
@@ -115,6 +115,66 @@ describe("Gateway database launch lock", () => {
     }
   });
 
+  it("derives the migrate role only from the exact CMD after the database-from-env boundary", () => {
+    const databasePath = fixture();
+    rmSync(databasePath);
+    const exact = spawnSync("python3", [
+      launcher,
+      "--database-from-env", "GATEWAY_DATABASE_PATH",
+      "--",
+      "node", "apps/gateway/dist/migrate.js",
+      "--database", databasePath
+    ], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, GATEWAY_DATABASE_PATH: databasePath }
+    });
+    expect(exact.status, exact.stderr).toBe(0);
+    expect(exact.stdout).toBe(
+      '{"schemaVersion":15,"quickCheck":"ok","foreignKeyViolations":0}\n'
+    );
+
+    rmSync(databasePath);
+    const legacyRole = spawnSync("python3", [
+      launcher, "--role", "migrate", "--database", databasePath
+    ], { cwd: root, encoding: "utf8" });
+    expect(legacyRole.status).toBe(1);
+    expect(legacyRole.stdout).toBe("");
+    expect(legacyRole.stderr).toBe("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID\n");
+    expect(existsSync(databasePath)).toBe(false);
+  }, 20_000);
+
+  it("injects unit identities without allowing production identity overrides", () => {
+    const databasePath = fixture();
+    const accepted = spawnSync("python3", [
+      "-c", harness, databasePath, "gateway", process.execPath, worker,
+      "valid", "", "", "1000", "1000"
+    ], { cwd: root, encoding: "utf8", env: { ...process.env, NODE_ENV: "test" } });
+    expect(accepted.status, accepted.stderr).toBe(0);
+
+    const rejected = spawnSync("python3", [
+      "-c", harness, databasePath, "gateway", process.execPath, worker,
+      "valid", "", "", "1001", "1000"
+    ], { cwd: root, encoding: "utf8", env: { ...process.env, NODE_ENV: "test" } });
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toBe("GATEWAY_DATABASE_LOCK_INVALID\n");
+
+    const production = spawnSync("python3", [
+      "-c", harness, databasePath, "gateway", process.execPath, worker,
+      "valid", "", ""
+    ], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        FAMILY_AI_GATEWAY_EXPECTED_UID: "1001",
+        FAMILY_AI_GATEWAY_EXPECTED_GID: "1001"
+      }
+    });
+    expect(production.status, production.stderr).toBe(0);
+  });
+
   it("fails nonblocking contention and releases after holder SIGKILL", async () => {
     const databasePath = fixture();
     const ready = join(directory, "ready");
@@ -129,8 +189,13 @@ describe("Gateway database launch lock", () => {
     expect(existsSync(ready)).toBe(true);
 
     const busy = spawnSync("python3", [
-      launcher, "--role", "migrate", "--database", databasePath
-    ], { cwd: root, encoding: "utf8" });
+      launcher, "--database-from-env", "GATEWAY_DATABASE_PATH", "--",
+      "node", "apps/gateway/dist/migrate.js", "--database", databasePath
+    ], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, GATEWAY_DATABASE_PATH: databasePath }
+    });
     expect(busy.status).toBe(1);
     expect(busy.stdout).toBe("");
     expect(busy.stderr).toBe("GATEWAY_DATABASE_LOCK_BUSY\n");
@@ -139,8 +204,13 @@ describe("Gateway database launch lock", () => {
     await new Promise<void>((resolveExit) => holder.once("close", () => resolveExit()));
     rmSync(databasePath);
     const after = spawnSync("python3", [
-      launcher, "--role", "migrate", "--database", databasePath
-    ], { cwd: root, encoding: "utf8" });
+      launcher, "--database-from-env", "GATEWAY_DATABASE_PATH", "--",
+      "node", "apps/gateway/dist/migrate.js", "--database", databasePath
+    ], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, GATEWAY_DATABASE_PATH: databasePath }
+    });
     expect(after.status, after.stderr).toBe(0);
     expect(after.stderr).toBe("");
     expect(after.stdout).toBe(
