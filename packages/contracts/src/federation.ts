@@ -30,6 +30,13 @@ export interface FederationActorContextV1 {
   expiresAt: string;
 }
 
+export interface FederationServiceStatusV1 {
+  protocolVersion: 1;
+  serviceRef: string;
+  product: "canvas" | "me";
+  status: "active";
+}
+
 export interface AgentInvocationRequestV1 {
   protocolVersion: 1;
   invocationRef: string;
@@ -87,6 +94,13 @@ const externalSessionRefSchema = refSchema("external-session");
 const serviceRefSchema = refSchema("service");
 
 export const productIdV1Schema = productIdSchema;
+
+export const federationServiceStatusV1Schema = z.object({
+  protocolVersion: protocolVersionSchema,
+  serviceRef: serviceRefSchema,
+  product: z.enum(["canvas", "me"]),
+  status: z.literal("active")
+}).strict();
 
 export const agentDescriptorV1Schema = z
   .object({

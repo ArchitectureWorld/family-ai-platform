@@ -6,6 +6,7 @@ import {
   agentInvocationResultV1Schema,
   federationActorContextV1Schema,
   federationAgentListV1Schema,
+  federationServiceStatusV1Schema,
   federationInvocationPostResponseV1Schema,
   federationInvocationResponseV1Schema,
   federationInvocationStatusV1Schema
@@ -189,6 +190,34 @@ describe("Family federation and Agent invocation contracts v1", () => {
     expect(federationInvocationResponseV1Schema.safeParse({
       ...liveResponse,
       correlationRef: "correlation:other"
+    }).success).toBe(false);
+  });
+
+  it("publishes one strict active Canvas or ME service status projection", () => {
+    for (const product of ["canvas", "me"] as const) {
+      const status = {
+        protocolVersion: 1 as const,
+        serviceRef: `service:${product}`,
+        product,
+        status: "active" as const
+      };
+      expect(federationServiceStatusV1Schema.parse(status)).toEqual(status);
+      expect(federationServiceStatusV1Schema.safeParse({
+        ...status,
+        tokenHash: "private"
+      }).success).toBe(false);
+    }
+    expect(federationServiceStatusV1Schema.safeParse({
+      protocolVersion: 1,
+      serviceRef: "service:family",
+      product: "family",
+      status: "active"
+    }).success).toBe(false);
+    expect(federationServiceStatusV1Schema.safeParse({
+      protocolVersion: 1,
+      serviceRef: "service:canvas",
+      product: "canvas",
+      status: "revoked"
     }).success).toBe(false);
   });
 

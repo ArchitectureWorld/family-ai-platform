@@ -3,6 +3,7 @@ import {
   agentDescriptorV1Schema,
   federationAgentListV1Schema,
   federationInvocationResponseV1Schema,
+  federationServiceStatusV1Schema,
   type AgentDescriptorV1,
   type AgentInvocationRequestV1,
   type AgentInvocationResultV1,
@@ -10,7 +11,8 @@ import {
   type FederationAgentListV1,
   type FederationInvocationPostResponseV1,
   type FederationInvocationResponseV1,
-  type FederationInvocationStatusV1
+  type FederationInvocationStatusV1,
+  type FederationServiceStatusV1
 } from "@family-ai/contracts";
 import {
   BrokerFederationError,
@@ -188,6 +190,23 @@ export class FederationService {
       );
     }
     return service;
+  }
+
+  inspectService(
+    service: AuthenticatedFederationService
+  ): FederationServiceStatusV1 {
+    let active: AuthenticatedFederationService;
+    try {
+      active = this.repository.requireActiveService(service);
+    } catch (error) {
+      throw repositoryError(error);
+    }
+    return federationServiceStatusV1Schema.parse({
+      protocolVersion: 1,
+      serviceRef: active.serviceRef,
+      product: active.product,
+      status: "active"
+    });
   }
 
   issueActorContext(

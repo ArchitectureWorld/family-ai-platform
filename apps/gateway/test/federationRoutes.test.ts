@@ -8,6 +8,7 @@ import {
   federationAgentListV1Schema,
   federationInvocationResponseV1Schema,
   federationInvocationStatusV1Schema,
+  federationServiceStatusV1Schema,
   type AgentInvocationRequestV1
 } from "@family-ai/contracts";
 import {
@@ -439,6 +440,8 @@ describe("Family federation routes", () => {
       expect(response.headers["x-family-ai-family-display-name-b64"])
         .toBe("6IGU6YKm5rWL6K-V5a625bqt");
       expect(response.headers["x-family-ai-context-version"]).toBe("1");
+      expect(response.headers["x-family-ai-service-ref"])
+        .toBe(`service:${product}`);
       expect(response.headers["x-family-ai-person-display-name-b64"])
         .toMatch(/^[A-Za-z0-9_-]+$/);
       expect(response.headers["x-family-ai-family-display-name-b64"])
@@ -447,6 +450,156 @@ describe("Family federation routes", () => {
       expect(serialized).not.toMatch(/管理员|联邦测试家庭|\r|\n/);
       expect(serialized).not.toMatch(/entry-token|service-token|provider-profile|hermes-home/i);
     }
+  });
+
+  it("publishes a strict write-free active service probe for Canvas and ME", async () => {
+    const counts = () => ({
+      contexts: Number((db.prepare(
+        "SELECT COUNT(*) AS count FROM federation_actor_contexts"
+      ).get() as { count: number }).count),
+      observations: Number((db.prepare(
+        "SELECT COUNT(*) AS count FROM agent_discovery_observations"
+      ).get() as { count: number }).count),
+      audits: Number((db.prepare(
+        "SELECT COUNT(*) AS count FROM agent_invocation_audit"
+      ).get() as { count: number }).count)
+    });
+    const before = counts();
+    const brokerBefore = brokerCalls;
+
+    for (const [serviceRef, product, token] of [
+      ["service:canvas", "canvas", CANVAS_TOKEN],
+      ["service:me", "me", ME_TOKEN]
+    ] as const) {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/federation/service",
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers["content-type"]).toBe(
+        "application/json; charset=utf-8"
+      );
+      expect(federationServiceStatusV1Schema.parse(response.json())).toEqual({
+        protocolVersion: 1,
+        serviceRef,
+        product,
+        status: "active"
+      });
+    }
+    expect(counts()).toEqual(before);
+    expect(brokerCalls).toBe(brokerBefore);
+  });
+
+  it("rejects malformed or unknown service authorization with one safe 401", async () => {
+    for (const authorization of [
+      undefined,
+      `Basic ${CANVAS_TOKEN}`,
+      ` Bearer ${CANVAS_TOKEN}`,
+      `Bearer ${CANVAS_TOKEN} `,
+      `Bearer  ${CANVAS_TOKEN}`,
+      "Bearer unknown-service-token"
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/federation/service",
+        headers: authorization === undefined ? {} : { authorization }
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.body).not.toContain(CANVAS_TOKEN);
+    }
+  });
+
+  it("rejects duplicate raw Authorization values", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/federation/service",
+      headers: {
+        authorization: [
+          `Bearer ${CANVAS_TOKEN}`,
+          `Bearer ${CANVAS_TOKEN}`
+        ] as unknown as string
+      }
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects forbidden probe headers before authentication and all side effects", async () => {
+    const contextsBefore = db.prepare(
+      "SELECT COUNT(*) AS count FROM federation_actor_contexts"
+    ).get();
+    const auditsBefore = db.prepare(
+      "SELECT COUNT(*) AS count FROM agent_invocation_audit"
+    ).get();
+    const brokerBefore = brokerCalls;
+    for (const hostile of [
+      { cookie: "" },
+      { "x-entry-session-ref": "entry-session:forged" },
+      { "x-family-ai-context-ref": "actor-context:forged" },
+      { "x-family-ai-family-ref": "family:forged" },
+      { "content-length": "0" },
+      { "transfer-encoding": "chunked" }
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/federation/service",
+        headers: {
+          authorization: "Bearer deliberately-unknown-token",
+          ...hostile
+        }
+      });
+      expect(response.statusCode).toBe(400);
+      expect(db.prepare(
+        "SELECT COUNT(*) AS count FROM federation_actor_contexts"
+      ).get()).toEqual(contextsBefore);
+      expect(db.prepare(
+        "SELECT COUNT(*) AS count FROM agent_invocation_audit"
+      ).get()).toEqual(auditsBefore);
+      expect(brokerCalls).toBe(brokerBefore);
+    }
+  });
+
+  it("rejects an actual probe body before authentication and side effects", async () => {
+    const brokerBefore = brokerCalls;
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/federation/service",
+      headers: {
+        authorization: "Bearer deliberately-unknown-token",
+        "content-type": "application/json"
+      },
+      payload: { forbidden: true }
+    });
+    expect(response.statusCode).toBe(400);
+    expect(brokerCalls).toBe(brokerBefore);
+  });
+
+  it("rechecks service activity after authentication and rejects revoked probes", async () => {
+    const federationRepository = new FederationRepository(db, { now: () => now });
+    const service = new FederationService(
+      federationRepository,
+      providerRouter,
+      () => now
+    );
+    const authenticated = service.authenticateService(CANVAS_TOKEN);
+    federationRepository.revokeService(authenticated.serviceRef);
+    let failure: unknown;
+    try {
+      service.inspectService(authenticated);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "FEDERATION_SERVICE_UNAUTHORIZED",
+      statusCode: 401
+    });
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/federation/service",
+      headers: { authorization: `Bearer ${CANVAS_TOKEN}` }
+    });
+    expect(response.statusCode).toBe(401);
   });
 
   it("invokes mounted Agents successfully for both Canvas and ME contexts", async () => {

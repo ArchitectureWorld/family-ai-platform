@@ -2,7 +2,8 @@ import {
   agentInvocationRequestV1Schema,
   federationAgentListV1Schema,
   federationInvocationPostResponseV1Schema,
-  federationInvocationStatusV1Schema
+  federationInvocationStatusV1Schema,
+  federationServiceStatusV1Schema
 } from "@family-ai/contracts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
@@ -13,11 +14,58 @@ import { FederationService } from "./federationService.js";
 import { GatewayDomainError } from "./service.js";
 import { useFederationEntryCookies } from "./webEntryCookies.js";
 
-function bearerToken(request: FastifyRequest): string | null {
-  const authorization = request.headers.authorization;
-  if (!authorization?.startsWith("Bearer ")) return null;
-  const token = authorization.slice("Bearer ".length).trim();
-  return token || null;
+function rawHeaderValues(request: FastifyRequest, name: string): string[] {
+  const values: string[] = [];
+  const raw = request.raw.rawHeaders;
+  if (raw.length % 2 !== 0) return values;
+  for (let index = 0; index < raw.length; index += 2) {
+    if (raw[index]?.toLowerCase() === name) {
+      values.push(raw[index + 1] ?? "");
+    }
+  }
+  return values;
+}
+
+function strictBearerToken(request: FastifyRequest): string | null {
+  const values = rawHeaderValues(request, "authorization");
+  if (values.length !== 1) return null;
+  const authorization = values[0]!;
+  if (!authorization.startsWith("Bearer ")) return null;
+  const token = authorization.slice("Bearer ".length);
+  if (token.length < 16 || token.length > 4096) return null;
+  for (const character of token) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint < 0x21 || codePoint > 0x7e) return null;
+  }
+  return token;
+}
+
+function invalidProbeRequest(): never {
+  throw new GatewayDomainError(
+    "FEDERATION_REQUEST_INVALID",
+    400,
+    "validation",
+    false,
+    "联邦服务探测请求格式不正确。"
+  );
+}
+
+function assertStrictProbeRequest(request: FastifyRequest): void {
+  const raw = request.raw.rawHeaders;
+  for (let index = 0; index < raw.length; index += 2) {
+    const name = raw[index]?.toLowerCase() ?? "";
+    if (
+      name === "cookie"
+      || name === "content-length"
+      || name === "transfer-encoding"
+      || name.startsWith("x-entry-")
+      || name.startsWith("x-actor-")
+      || name.startsWith("x-family-ai-")
+    ) {
+      invalidProbeRequest();
+    }
+  }
+  if (request.body !== undefined) invalidProbeRequest();
 }
 
 function scopedRefHeader(
@@ -101,7 +149,7 @@ export function registerFederationRoutes(
   }
 ): void {
   const authenticateService = (request: FastifyRequest) => {
-    const token = bearerToken(request);
+    const token = strictBearerToken(request);
     if (!token) {
       throw new GatewayDomainError(
         "FEDERATION_SERVICE_UNAUTHORIZED",
@@ -125,14 +173,17 @@ export function registerFederationRoutes(
     if (authentication.status !== "authenticated") {
       throw entryError(authentication);
     }
-    return input.service.issueActorContext(
+    return {
       service,
-      credentials.entrySessionRef
-    );
+      actor: input.service.issueActorContext(
+        service,
+        credentials.entrySessionRef
+      )
+    };
   };
 
   app.get("/api/v1/federation/session", async (request, reply) => {
-    const actor = issueBrowserActor(request);
+    const { service, actor } = issueBrowserActor(request);
     reply.headers({
       "X-Family-AI-Context-Ref": actor.contextRef,
       "X-Family-AI-Family-Ref": actor.familyRef,
@@ -147,9 +198,19 @@ export function registerFederationRoutes(
       "X-Family-AI-Roles": actor.roles.join(","),
       "X-Family-AI-Assignment-Version": String(actor.assignmentVersion),
       "X-Family-AI-Context-Version": String(actor.contextVersion),
-      "X-Family-AI-Context-Expires-At": actor.expiresAt
+      "X-Family-AI-Context-Expires-At": actor.expiresAt,
+      "X-Family-AI-Service-Ref": service.serviceRef
     });
     return reply.code(204).send();
+  });
+
+  app.get("/api/v1/federation/service", async (request, reply) => {
+    assertStrictProbeRequest(request);
+    const service = authenticateService(request);
+    reply.header("Cache-Control", "no-store");
+    return federationServiceStatusV1Schema.parse(
+      input.service.inspectService(service)
+    );
   });
 
   app.get("/api/v1/federation/agents", async (request) => {
