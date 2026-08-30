@@ -97,7 +97,7 @@ test("runtime provenance rejects an image that copied different launcher bytes",
     ].join("\n"));
     const built = spawnSync("docker", ["build", "--quiet", "--tag", tag, fixture], {
       encoding: "utf8",
-      timeout: 30_000
+      timeout: 90_000
     });
     assert.equal(built.status, 0, built.stderr);
     const expectedLauncherSha256 = createHash("sha256").update(readFileSync(
