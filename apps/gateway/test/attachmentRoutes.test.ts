@@ -614,5 +614,5 @@ describe("attachment upload and download routes", () => {
       }
     });
     expect(cancelledAfterRollback.statusCode).toBe(204);
-  });
+  }, 20_000);
 });

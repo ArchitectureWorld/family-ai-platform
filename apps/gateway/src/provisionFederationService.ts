@@ -200,7 +200,13 @@ function openExistingV15Database(
       { intent: "provision-existing" },
       {
         checkpoint: stage => {
-          if (stage !== "beforeMigrationCommit") hooks.checkpoint?.(stage);
+          if (
+            stage !== "beforeDatabaseCreate"
+            && stage !== "afterDatabaseCreate"
+            && stage !== "beforeMigrationCommit"
+          ) {
+            hooks.checkpoint?.(stage);
+          }
         }
       }
     );

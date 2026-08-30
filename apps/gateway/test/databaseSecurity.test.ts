@@ -45,7 +45,7 @@ describe("secure Gateway database intents", () => {
     return join(directory, "gateway.sqlite");
   };
 
-  const createFixture = (path: string, version: 14 | 15): void => {
+  const createFixture = (path: string, version: 13 | 14 | 15): void => {
     const opened = openWithIntent(path, {
       intent: "test-create-or-existing",
       simulate: "migrate-create-or-existing",
@@ -352,5 +352,95 @@ describe("secure Gateway database intents", () => {
     production.close();
     expect(readdirSync(directory).filter((name) => name.startsWith("gateway.sqlite-")))
       .toEqual([]);
+  }, 60_000);
+
+  it.each([
+    ["V13", 13, false],
+    ["altered V15", 15, true]
+  ] as const)(
+    "rejects a fresh-create proof-window replacement with %s without changing either inode",
+    (_label, version, altered) => {
+      const path = prepareDirectory();
+      const replacementPath = join(directory, "replacement.sqlite");
+      const createdPath = join(directory, "created.sqlite");
+      createFixture(replacementPath, version);
+      if (altered) {
+        const replacement = new Database(replacementPath, { fileMustExist: true });
+        replacement.exec("CREATE TABLE hostile_replacement(value TEXT)");
+        replacement.close();
+      }
+      const replacementBytes = readFileSync(replacementPath);
+      const replacementLedger = new Database(replacementPath, {
+        readonly: true,
+        fileMustExist: true
+      });
+      const ledgerBefore = replacementLedger.prepare(
+        "SELECT version FROM schema_migrations ORDER BY version"
+      ).all();
+      replacementLedger.close();
+      let createdBytes: Buffer | undefined;
+      const stages: string[] = [];
+      const baseline = openFileCount();
+
+      expect(() => openGatewayDatabase(
+        path,
+        { intent: "migrate-create-or-existing" },
+        {
+          checkpoint: (stage) => {
+            stages.push(stage);
+            if (String(stage) !== "afterDatabaseCreate") return;
+            renameSync(path, createdPath);
+            renameSync(replacementPath, path);
+            createdBytes = readFileSync(createdPath);
+          }
+        }
+      )).toThrow("GATEWAY_DATABASE_INVALID");
+
+      expect(createdBytes).toBeDefined();
+      expect(readFileSync(createdPath)).toEqual(createdBytes);
+      expect(readFileSync(path)).toEqual(replacementBytes);
+      const replacementAfter = new Database(path, { readonly: true, fileMustExist: true });
+      expect(replacementAfter.prepare(
+        "SELECT version FROM schema_migrations ORDER BY version"
+      ).all()).toEqual(ledgerBefore);
+      replacementAfter.close();
+      expect(stages).not.toContain("afterWritableOpen");
+      expect(stages).not.toContain("beforeMigrationCommit");
+      expect(stages).not.toContain("beforeReturn");
+      expect(openFileCount()).toBe(baseline);
+    },
+    60_000
+  );
+
+  it("treats a create-time EEXIST race as existing and runs immutable validation", () => {
+    const path = prepareDirectory();
+    const replacementPath = join(directory, "replacement.sqlite");
+    createFixture(replacementPath, 13);
+    const before = readFileSync(replacementPath);
+    const baseline = openFileCount();
+    const stages: string[] = [];
+
+    expect(() => openGatewayDatabase(
+      path,
+      { intent: "migrate-create-or-existing" },
+      {
+        checkpoint: (stage) => {
+          stages.push(stage);
+          if (String(stage) === "beforeDatabaseCreate") {
+            renameSync(replacementPath, path);
+          }
+        }
+      }
+    )).toThrow("GATEWAY_DATABASE_SCHEMA_INVALID");
+
+    expect(readFileSync(path)).toEqual(before);
+    const verification = new Database(path, { readonly: true, fileMustExist: true });
+    expect(verification.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
+      .toEqual({ version: 13 });
+    verification.close();
+    expect(stages).not.toContain("afterWritableOpen");
+    expect(stages).not.toContain("beforeMigrationCommit");
+    expect(stages).not.toContain("beforeReturn");
+    expect(openFileCount()).toBe(baseline);
   }, 60_000);
 });

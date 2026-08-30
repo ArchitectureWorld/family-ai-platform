@@ -34,6 +34,8 @@ export type GatewayDatabaseOpenRequest =
     };
 
 export type DatabaseSecurityCheckpoint =
+  | "beforeDatabaseCreate"
+  | "afterDatabaseCreate"
   | "afterReadonlyOpen"
   | "afterReadonlyValidation"
   | "afterWritableOpen"
@@ -236,23 +238,62 @@ function assertProtectedPath(protectedPath: ProtectedPath): void {
   }
 }
 
-function createDatabase(path: string, parentDescriptor: number): void {
-  let descriptor: number;
+function openDatabaseProof(
+  path: string,
+  parentDescriptor: number,
+  allowCreate: boolean,
+  hooks: DatabaseSecurityHooks
+): { databaseDescriptor: number; created: boolean } {
+  if (!allowCreate) {
+    try {
+      return {
+        databaseDescriptor: openSync(
+          path,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+        ),
+        created: false
+      };
+    } catch {
+      return fail("GATEWAY_DATABASE_INVALID");
+    }
+  }
+  hooks.checkpoint?.("beforeDatabaseCreate");
+  let databaseDescriptor: number;
   try {
-    descriptor = openSync(
+    databaseDescriptor = openSync(
       path,
-      constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      constants.O_RDWR
+        | constants.O_CREAT
+        | constants.O_EXCL
+        | constants.O_NOFOLLOW
+        | constants.O_NONBLOCK,
       0o600
     );
-  } catch {
-    return fail("GATEWAY_DATABASE_INVALID");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      return fail("GATEWAY_DATABASE_INVALID");
+    }
+    try {
+      return {
+        databaseDescriptor: openSync(
+          path,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+        ),
+        created: false
+      };
+    } catch {
+      return fail("GATEWAY_DATABASE_INVALID");
+    }
   }
   try {
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
+    fsyncSync(databaseDescriptor);
+    fsyncSync(parentDescriptor);
+    hooks.checkpoint?.("afterDatabaseCreate");
+    return { databaseDescriptor, created: true };
+  } catch (error) {
+    closeSync(databaseDescriptor);
+    throw error;
   }
-  fsyncSync(parentDescriptor);
 }
 
 function capturePath(
@@ -260,7 +301,7 @@ function capturePath(
   allowCreate: boolean,
   publicIntent: GatewayDatabaseIntent,
   hooks: DatabaseSecurityHooks
-): ProtectedPath {
+): { protectedPath: ProtectedPath; created: boolean } {
   if (
     !isAbsolute(path)
     || path === "/"
@@ -300,18 +341,8 @@ function capturePath(
     ) {
       fail("GATEWAY_DATABASE_INVALID");
     }
-    try {
-      lstatSync(path);
-    } catch (error) {
-      if (!allowCreate || (error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-      createDatabase(path, parentDescriptor);
-    }
-    databaseDescriptor = openSync(
-      path,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
-    );
+    const opened = openDatabaseProof(path, parentDescriptor, allowCreate, hooks);
+    databaseDescriptor = opened.databaseDescriptor;
     const protectedPath = {
       path,
       parentPath,
@@ -324,7 +355,7 @@ function capturePath(
     };
     assertProtectedPath(protectedPath);
     assertNoSidecarsOrMarker(path);
-    return protectedPath;
+    return { protectedPath, created: opened.created };
   } catch (error) {
     try {
       if (databaseDescriptor !== undefined) closeSync(databaseDescriptor);
@@ -512,18 +543,11 @@ export function openSecureDatabaseFile(
 ): SecureDatabaseFile {
   const resolved = resolveRequest(request);
   const allowCreate = resolved.effectiveIntent === "migrate-create-or-existing";
-  const existedBefore = (() => {
-    try {
-      lstatSync(path);
-      return true;
-    } catch {
-      return false;
-    }
-  })();
-  const protectedPath = capturePath(path, allowCreate, resolved.publicIntent, hooks);
+  const captured = capturePath(path, allowCreate, resolved.publicIntent, hooks);
+  const { protectedPath } = captured;
   let database: Database.Database | undefined;
   try {
-    if (existedBefore) {
+    if (!captured.created) {
       const before = openDescriptors(protectedPath.databaseDescriptor);
       let inspection: ImmutableDatabase;
       try {
