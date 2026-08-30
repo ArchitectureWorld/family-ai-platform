@@ -194,7 +194,7 @@ async function runRaceCli(
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "family-federation-bootstrap-"));
   databasePath = join(directory, "gateway.sqlite");
-  const database = openGatewayDatabase(databasePath);
+  const database = openGatewayDatabase(databasePath, { migrationLimit: 14 });
   database.close();
   credentialPath = writeCredential("canvas.credential", token);
 });
@@ -452,7 +452,7 @@ describe("protected federation service bootstrap CLI", () => {
     const linkedParent = join(directory, "linked-parent");
     symlinkSync(realParent, linkedParent);
     const linkedDatabase = join(realParent, "gateway.sqlite");
-    const database = openGatewayDatabase(linkedDatabase);
+    const database = openGatewayDatabase(linkedDatabase, { migrationLimit: 14 });
     database.close();
 
     const result = runCli(argumentsFor({
@@ -492,7 +492,7 @@ describe("protected federation service bootstrap CLI", () => {
     async (targetStage, replacementKind) => {
       const originalPath = join(directory, `original-${targetStage}.sqlite`);
       const replacementPath = join(directory, `replacement-${targetStage}.sqlite`);
-      const replacement = openGatewayDatabase(replacementPath);
+      const replacement = openGatewayDatabase(replacementPath, { migrationLimit: 14 });
       replacement.close();
 
       const result = await runRaceCli(targetStage, () => {
@@ -785,7 +785,7 @@ describe("protected federation service bootstrap CLI", () => {
         migrationLimit: migrationLimit as 10 | 13
       });
       legacy.close();
-      const migrated = openGatewayDatabase(migratedPath);
+      const migrated = openGatewayDatabase(migratedPath, { migrationLimit: 14 });
       migrated.close();
       const args = argumentsFor({
         serviceRef: `service:canvas-v${migrationLimit}`,
@@ -793,7 +793,7 @@ describe("protected federation service bootstrap CLI", () => {
       });
 
       const first = runCli(args);
-      const reopened = openGatewayDatabase(migratedPath);
+      const reopened = openGatewayDatabase(migratedPath, { migrationLimit: 14 });
       reopened.close();
       const replay = runCli(args);
 

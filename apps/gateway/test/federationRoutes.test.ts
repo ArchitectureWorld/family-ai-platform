@@ -973,7 +973,7 @@ describe("Family federation routes", () => {
     );
     const authenticated = service.authenticateService(CANVAS_TOKEN);
     const actor = federationRepository.issueActorContext({
-      product: "canvas",
+      service: authenticated,
       entrySessionRef: admin.entrySessionRef,
       lifetimeSeconds: 60
     });

@@ -84,7 +84,7 @@ describe("attachment metadata migration", () => {
     db = openGatewayDatabase(databasePath);
     expect(
       db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get()
-    ).toEqual({ version: 14 });
+    ).toEqual({ version: 15 });
     expect(
       db.prepare(
         `SELECT message_ref, thread_sequence, content_text

@@ -196,7 +196,7 @@ export class FederationService {
   ): FederationActorContextV1 {
     try {
       return this.repository.issueActorContext({
-        product: service.product,
+        service,
         entrySessionRef,
         lifetimeSeconds: 60
       });
@@ -526,7 +526,7 @@ export class FederationService {
     } catch (error) {
       throw repositoryError(error);
     }
-    const actor = this.repository.getActorContext(contextRef);
+    const actor = this.repository.getActorContext(service, contextRef);
     if (!actor) {
       throw domainError(
         "FEDERATION_CONTEXT_INVALID",
@@ -552,7 +552,10 @@ export class FederationService {
     service: AuthenticatedFederationService,
     request: AgentInvocationRequestV1
   ): FederationActorContextV1 {
-    const actor = this.repository.getActorContext(request.actorContextRef);
+    const actor = this.repository.getActorContext(
+      service,
+      request.actorContextRef
+    );
     if (!actor) {
       throw domainError(
         "FEDERATION_CONTEXT_INVALID",

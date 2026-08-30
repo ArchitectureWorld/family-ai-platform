@@ -1139,6 +1139,109 @@ CREATE INDEX agent_invocation_audit_scope_idx ON agent_invocation_audit(
 );
 `;
 
+const MIGRATION_V15 = `
+CREATE TABLE federation_actor_contexts_v15 (
+  context_ref TEXT PRIMARY KEY,
+  product TEXT NOT NULL,
+  family_ref TEXT NOT NULL,
+  person_ref TEXT NOT NULL,
+  device_ref TEXT NOT NULL,
+  entry_session_ref TEXT NOT NULL,
+  person_display_name TEXT NOT NULL,
+  family_display_name TEXT NOT NULL,
+  assignment_version INTEGER NOT NULL,
+  context_version INTEGER NOT NULL CHECK(context_version > 0),
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  service_ref TEXT REFERENCES federation_services(service_ref),
+  roles_json TEXT,
+  CHECK (
+    (service_ref IS NULL AND roles_json IS NULL)
+    OR (
+      service_ref IS NOT NULL
+      AND roles_json IS NOT NULL
+      AND length(service_ref) BETWEEN 10 AND 135
+      AND substr(service_ref, 1, 8) = 'service:'
+      AND substr(service_ref, 9, 1) GLOB '[a-z0-9]'
+      AND substr(service_ref, 10) NOT GLOB '*[^a-z0-9._:-]*'
+      AND json_valid(roles_json)
+      AND json_type(roles_json) = 'array'
+      AND json_array_length(roles_json) BETWEEN 1 AND 2
+      AND roles_json IN (
+        '["owner"]', '["owner","family_admin"]',
+        '["adult"]', '["adult","family_admin"]',
+        '["child"]', '["child","family_admin"]',
+        '["elder"]', '["elder","family_admin"]'
+      )
+    )
+  )
+);
+
+INSERT INTO federation_actor_contexts_v15(
+  context_ref, product, family_ref, person_ref, device_ref,
+  entry_session_ref, person_display_name, family_display_name,
+  assignment_version, context_version, expires_at, created_at,
+  service_ref, roles_json
+)
+SELECT context_ref, product, family_ref, person_ref, device_ref,
+       entry_session_ref, person_display_name, family_display_name,
+       assignment_version, context_version, expires_at, created_at,
+       NULL, NULL
+FROM federation_actor_contexts;
+
+DROP TABLE federation_actor_contexts;
+ALTER TABLE federation_actor_contexts_v15 RENAME TO federation_actor_contexts;
+
+CREATE INDEX federation_actor_contexts_expiry_idx
+  ON federation_actor_contexts(expires_at, context_ref);
+
+CREATE INDEX federation_actor_contexts_reuse_idx
+  ON federation_actor_contexts(
+    service_ref, product, entry_session_ref,
+    assignment_version, context_version, expires_at DESC, context_ref
+  );
+
+CREATE TRIGGER federation_actor_context_roles_insert
+BEFORE INSERT ON federation_actor_contexts
+WHEN NEW.roles_json IS NOT NULL
+BEGIN
+  SELECT CASE WHEN (
+    json_valid(NEW.roles_json)
+    AND json_type(NEW.roles_json) = 'array'
+    AND json_array_length(NEW.roles_json) BETWEEN 1 AND 2
+    AND NOT EXISTS (
+      SELECT 1 FROM json_each(NEW.roles_json)
+      WHERE type <> 'text'
+         OR value NOT IN ('owner', 'adult', 'child', 'elder', 'family_admin')
+    )
+    AND (SELECT COUNT(*) FROM json_each(NEW.roles_json)) =
+        (SELECT COUNT(DISTINCT value) FROM json_each(NEW.roles_json))
+    AND (SELECT COUNT(*) FROM json_each(NEW.roles_json)
+         WHERE value IN ('owner', 'adult', 'child', 'elder')) = 1
+  ) THEN 1 ELSE RAISE(ABORT, 'FEDERATION_CONTEXT_ROLES_INVALID') END;
+END;
+
+CREATE TRIGGER federation_actor_context_roles_update
+BEFORE UPDATE OF roles_json ON federation_actor_contexts
+WHEN NEW.roles_json IS NOT NULL
+BEGIN
+  SELECT CASE WHEN (
+    json_valid(NEW.roles_json)
+    AND json_type(NEW.roles_json) = 'array'
+    AND json_array_length(NEW.roles_json) BETWEEN 1 AND 2
+    AND NOT EXISTS (
+      SELECT 1 FROM json_each(NEW.roles_json)
+      WHERE type <> 'text'
+         OR value NOT IN ('owner', 'adult', 'child', 'elder', 'family_admin')
+    )
+    AND (SELECT COUNT(*) FROM json_each(NEW.roles_json)) =
+        (SELECT COUNT(DISTINCT value) FROM json_each(NEW.roles_json))
+    AND (SELECT COUNT(*) FROM json_each(NEW.roles_json)
+         WHERE value IN ('owner', 'adult', 'child', 'elder')) = 1
+  ) THEN 1 ELSE RAISE(ABORT, 'FEDERATION_CONTEXT_ROLES_INVALID') END;
+END;
+`;
+
 function applyMigrationV8(db: GatewayDatabase): void {
   db.pragma("foreign_keys = OFF");
   try {
@@ -1229,6 +1332,28 @@ function applyMigrationV14(db: GatewayDatabase): void {
   }
 }
 
+function applyMigrationV15(db: GatewayDatabase): void {
+  const capturedNow = new Date().toISOString();
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(MIGRATION_V15);
+      db.prepare(
+        "DELETE FROM federation_actor_contexts WHERE expires_at <= ?"
+      ).run(capturedNow);
+      db.prepare(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES(15, ?)"
+      ).run(capturedNow);
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  const violations = db.pragma("foreign_key_check") as unknown[];
+  if (violations.length > 0) {
+    throw new Error("Gateway V15 migration produced foreign key violations");
+  }
+}
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -1238,7 +1363,7 @@ function latestMigrationVersion(db: GatewayDatabase): number {
 
 function applyMigrations(
   db: GatewayDatabase,
-  migrationLimit: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14
+  migrationLimit: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
 ): void {
   const ledgerExists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
@@ -1333,13 +1458,17 @@ function applyMigrations(
     applyMigrationV14(db);
     latest = 14;
   }
+  if (latest === 14 && migrationLimit >= 15) {
+    applyMigrationV15(db);
+    latest = 15;
+  }
   if (latest !== migrationLimit) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
 
 export interface GatewayDatabaseOpenOptions {
-  migrationLimit?: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
+  migrationLimit?: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
 }
 
 export function openGatewayDatabase(
@@ -1351,7 +1480,7 @@ export function openGatewayDatabase(
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
-  applyMigrations(db, options.migrationLimit ?? 14);
+  applyMigrations(db, options.migrationLimit ?? 15);
   return db;
 }
 

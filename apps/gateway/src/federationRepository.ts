@@ -248,11 +248,18 @@ function mapInvocationClaim(row: Record<string, unknown>): FederationInvocationC
 }
 
 type LiveActorRow = Record<string, unknown> & {
-  audience: "family_admin" | "personal";
-  family_role: string;
+  audience?: "family_admin" | "personal";
+  family_role?: string;
   assignment_version: number;
   context_version: number;
 };
+
+const CANONICAL_FEDERATION_ROLES = new Set([
+  '["owner"]', '["owner","family_admin"]',
+  '["adult"]', '["adult","family_admin"]',
+  '["child"]', '["child","family_admin"]',
+  '["elder"]', '["elder","family_admin"]'
+]);
 
 function projectionDisplayName(value: unknown): string {
   const name = String(value);
@@ -266,6 +273,24 @@ function projectionDisplayName(value: unknown): string {
     throw new Error("FEDERATION_IDENTITY_PROJECTION_INVALID");
   }
   return name;
+}
+
+function projectionRoles(row: LiveActorRow): readonly string[] {
+  if (typeof row.roles_json === "string") {
+    if (!CANONICAL_FEDERATION_ROLES.has(row.roles_json)) {
+      throw new Error("FEDERATION_IDENTITY_PROJECTION_INVALID");
+    }
+    return JSON.parse(row.roles_json) as string[];
+  }
+  if (
+    typeof row.family_role !== "string" ||
+    (row.audience !== "family_admin" && row.audience !== "personal")
+  ) {
+    throw new Error("FEDERATION_IDENTITY_PROJECTION_INVALID");
+  }
+  return row.audience === "family_admin"
+    ? [row.family_role, "family_admin"]
+    : [row.family_role];
 }
 
 export class FederationRepository {
@@ -423,13 +448,14 @@ export class FederationRepository {
   }
 
   issueActorContext(input: {
-    product: ProductId;
+    service: AuthenticatedFederationService;
     entrySessionRef: string;
     lifetimeSeconds?: number;
   }): FederationActorContextV1 {
     const lifetimeSeconds = input.lifetimeSeconds ?? 60;
     if (
-      !PRODUCT_IDS.has(input.product) ||
+      !hasRefPrefix(input.service.serviceRef, "service") ||
+      !SERVICE_PRODUCTS.has(input.service.product) ||
       !hasRefPrefix(input.entrySessionRef, "entry-session") ||
       !Number.isInteger(lifetimeSeconds) ||
       lifetimeSeconds < 1 ||
@@ -439,6 +465,7 @@ export class FederationRepository {
     }
     const issue = this.db.transaction(() => {
       const createdAt = this.now();
+      const service = this.requireActiveService(input.service);
       this.ensureAssignmentVersion(
         input.entrySessionRef,
         createdAt.toISOString()
@@ -455,6 +482,54 @@ export class FederationRepository {
       }
       const personDisplayName = projectionDisplayName(row.person_display_name);
       const familyDisplayName = projectionDisplayName(row.family_display_name);
+      const roles = projectionRoles(row);
+      const rolesJson = JSON.stringify(roles);
+      const capturedNow = createdAt.toISOString();
+      this.db.prepare(
+        `DELETE FROM federation_actor_contexts
+         WHERE context_ref IN (
+           SELECT context_ref FROM federation_actor_contexts
+           WHERE expires_at <= ?
+           ORDER BY expires_at, context_ref
+           LIMIT 256
+         )`
+      ).run(capturedNow);
+      const reuseFloorMs = Math.min(15_000, lifetimeSeconds * 250);
+      const reuseCutoff = new Date(
+        createdAt.getTime() + reuseFloorMs
+      ).toISOString();
+      const reusable = this.db.prepare(
+        `SELECT * FROM federation_actor_contexts
+         WHERE service_ref = ?
+           AND product = ?
+           AND entry_session_ref = ?
+           AND family_ref = ?
+           AND person_ref = ?
+           AND device_ref = ?
+           AND assignment_version = ?
+           AND context_version = ?
+           AND person_display_name = ?
+           AND family_display_name = ?
+           AND roles_json = ?
+           AND expires_at > ?
+         ORDER BY expires_at DESC, context_ref ASC
+         LIMIT 1`
+      ).get(
+        service.serviceRef,
+        service.product,
+        input.entrySessionRef,
+        String(row.family_ref),
+        String(row.person_ref),
+        String(row.device_ref),
+        assignmentVersion,
+        contextVersion,
+        personDisplayName,
+        familyDisplayName,
+        rolesJson,
+        reuseCutoff
+      ) as LiveActorRow | undefined;
+      if (reusable) return this.mapActorContext(reusable);
+
       const contextRef = `actor-context:${this.uuid()}`;
       if (!hasRefPrefix(contextRef, "actor-context")) {
         throw new Error("FEDERATION_CONTEXT_REF_INVALID");
@@ -466,11 +541,12 @@ export class FederationRepository {
         `INSERT INTO federation_actor_contexts(
            context_ref, product, family_ref, person_ref, device_ref,
            entry_session_ref, person_display_name, family_display_name,
-           assignment_version, context_version, expires_at, created_at
-         ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           assignment_version, context_version, expires_at, created_at,
+           service_ref, roles_json
+         ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         contextRef,
-        input.product,
+        service.product,
         String(row.family_ref),
         String(row.person_ref),
         String(row.device_ref),
@@ -480,24 +556,32 @@ export class FederationRepository {
         assignmentVersion,
         contextVersion,
         expiresAt,
-        createdAt.toISOString()
+        capturedNow,
+        service.serviceRef,
+        rolesJson
       );
       return this.mapActorContext({
         ...row,
         context_ref: contextRef,
-        product: input.product,
+        product: service.product,
         entry_session_ref: input.entrySessionRef,
         person_display_name: personDisplayName,
         family_display_name: familyDisplayName,
         assignment_version: assignmentVersion,
         context_version: contextVersion,
-        expires_at: expiresAt
+        expires_at: expiresAt,
+        service_ref: service.serviceRef,
+        roles_json: rolesJson
       });
     });
     return issue.immediate();
   }
 
-  getActorContext(contextRef: string): FederationActorContextV1 | null {
+  getActorContext(
+    service: AuthenticatedFederationService,
+    contextRef: string
+  ): FederationActorContextV1 | null {
+    const activeService = this.requireActiveService(service);
     if (!hasRefPrefix(contextRef, "actor-context")) return null;
     const now = this.now().toISOString();
     const row = this.db.prepare(
@@ -536,10 +620,19 @@ export class FederationRepository {
        JOIN person_federation_context_versions pvc
          ON pvc.person_ref = fac.person_ref
        WHERE fac.context_ref = ?
+         AND fac.service_ref = ?
+         AND fac.product = ?
+         AND fac.roles_json IS NOT NULL
          AND fac.expires_at > ?
          AND paav.assignment_version = fac.assignment_version
          AND pvc.context_version = fac.context_version`
-    ).get(now, contextRef, now) as LiveActorRow | undefined;
+    ).get(
+      now,
+      contextRef,
+      activeService.serviceRef,
+      activeService.product,
+      now
+    ) as LiveActorRow | undefined;
     return row ? this.mapActorContext(row) : null;
   }
 
@@ -1154,8 +1247,7 @@ export class FederationRepository {
   }
 
   private mapActorContext(row: LiveActorRow): FederationActorContextV1 {
-    const roles = [String(row.family_role)];
-    if (row.audience === "family_admin") roles.push("family_admin");
+    const roles = projectionRoles(row);
     return {
       protocolVersion: 1,
       contextRef: String(row.context_ref),

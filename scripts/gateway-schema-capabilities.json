@@ -68,6 +68,46 @@
       "attachmentJournal": "none",
       "mobileClaimReplay": "bounded-replay-v1",
       "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 11,
+      "migrationHead": 11,
+      "attachments": "present",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "bounded-replay-v1",
+      "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 12,
+      "migrationHead": 12,
+      "attachments": "present",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "bounded-replay-v1",
+      "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 13,
+      "migrationHead": 13,
+      "attachments": "present",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "bounded-replay-v1",
+      "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 14,
+      "migrationHead": 14,
+      "attachments": "present",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "bounded-replay-v1",
+      "providerOperations": "legacy"
+    },
+    {
+      "schemaVersion": 15,
+      "migrationHead": 15,
+      "attachments": "present",
+      "attachmentJournal": "none",
+      "mobileClaimReplay": "bounded-replay-v1",
+      "providerOperations": "legacy"
     }
   ]
 }

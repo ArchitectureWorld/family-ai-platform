@@ -7,6 +7,17 @@ import { DomainEventStore } from "../src/domainEvents.js";
 import { FamilyDomainRepository } from "../src/familyDomain.js";
 import { FederationRepository } from "../src/federationRepository.js";
 
+const CANVAS_SERVICE = {
+  serviceRef: "service:canvas",
+  product: "canvas" as const
+};
+const CANVAS_TOKEN = "canvas-service-token-plaintext";
+const ME_SERVICE = {
+  serviceRef: "service:me-default",
+  product: "me" as const
+};
+const ME_TOKEN = "me-default-service-token";
+
 const SENSITIVE_VALUES = [
   "canvas-service-token-plaintext",
   "prompt: private family request",
@@ -27,6 +38,15 @@ describe("FederationRepository", () => {
   let deviceRef = "";
   let entrySessionRef = "";
   let nextId = 1;
+
+  const ensureActorService = (product: "canvas" | "me") => {
+    const service = product === "canvas" ? CANVAS_SERVICE : ME_SERVICE;
+    repository.provisionService({
+      ...service,
+      token: product === "canvas" ? CANVAS_TOKEN : ME_TOKEN
+    });
+    return service;
+  };
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-federation-repository-"));
@@ -149,8 +169,9 @@ describe("FederationRepository", () => {
   });
 
   it("issues Actor contexts for at most 60 seconds from live Entry and Person sequence", () => {
+    const service = ensureActorService("canvas");
     const actor = repository.issueActorContext({
-      product: "canvas",
+      service,
       entrySessionRef,
       lifetimeSeconds: 60
     });
@@ -170,12 +191,333 @@ describe("FederationRepository", () => {
       contextVersion: 1,
       expiresAt: new Date(now.getTime() + 60_000).toISOString()
     });
-    expect(repository.getActorContext(actor.contextRef)).toEqual(actor);
+    expect(repository.getActorContext(service, actor.contextRef)).toEqual(actor);
     expect(() => repository.issueActorContext({
-      product: "canvas",
+      service,
       entrySessionRef,
       lifetimeSeconds: 61
     })).toThrow("FEDERATION_CONTEXT_TTL_INVALID");
+  });
+
+  it("reuses one exact service-scoped Actor context without extending its TTL", () => {
+    repository.provisionService({ ...CANVAS_SERVICE, token: CANVAS_TOKEN });
+    const first = repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0]);
+    const originalExpiry = first.expiresAt;
+
+    now = new Date(now.getTime() + 44_999);
+    expect(repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0])).toEqual(first);
+    expect(repository.getActorContext(
+      CANVAS_SERVICE,
+      first.contextRef
+    )).toEqual(first);
+    expect(db.prepare(
+      "SELECT expires_at FROM federation_actor_contexts WHERE context_ref = ?"
+    ).get(first.contextRef)).toEqual({ expires_at: originalExpiry });
+
+    now = new Date(now.getTime() + 1);
+    const replacement = repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0]);
+    expect(replacement.contextRef).not.toBe(first.contextRef);
+    expect(replacement.expiresAt).toBe(
+      new Date(now.getTime() + 60_000).toISOString()
+    );
+  });
+
+  it("uses one quarter of a short test TTL as the strict reuse floor", () => {
+    const service = {
+      serviceRef: "service:canvas-short-ttl",
+      product: "canvas" as const
+    };
+    repository.provisionService({
+      ...service,
+      token: "canvas-short-ttl-service-token"
+    });
+    const first = repository.issueActorContext({
+      service,
+      entrySessionRef,
+      lifetimeSeconds: 20
+    });
+    now = new Date(now.getTime() + 14_999);
+    expect(repository.issueActorContext({
+      service,
+      entrySessionRef,
+      lifetimeSeconds: 20
+    })).toEqual(first);
+    now = new Date(now.getTime() + 1);
+    expect(repository.issueActorContext({
+      service,
+      entrySessionRef,
+      lifetimeSeconds: 20
+    }).contextRef).not.toBe(first.contextRef);
+  });
+
+  it("isolates lookup and reuse between active services for the same product", () => {
+    const otherService = {
+      serviceRef: "service:canvas-isolated",
+      product: "canvas" as const
+    };
+    repository.provisionService({ ...CANVAS_SERVICE, token: CANVAS_TOKEN });
+    repository.provisionService({
+      ...otherService,
+      token: "canvas-isolated-service-token"
+    });
+    const first = repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    });
+
+    expect(repository.getActorContext(otherService, first.contextRef)).toBeNull();
+    const isolated = repository.issueActorContext({
+      service: otherService,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    });
+    expect(isolated.contextRef).not.toBe(first.contextRef);
+    expect(repository.getActorContext(CANVAS_SERVICE, first.contextRef)).toEqual(first);
+    expect(repository.getActorContext(otherService, isolated.contextRef))
+      .toEqual(isolated);
+  });
+
+  it("does not reuse any Actor context whose full stable projection drifts", () => {
+    repository.provisionService({ ...CANVAS_SERVICE, token: CANVAS_TOKEN });
+    repository.provisionService({
+      serviceRef: "service:canvas-other",
+      product: "canvas",
+      token: "canvas-other-service-token"
+    });
+    const baseline = repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0]);
+    db.prepare("DELETE FROM federation_actor_contexts WHERE context_ref = ?")
+      .run(baseline.contextRef);
+    const columns = {
+      service_ref: CANVAS_SERVICE.serviceRef,
+      product: CANVAS_SERVICE.product,
+      entry_session_ref: entrySessionRef,
+      family_ref: familyRef,
+      person_ref: personRef,
+      device_ref: deviceRef,
+      person_display_name: baseline.personDisplayName,
+      family_display_name: baseline.familyDisplayName,
+      roles_json: JSON.stringify(baseline.roles),
+      assignment_version: baseline.assignmentVersion,
+      context_version: baseline.contextVersion
+    };
+    const insert = db.prepare(
+      `INSERT INTO federation_actor_contexts(
+         context_ref, product, family_ref, person_ref, device_ref,
+         entry_session_ref, person_display_name, family_display_name,
+         assignment_version, context_version, expires_at, created_at,
+         service_ref, roles_json
+       ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    const drifts: Array<Partial<typeof columns>> = [
+      { service_ref: "service:canvas-other" },
+      { product: "me" },
+      { entry_session_ref: "entry-session:drift" },
+      { family_ref: "family:drift" },
+      { person_ref: "person:drift" },
+      { device_ref: "device:drift" },
+      { person_display_name: "漂移成员" },
+      { family_display_name: "漂移家庭" },
+      { roles_json: '["adult"]' },
+      { assignment_version: baseline.assignmentVersion + 1 },
+      { context_version: baseline.contextVersion + 1 }
+    ];
+    drifts.forEach((drift, index) => {
+      const row = { ...columns, ...drift };
+      insert.run(
+        `actor-context:drift-${index}`,
+        row.product,
+        row.family_ref,
+        row.person_ref,
+        row.device_ref,
+        row.entry_session_ref,
+        row.person_display_name,
+        row.family_display_name,
+        row.assignment_version,
+        row.context_version,
+        new Date(now.getTime() + 60_000).toISOString(),
+        now.toISOString(),
+        row.service_ref,
+        row.roles_json
+      );
+    });
+
+    const issued = repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0]);
+    expect(issued.contextRef).toMatch(/^actor-context:context-/);
+    expect(drifts.map((_drift, index) => `actor-context:drift-${index}`))
+      .not.toContain(issued.contextRef);
+    expect(repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0])).toEqual(issued);
+  });
+
+  it("deletes at most 256 expired contexts with one captured now and indexed plans", () => {
+    repository.provisionService({ ...CANVAS_SERVICE, token: CANVAS_TOKEN });
+    const reusable = repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0]);
+    const insert = db.prepare(
+      `INSERT INTO federation_actor_contexts(
+         context_ref, product, family_ref, person_ref, device_ref,
+         entry_session_ref, person_display_name, family_display_name,
+         assignment_version, context_version, expires_at, created_at,
+         service_ref, roles_json
+       ) VALUES(?, 'canvas', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    db.transaction(() => {
+      for (let index = 0; index < 300; index += 1) {
+        insert.run(
+          `actor-context:gc-${index}`,
+          familyRef,
+          personRef,
+          deviceRef,
+          entrySessionRef,
+          reusable.personDisplayName,
+          reusable.familyDisplayName,
+          reusable.assignmentVersion,
+          reusable.contextVersion,
+          new Date(now.getTime() - 1_000).toISOString(),
+          new Date(now.getTime() - 2_000).toISOString(),
+          CANVAS_SERVICE.serviceRef,
+          JSON.stringify(reusable.roles)
+        );
+      }
+    })();
+    let nowCalls = 0;
+    const gcRepository = new FederationRepository(db, {
+      now: () => {
+        nowCalls += 1;
+        return now;
+      },
+      uuid: () => "unused-gc-context"
+    });
+
+    expect(gcRepository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0])).toEqual(reusable);
+    expect(nowCalls).toBe(1);
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM federation_actor_contexts WHERE expires_at <= ?"
+    ).get(now.toISOString())).toEqual({ count: 44 });
+    expect((db.prepare(
+      `EXPLAIN QUERY PLAN SELECT context_ref FROM federation_actor_contexts
+       WHERE expires_at <= ? ORDER BY expires_at, context_ref LIMIT 256`
+    ).all(now.toISOString()) as Array<{ detail: string }>).some(
+      (row) => row.detail.includes("federation_actor_contexts_expiry_idx")
+    )).toBe(true);
+    expect((db.prepare(
+      `EXPLAIN QUERY PLAN SELECT context_ref FROM federation_actor_contexts
+       WHERE service_ref = ? AND product = ? AND entry_session_ref = ?
+         AND assignment_version = ? AND context_version = ? AND expires_at > ?
+       ORDER BY expires_at DESC, context_ref ASC LIMIT 1`
+    ).all(
+      CANVAS_SERVICE.serviceRef,
+      CANVAS_SERVICE.product,
+      entrySessionRef,
+      reusable.assignmentVersion,
+      reusable.contextVersion,
+      now.toISOString()
+    ) as Array<{ detail: string }>).some(
+      (row) => row.detail.includes("federation_actor_contexts_reuse_idx")
+    )).toBe(true);
+  });
+
+  it("serializes two writers and converges both repositories on one reusable context", () => {
+    repository.provisionService({ ...CANVAS_SERVICE, token: CANVAS_TOKEN });
+    const secondDb = openGatewayDatabase(databasePath);
+    secondDb.pragma("busy_timeout = 1");
+    db.pragma("busy_timeout = 1");
+    try {
+      secondDb.exec("BEGIN IMMEDIATE");
+      expect(() => repository.issueActorContext({
+        service: CANVAS_SERVICE,
+        entrySessionRef,
+        lifetimeSeconds: 60
+      } as Parameters<FederationRepository["issueActorContext"]>[0])).toThrow(/locked/i);
+      secondDb.exec("ROLLBACK");
+
+      const first = repository.issueActorContext({
+        service: CANVAS_SERVICE,
+        entrySessionRef,
+        lifetimeSeconds: 60
+      } as Parameters<FederationRepository["issueActorContext"]>[0]);
+      const second = new FederationRepository(secondDb, {
+        now: () => now,
+        uuid: () => "second-writer-must-reuse"
+      });
+      expect(second.issueActorContext({
+        service: CANVAS_SERVICE,
+        entrySessionRef,
+        lifetimeSeconds: 60
+      } as Parameters<FederationRepository["issueActorContext"]>[0])).toEqual(first);
+      expect(db.prepare(
+        "SELECT COUNT(*) AS count FROM federation_actor_contexts WHERE service_ref = ?"
+      ).get(CANVAS_SERVICE.serviceRef)).toEqual({ count: 1 });
+    } finally {
+      if (secondDb.inTransaction) secondDb.exec("ROLLBACK");
+      secondDb.close();
+    }
+  });
+
+  it("rejects legacy contexts and invalidates issue and lookup immediately on service revoke", () => {
+    repository.provisionService({ ...CANVAS_SERVICE, token: CANVAS_TOKEN });
+    const actor = repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0]);
+    expect(repository.getActorContext(CANVAS_SERVICE, actor.contextRef)).toEqual(actor);
+
+    db.prepare(
+      `UPDATE federation_actor_contexts
+       SET service_ref = NULL, roles_json = NULL WHERE context_ref = ?`
+    ).run(actor.contextRef);
+    expect(repository.getActorContext(CANVAS_SERVICE, actor.contextRef)).toBeNull();
+    const replacement = repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0]);
+    expect(replacement.contextRef).not.toBe(actor.contextRef);
+
+    repository.revokeService(CANVAS_SERVICE.serviceRef);
+    expect(() => repository.getActorContext(
+      CANVAS_SERVICE,
+      replacement.contextRef
+    )).toThrow("FEDERATION_SERVICE_INACTIVE");
+    expect(() => repository.issueActorContext({
+      service: CANVAS_SERVICE,
+      entrySessionRef,
+      lifetimeSeconds: 60
+    } as Parameters<FederationRepository["issueActorContext"]>[0])).toThrow(
+      "FEDERATION_SERVICE_INACTIVE"
+    );
   });
 
   it("rejects a path-shaped generated Actor context ref without persisting the sentinel", () => {
@@ -185,8 +527,9 @@ describe("FederationRepository", () => {
       uuid: () => pathSentinel
     });
 
+    const service = ensureActorService("canvas");
     expect(() => malicious.issueActorContext({
-      product: "canvas",
+      service,
       entrySessionRef,
       lifetimeSeconds: 60
     })).toThrow("FEDERATION_CONTEXT_REF_INVALID");
@@ -200,32 +543,35 @@ describe("FederationRepository", () => {
       "federation_session_bindings",
       "federation_session_invocation_claims"
     ].flatMap((table) => db.prepare(`SELECT * FROM ${table}`).all());
-    expect(persisted).toEqual([]);
     expect(JSON.stringify(persisted)).not.toContain(pathSentinel);
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM federation_actor_contexts"
+    ).get()).toEqual({ count: 0 });
   });
 
   it("invalidates Actor lookup after context expiry, Entry revocation, Device revocation, or version drift", () => {
+    const service = ensureActorService("me");
     const issue = () => repository.issueActorContext({
-      product: "me",
+      service,
       entrySessionRef,
       lifetimeSeconds: 60
     });
     const expired = issue();
     now = new Date(now.getTime() + 60_001);
-    expect(repository.getActorContext(expired.contextRef)).toBeNull();
+    expect(repository.getActorContext(service, expired.contextRef)).toBeNull();
 
     now = new Date(now.getTime() - 60_001);
     const revokedEntry = issue();
     db.prepare("UPDATE entry_sessions SET status = 'revoked', revoked_at = ? WHERE entry_session_ref = ?")
       .run(now.toISOString(), entrySessionRef);
-    expect(repository.getActorContext(revokedEntry.contextRef)).toBeNull();
+    expect(repository.getActorContext(service, revokedEntry.contextRef)).toBeNull();
     db.prepare("UPDATE entry_sessions SET status = 'active', revoked_at = NULL WHERE entry_session_ref = ?")
       .run(entrySessionRef);
 
     const revokedDevice = issue();
     db.prepare("UPDATE managed_devices SET status = 'revoked', revoked_at = ? WHERE device_ref = ?")
       .run(now.toISOString(), deviceRef);
-    expect(repository.getActorContext(revokedDevice.contextRef)).toBeNull();
+    expect(repository.getActorContext(service, revokedDevice.contextRef)).toBeNull();
     db.prepare("UPDATE managed_devices SET status = 'active', revoked_at = NULL WHERE device_ref = ?")
       .run(deviceRef);
 
@@ -235,7 +581,7 @@ describe("FederationRepository", () => {
        SET assignment_version = assignment_version + 1, updated_at = ?
        WHERE person_ref = ?`
     ).run(now.toISOString(), personRef);
-    expect(repository.getActorContext(staleVersion.contextRef)).toBeNull();
+    expect(repository.getActorContext(service, staleVersion.contextRef)).toBeNull();
 
     const staleIdentity = issue();
     db.prepare(
@@ -243,10 +589,11 @@ describe("FederationRepository", () => {
        SET context_version = context_version + 1, updated_at = ?
        WHERE person_ref = ?`
     ).run(now.toISOString(), personRef);
-    expect(repository.getActorContext(staleIdentity.contextRef)).toBeNull();
+    expect(repository.getActorContext(service, staleIdentity.contextRef)).toBeNull();
   });
 
   it("fails Actor lookup closed when any live authority relation becomes inactive", () => {
+    const service = ensureActorService("canvas");
     const refs = db.prepare(
       `SELECT es.entry_binding_ref, db.device_binding_ref
        FROM entry_sessions es
@@ -309,12 +656,12 @@ describe("FederationRepository", () => {
 
     for (const testCase of cases) {
       const actor = repository.issueActorContext({
-        product: "canvas",
+        service,
         entrySessionRef,
         lifetimeSeconds: 60
       });
       testCase.mutate();
-      expect(repository.getActorContext(actor.contextRef)).toBeNull();
+      expect(repository.getActorContext(service, actor.contextRef)).toBeNull();
       testCase.restore();
     }
   });
@@ -401,7 +748,7 @@ describe("FederationRepository", () => {
       localPath: SENSITIVE_VALUES[5]
     } as Parameters<FederationRepository["recordDiscoveryObservation"]>[0] & Record<string, string>);
     const actor = repository.issueActorContext({
-      product: "canvas",
+      service: CANVAS_SERVICE,
       entrySessionRef,
       lifetimeSeconds: 30
     });
@@ -509,7 +856,7 @@ describe("FederationRepository", () => {
       token: "me-other-service-token"
     });
     const actor = repository.issueActorContext({
-      product: "canvas",
+      service: CANVAS_SERVICE,
       entrySessionRef,
       lifetimeSeconds: 60
     });
@@ -586,7 +933,7 @@ describe("FederationRepository", () => {
       token: SENSITIVE_VALUES[0]
     });
     const actor = repository.issueActorContext({
-      product: "canvas",
+      service: CANVAS_SERVICE,
       entrySessionRef,
       lifetimeSeconds: 60
     });
@@ -689,7 +1036,7 @@ describe("FederationRepository", () => {
       token: SENSITIVE_VALUES[0]
     });
     const actor = repository.issueActorContext({
-      product: "canvas",
+      service: CANVAS_SERVICE,
       entrySessionRef,
       lifetimeSeconds: 60
     });

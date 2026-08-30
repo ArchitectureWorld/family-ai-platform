@@ -43,7 +43,7 @@ test("built production CLI provisions one disposable V14 service without secret 
     const { openGatewayDatabase } = await import(
       "../apps/gateway/dist/database.js"
     );
-    const database = openGatewayDatabase(databasePath);
+    const database = openGatewayDatabase(databasePath, { migrationLimit: 14 });
     database.close();
     writeFileSync(credentialPath, credential, { mode: 0o600 });
     chmodSync(credentialPath, 0o600);
@@ -94,7 +94,7 @@ test("built production CLI rejects extra and altered persistent service views", 
     const credentialPath = join(directory, "canvas.credential");
     const credential = `Built-View-Credential-${label}-0001`;
     try {
-      const database = openGatewayDatabase(databasePath);
+      const database = openGatewayDatabase(databasePath, { migrationLimit: 14 });
       database.exec(viewSql);
       database.close();
       writeFileSync(credentialPath, credential, { mode: 0o600 });
@@ -117,7 +117,7 @@ test("built production CLI rejects extra and altered persistent service views", 
       assert.equal(result.stderr, "FEDERATION_BOOTSTRAP_DATABASE_SCHEMA_INVALID\n");
       assert.equal(`${result.stdout}${result.stderr}`.includes(credential), false);
       assert.equal(`${result.stdout}${result.stderr}`.includes(databasePath), false);
-      const verification = openGatewayDatabase(databasePath);
+      const verification = openGatewayDatabase(databasePath, { migrationLimit: 14 });
       assert.deepEqual(
         verification.prepare("SELECT COUNT(*) AS count FROM federation_services").get(),
         { count: 0 }
@@ -137,7 +137,7 @@ test("built production CLI ignores SQLite-owned ANALYZE objects", async () => {
     const { openGatewayDatabase } = await import(
       "../apps/gateway/dist/database.js"
     );
-    const database = openGatewayDatabase(databasePath);
+    const database = openGatewayDatabase(databasePath, { migrationLimit: 14 });
     database.exec("ANALYZE");
     database.close();
     writeFileSync(credentialPath, "Built-Internal-Credential-0001", { mode: 0o600 });
