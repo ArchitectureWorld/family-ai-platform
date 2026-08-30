@@ -30,16 +30,6 @@ os.environ["FAMILY_AI_GATEWAY_LOCK_ROLE"] = "gateway"
 os.environ["FAMILY_AI_GATEWAY_LOCK_DATABASE"] = database
 os.execv(node, [node, "--import", "tsx", worker, database, *args])
 `;
-const claim = String.raw`
-import importlib.util,sys
-sys.dont_write_bytecode=True
-spec=importlib.util.spec_from_file_location("lock",sys.argv[1])
-module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-try:
-  parent,lock=module.claim_lock(sys.argv[2]);print("LOCKED")
-except module.LockFailure as error:
-  print(error.code,file=sys.stderr);raise SystemExit(1)
-`;
 
 describe("Gateway process lock lifecycle", () => {
   let directory = "";
@@ -62,8 +52,14 @@ describe("Gateway process lock lifecycle", () => {
     expect(existsSync(path)).toBe(true);
   };
   const contender = (databasePath: string) => spawnSync("python3", [
-    "-c", claim, launcher, databasePath
-  ], { cwd: root, encoding: "utf8" });
+    launcher, "--database-from-env", "GATEWAY_DATABASE_PATH", "--",
+    "node", "apps/gateway/test/fixtures/authorizedLockProbe.mjs",
+    "--database", databasePath
+  ], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, NODE_ENV: "test", GATEWAY_DATABASE_PATH: databasePath }
+  });
   const start = (input: Record<string, string>, mode: string, port = "0") => spawn("python3", [
     "-c", harness, input["gateway.sqlite"]!, process.execPath, worker,
     mode, input.ready!, input.closing!, input.release!, input["db-closed"]!,
@@ -84,7 +80,7 @@ describe("Gateway process lock lifecycle", () => {
     await new Promise<void>((resolveExit) => child.once("close", () => resolveExit()));
     expect(child.exitCode).toBe(0);
     expect(existsSync(input["db-closed"]!)).toBe(true);
-    expect(contender(input["gateway.sqlite"]!).stdout).toBe("LOCKED\n");
+    expect(contender(input["gateway.sqlite"]!).stdout).toBe("GATEWAY_DATABASE_LOCK_PROBE_OK\n");
   }, 20_000);
 
   it("does not manually unlock when app close throws and releases only on SIGKILL", async () => {
@@ -98,7 +94,7 @@ describe("Gateway process lock lifecycle", () => {
     expect(contender(input["gateway.sqlite"]!).stderr).toBe("GATEWAY_DATABASE_LOCK_BUSY\n");
     child.kill("SIGKILL");
     await new Promise<void>((resolveExit) => child.once("close", () => resolveExit()));
-    expect(contender(input["gateway.sqlite"]!).stdout).toBe("LOCKED\n");
+    expect(contender(input["gateway.sqlite"]!).stdout).toBe("GATEWAY_DATABASE_LOCK_PROBE_OK\n");
   }, 20_000);
 
   it("awaits app close before releasing the lock after listen failure", async () => {
@@ -116,7 +112,7 @@ describe("Gateway process lock lifecycle", () => {
       await new Promise<void>((resolveExit) => child.once("close", () => resolveExit()));
       expect(child.exitCode).toBe(1);
       expect(existsSync(input["db-closed"]!)).toBe(true);
-      expect(contender(input["gateway.sqlite"]!).stdout).toBe("LOCKED\n");
+      expect(contender(input["gateway.sqlite"]!).stdout).toBe("GATEWAY_DATABASE_LOCK_PROBE_OK\n");
     } finally {
       occupied.close();
       if (child.exitCode === null) child.kill("SIGKILL");

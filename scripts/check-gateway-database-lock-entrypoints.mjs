@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 
 const values = process.argv.slice(2);
 let root = resolve(new URL("../", import.meta.url).pathname);
@@ -31,7 +31,76 @@ const GATEWAY_START =
   "python3 runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node dist/index.js";
 const GATEWAY_MIGRATE =
   'python3 runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node dist/migrate.js --database "$GATEWAY_DATABASE_PATH"';
-const protectedTarget = /(?:^|[\s'"=])(?:apps\/gateway\/|\.\.\/gateway\/)?dist\/(?:index|migrate|provisionFederationService|recoverGatewayDatabase)\.js(?:[\s'";]|$)/u;
+const protectedTargets = new Set([
+  "apps/gateway/dist/index.js",
+  "apps/gateway/dist/migrate.js",
+  "apps/gateway/dist/provisionFederationService.js",
+  "apps/gateway/dist/recoverGatewayDatabase.js"
+]);
+
+function shellTokens(command) {
+  const tokens = [];
+  let current = "";
+  let quote = "";
+  let escaped = false;
+  const push = () => {
+    if (current) tokens.push(current);
+    current = "";
+  };
+  for (const character of command) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+    } else if (character === "\\" && quote !== "'") {
+      escaped = true;
+    } else if (quote) {
+      if (character === quote) quote = "";
+      else current += character;
+    } else if (character === "'" || character === '"') {
+      quote = character;
+    } else if (/\s/u.test(character)) {
+      push();
+    } else if (";&|()".includes(character)) {
+      push();
+      tokens.push(character);
+    } else {
+      current += character;
+    }
+  }
+  if (quote || escaped) throw new Error("PACKAGE_SCRIPT_TOKENIZE");
+  push();
+  return tokens;
+}
+
+function normalizedProtectedPath(token, packagePath) {
+  const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : token;
+  let absolute;
+  if (value.startsWith("/app/")) {
+    absolute = resolve(root, value.slice("/app/".length));
+  } else if (isAbsolute(value)) {
+    const marker = normalize(value).lastIndexOf("/apps/gateway/dist/");
+    if (marker < 0) return null;
+    absolute = resolve(root, normalize(value).slice(marker + 1));
+  } else {
+    absolute = resolve(root, dirname(packagePath), normalize(value));
+  }
+  const repositoryPath = relative(root, absolute).split("\\").join("/");
+  return protectedTargets.has(repositoryPath) ? repositoryPath : null;
+}
+
+function containsProtectedCommand(command, packagePath) {
+  const tokens = shellTokens(command);
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (normalizedProtectedPath(tokens[index], packagePath)) return true;
+    if (
+      (tokens[index] === "sh" || tokens[index] === "bash")
+      && tokens[index + 1] === "-c"
+      && typeof tokens[index + 2] === "string"
+      && containsProtectedCommand(tokens[index + 2], packagePath)
+    ) return true;
+  }
+  return false;
+}
 
 function packagePaths(rootPackage) {
   const paths = ["package.json"];
@@ -70,7 +139,7 @@ try {
       const expected = allowed.get(`${path}\0${name}`);
       if (expected !== undefined) {
         if (command !== expected) fail("PACKAGE_LOCK_COMMAND");
-      } else if (protectedTarget.test(command)) {
+      } else if (containsProtectedCommand(command, path)) {
         fail("PACKAGE_DIRECT_NODE");
       }
     }
@@ -101,18 +170,23 @@ try {
 
   requireOnce("scripts/runtime-candidate-manifest.mjs", /"node", "apps\/gateway\/dist\/migrate\.js", "--database", "\/runtime\/data\/gateway\.sqlite"/u, "CANDIDATE_COMMAND");
   requireOnce("scripts/runtime-candidate-manifest.mjs", /image\.imageId, \.\.\.definition\.command/u, "CANDIDATE_CMD_OVERRIDE");
-  requireOnce("scripts/runtime-candidate-manifest.mjs", /inspectGatewayImageRuntime\(image\.imageId\)/u, "CANDIDATE_IMAGE_INSPECT");
+  requireOnce("scripts/runtime-candidate-manifest.mjs", /inspectGatewayImageRuntime\(image\.imageId,\s*\{/u, "CANDIDATE_IMAGE_INSPECT");
   requireOnce("scripts/runtime-candidate-manifest.mjs", /image\.runtimeContract/u, "CANDIDATE_RUNTIME_BINDING");
+  requireOnce("scripts/runtime-candidate-manifest.mjs", /required: \[[^\n]*"--expected-candidate-image-manifest-sha256"/u, "CANDIDATE_IMAGE_MANIFEST_DIGEST");
   rejectText("scripts/runtime-candidate-manifest.mjs", /definition\.entrypoint|--entrypoint/u, "CANDIDATE_ENTRYPOINT_OVERRIDE");
   requireOnce("scripts/member-preview-up.sh", /exec python3 "\$2" --database-from-env GATEWAY_DATABASE_PATH -- node apps\/gateway\/dist\/index\.js/u, "PREVIEW_COMMAND");
   requireOnce("scripts/test-runtime-retained-fixture.sh", /--database-from-env GATEWAY_DATABASE_PATH -- \\\n+  node apps\/gateway\/dist\/migrate\.js/u, "RETAINED_COMMAND");
   requireOnce("scripts/test-runtime-retained-fixture.sh", /command:\["node","apps\/gateway\/dist\/migrate\.js","--database","\/runtime\/data\/gateway\.sqlite"\]/u, "RETAINED_DEFINITION");
   rejectText("scripts/test-runtime-retained-fixture.sh", /(?:^|\n)\s*node "\$ROOT_DIR\/apps\/gateway\/dist\/(?:index|migrate|provisionFederationService|recoverGatewayDatabase)\.js"/u, "RETAINED_DIRECT_NODE");
   rejectText("docs/development/2026-08-29-federation-service-bootstrap.md", /--entrypoint\s+node|--role\b/u, "DOCS_DIRECT_NODE");
+  requireOnce("docs/development/2026-08-29-federation-service-bootstrap.md", /--env GATEWAY_DATABASE_PATH=\/runtime\/gateway\.sqlite/u, "DOCS_DATABASE_ENV");
+  requireOnce("docs/development/2026-08-29-federation-service-bootstrap.md", /--database \/runtime\/gateway\.sqlite/u, "DOCS_DATABASE_ARGUMENT");
 
   requireOnce("scripts/runtime-tool-manifest.mjs", /apps\/gateway\/runtime\/gateway_lock_exec\.py/u, "TOOL_MANIFEST_LAUNCHER");
   requireOnce("scripts/runtime-tool-manifest.mjs", /apps\/gateway\/src\/databaseLock\.ts/u, "TOOL_MANIFEST_NODE_LOCK");
   requireOnce("scripts/runtime-tool-manifest.mjs", /scripts\/gateway-image-runtime-contract\.mjs/u, "TOOL_MANIFEST_IMAGE_CONTRACT");
+  requireOnce("scripts/build-gateway-image.sh", /EXPECTED_LAUNCHER_SHA=.*gateway_lock_exec\.py/u, "BUILD_EXPECTED_LAUNCHER");
+  requireOnce("scripts/build-gateway-image.sh", /runtimeToolManifestSha256, runtimeContractJson/u, "BUILD_TOOL_BINDING");
   const release = json("scripts/gateway-release-capabilities.json");
   if (release.gatewayDatabaseFlockV1 !== true) fail("CAPABILITY_FLOCK");
   const inputs = json("scripts/release-build-inputs.json");

@@ -89,6 +89,18 @@ node "$WORKTREE_DIR/scripts/release-build-inputs.mjs" validate \
   --manifest "$WORKTREE_DIR/scripts/release-build-inputs.json" \
   --output "$INPUT_RECEIPT" >/dev/null
 
+TOOL_RECEIPT="$RECEIPT_DIR/gateway-runtime-tools.json"
+TOOL_SHA="$(node "$WORKTREE_DIR/scripts/runtime-tool-manifest.mjs" create \
+  --repository "$WORKTREE_DIR" \
+  --source-commit "$SOURCE_COMMIT" \
+  --expected-source-commit "$SOURCE_COMMIT" \
+  --release-build-inputs "$WORKTREE_DIR/scripts/release-build-inputs.json" \
+  --output "$TOOL_RECEIPT")"
+[[ "$TOOL_SHA" =~ ^[0-9a-f]{64}$ ]] || fail TOOL_RECEIPT_HASH_INVALID
+EXPECTED_LAUNCHER_SHA="$(sha256sum "$WORKTREE_DIR/apps/gateway/runtime/gateway_lock_exec.py" | awk '{print $1}')"
+TOOL_LAUNCHER_SHA="$(node -e 'const v=require(process.argv[1]);const row=v.tools.find(x=>x.path==="apps/gateway/runtime/gateway_lock_exec.py");if(!row)process.exit(1);process.stdout.write(row.sha256)' "$TOOL_RECEIPT")"
+[[ "$EXPECTED_LAUNCHER_SHA" == "$TOOL_LAUNCHER_SHA" ]] || fail TOOL_LAUNCHER_HASH_MISMATCH
+
 json_field() {
   node --input-type=module - "$1" "$2" <<'NODE'
 import { readFileSync } from "node:fs";
@@ -110,11 +122,13 @@ BASE_DIGEST="$(json_field "$INPUT_RECEIPT" buildMaterials.baseImageDigest)"
 DEBIAN_SNAPSHOT="$(json_field "$INPUT_RECEIPT" buildMaterials.debianSnapshot)"
 DEBIAN_SECURITY_SNAPSHOT="$(json_field "$INPUT_RECEIPT" buildMaterials.debianSecuritySnapshot)"
 PYTHON3_VERSION="$(json_field "$INPUT_RECEIPT" buildMaterials.toolchainPackages.python3)"
+EXPECTED_PYTHON_VERSION="3.11.2"
 MAKE_VERSION="$(json_field "$INPUT_RECEIPT" buildMaterials.toolchainPackages.make)"
 GXX_VERSION="$(json_field "$INPUT_RECEIPT" buildMaterials.toolchainPackages.g++)"
 GIT_VERSION="$(json_field "$INPUT_RECEIPT" buildMaterials.toolchainPackages.git)"
 TOOLCHAIN_MATERIAL="python3=$PYTHON3_VERSION;make=$MAKE_VERSION;g++=$GXX_VERSION;git=$GIT_VERSION"
 [[ "$PLATFORM" == linux/amd64 && "$BASE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail BASE_MATERIAL_INVALID
+[[ "$PYTHON3_VERSION" == "$EXPECTED_PYTHON_VERSION-"* ]] || fail PYTHON_VERSION_INVALID
 
 docker pull --platform "$PLATFORM" "$BASE_REF@$BASE_DIGEST" >/dev/null
 RESOLVED_BASE="$(docker image inspect --format '{{.Id}}' "$BASE_REF@$BASE_DIGEST")"
@@ -156,11 +170,16 @@ inspect_label() {
 [[ "$(inspect_label org.architectureworld.family-ai.debian-snapshot)" == "$DEBIAN_SNAPSHOT" ]] || fail SNAPSHOT_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.toolchain-material)" == "$TOOLCHAIN_MATERIAL" ]] || fail TOOLCHAIN_LABEL_MISMATCH
 RUNTIME_CONTRACT="$(node "$WORKTREE_DIR/scripts/gateway-image-runtime-contract.mjs" \
-  inspect --image-id "$IMAGE_ID")" || fail RUNTIME_CONTRACT_INVALID
+  inspect --image-id "$IMAGE_ID" \
+  --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA" \
+  --expected-python-version "$EXPECTED_PYTHON_VERSION")" || fail RUNTIME_CONTRACT_INVALID
 [[ -n "$RUNTIME_CONTRACT" ]] || fail RUNTIME_CONTRACT_INVALID
 
 mkdir -m 700 "$OUTPUT_DIR"
 OUTPUT_CREATED=true
+cp "$TOOL_RECEIPT" "$OUTPUT_DIR/gateway-runtime-tools.json"
+cp "$TOOL_RECEIPT.sha256" "$OUTPUT_DIR/gateway-runtime-tools.json.sha256"
+chmod 600 "$OUTPUT_DIR/gateway-runtime-tools.json" "$OUTPUT_DIR/gateway-runtime-tools.json.sha256"
 ARCHIVE="$OUTPUT_DIR/gateway-image.tar"
 docker save --output "$ARCHIVE" "$IMAGE_ID"
 ARCHIVE_SHA="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
@@ -172,12 +191,12 @@ node --input-type=module - \
   "$OUTPUT_DIR/gateway-image-manifest.json" "$SOURCE_COMMIT" "$IMAGE_ID" "$ARCHIVE_SHA" \
   "$CLIENT_VERSION" "$SCHEMA_HEAD" "$CAPABILITY_SHA" "$RELEASE_INPUTS_SHA" "$BUILD_INPUT_TREE_HASH" \
   "$BASE_REF" "$BASE_DIGEST" "$PLATFORM" "$RESOLVED_BASE" "$DEBIAN_SNAPSHOT" \
-  "$DEBIAN_SECURITY_SNAPSHOT" "$TOOLCHAIN_MATERIAL" "$RUNTIME_CONTRACT" "$REPO_DIGESTS" <<'NODE'
+  "$DEBIAN_SECURITY_SNAPSHOT" "$TOOLCHAIN_MATERIAL" "$TOOL_SHA" "$RUNTIME_CONTRACT" "$REPO_DIGESTS" <<'NODE'
 import { chmodSync, writeFileSync } from "node:fs";
 const [
   path, sourceCommit, imageId, archiveSha256, clientVersion, schemaHead, capabilitySha,
   releaseInputsSha, inputTreeHash, baseRef, baseDigest, platform, resolvedBase,
-  debianSnapshot, debianSecuritySnapshot, toolchainMaterial, runtimeContractJson,
+  debianSnapshot, debianSecuritySnapshot, toolchainMaterial, runtimeToolManifestSha256, runtimeContractJson,
   repoDigestsJson
 ] = process.argv.slice(2);
 const labels = {
@@ -212,6 +231,7 @@ const manifest = {
   debianSnapshot,
   debianSecuritySnapshot,
   toolchainMaterial,
+  runtimeToolManifestSha256,
   runtimeContract: JSON.parse(runtimeContractJson),
   labels,
   repoDigests: JSON.parse(repoDigestsJson ?? "null")
@@ -219,9 +239,12 @@ const manifest = {
 writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 chmodSync(path, 0o600);
 NODE
+MANIFEST_SHA="$(sha256sum "$OUTPUT_DIR/gateway-image-manifest.json" | awk '{print $1}')"
+printf '%s  gateway-image-manifest.json\n' "$MANIFEST_SHA" > "$OUTPUT_DIR/gateway-image-manifest.json.sha256"
+chmod 600 "$OUTPUT_DIR/gateway-image-manifest.json.sha256"
 
 [[ "$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" == \
-  "gateway-image-manifest.json gateway-image.tar gateway-image.tar.sha256 " ]] || fail ARTIFACT_CONTRACT_INVALID
+  "gateway-image-manifest.json gateway-image-manifest.json.sha256 gateway-image.tar gateway-image.tar.sha256 gateway-runtime-tools.json gateway-runtime-tools.json.sha256 " ]] || fail ARTIFACT_CONTRACT_INVALID
 printf 'Gateway image artifact ready: source=%s image=%s archiveSha256=%s\n' "$SOURCE_COMMIT" "$IMAGE_ID" "$ARCHIVE_SHA"
 trap - EXIT
 git -C "$ROOT_DIR" worktree remove --force "$WORKTREE_DIR" >/dev/null

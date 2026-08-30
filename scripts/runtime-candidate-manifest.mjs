@@ -22,12 +22,32 @@ function schema(path) {
   } finally { database.close(); }
 }
 
-function imageRecord(path) {
+function imageRecord(path, expectedSha256) {
   requireAbsolute(path, "CANDIDATE_IMAGE_MANIFEST", { type: "file" });
+  verifySidecar(path, expectedSha256, "CANDIDATE_IMAGE_MANIFEST");
   const manifest = readJson(path, "CANDIDATE_IMAGE_MANIFEST");
   if (manifest.manifestKind === "gateway-image-v1" && manifest.runtimeContract) return manifest;
   if (manifest.manifestKind === "release-candidate-v1" && manifest.gatewayImage?.manifestKind === "gateway-image-v1" && manifest.gatewayImage.runtimeContract) return manifest.gatewayImage;
   throw new Error("CANDIDATE_IMAGE_MANIFEST_KIND_INVALID");
+}
+
+function launcherShaFromSealedTools(imageManifestPath, image) {
+  const toolPath = join(dirname(imageManifestPath), "gateway-runtime-tools.json");
+  verifySidecar(toolPath, image.runtimeToolManifestSha256, "CANDIDATE_RUNTIME_TOOLS");
+  const tools = readJson(toolPath, "CANDIDATE_RUNTIME_TOOLS");
+  if (
+    tools.manifestKind !== "runtime-tool-manifest-v1"
+    || tools.sourceCommit !== image.sourceCommit
+    || tools.releaseBuildInputsSha256 !== image.releaseBuildInputsSha256
+    || tools.inputTreeHash !== image.buildInputTreeHash
+  ) throw new Error("CANDIDATE_RUNTIME_TOOLS_INVALID");
+  const launcher = tools.tools?.find(row =>
+    row.path === "apps/gateway/runtime/gateway_lock_exec.py"
+  );
+  if (launcher?.mode !== "100755" || !/^[0-9a-f]{64}$/.test(launcher?.sha256 ?? "")) {
+    throw new Error("CANDIDATE_RUNTIME_TOOLS_INVALID");
+  }
+  return launcher.sha256;
 }
 
 function validateDefinition(path, image, receiptSha) {
@@ -60,7 +80,7 @@ async function main() {
     validateManifest(requireRegular0600(args["--manifest"], "CANDIDATE_RUNTIME_MANIFEST"), args["--expected-sha256"]);
     return;
   }
-  const args = parseArgs(process.argv.slice(2), { command: "stage", required: ["--release-id", "--source-snapshot", "--candidate-image-manifest", "--capability-receipt", "--expected-capability-receipt-sha256", "--candidate-definition", "--target-parent", "--output-name", "--manifest"] });
+  const args = parseArgs(process.argv.slice(2), { command: "stage", required: ["--release-id", "--source-snapshot", "--candidate-image-manifest", "--expected-candidate-image-manifest-sha256", "--capability-receipt", "--expected-capability-receipt-sha256", "--candidate-definition", "--target-parent", "--output-name", "--manifest"] });
   const releaseId = requireSafeId(args["--release-id"], "RELEASE_ID");
   const snapshot = requireAbsolute(args["--source-snapshot"], "SOURCE_SNAPSHOT", { type: "dir", mode: 0o700 });
   const snapshotManifestPath = join(snapshot, "manifest.json");
@@ -72,12 +92,20 @@ async function main() {
   if (receiptSha !== snapshotManifest.capabilityReceiptSha256) throw new Error("CAPABILITY_RECEIPT_SNAPSHOT_MISMATCH");
   const receipt = readJson(capability, "CAPABILITY_RECEIPT");
   if (receipt.release?.gatewayDatabaseFlockV1 !== true) throw new Error("CANDIDATE_DATABASE_FLOCK_REQUIRED");
-  const image = imageRecord(args["--candidate-image-manifest"]);
+  const imageManifestPath = args["--candidate-image-manifest"];
+  const image = imageRecord(
+    imageManifestPath,
+    args["--expected-candidate-image-manifest-sha256"]
+  );
+  const expectedLauncherSha256 = launcherShaFromSealedTools(imageManifestPath, image);
   if (image.releaseCapabilityReceiptSha256 !== receiptSha || image.sourceCommit !== image.labels?.["org.opencontainers.image.revision"] || image.labels?.["org.architectureworld.family-ai.gateway-database-flock-v1"] !== "true" || !/^sha256:[0-9a-f]{64}$/.test(image.imageId ?? "")) throw new Error("CANDIDATE_IMAGE_BINDING_INVALID");
   const inspectedImage = JSON.parse(execFileSync("docker", ["image", "inspect", image.imageId], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }))[0];
   const actualLabels = inspectedImage?.Config?.Labels ?? {};
   if (inspectedImage?.Id !== image.imageId || actualLabels["org.opencontainers.image.revision"] !== image.sourceCommit || actualLabels["org.architectureworld.family-ai.release-capability-receipt-sha256"] !== receiptSha || actualLabels["org.architectureworld.family-ai.release-build-inputs-sha256"] !== image.releaseBuildInputsSha256 || actualLabels["org.architectureworld.family-ai.build-input-tree-hash"] !== image.buildInputTreeHash || actualLabels["org.architectureworld.family-ai.gateway-database-flock-v1"] !== "true" || Number(actualLabels["org.architectureworld.family-ai.client-database-version"]) !== receipt.release.clientDatabaseVersion) throw new Error("CANDIDATE_IMAGE_RUNTIME_PROVENANCE_INVALID");
-  if (JSON.stringify(inspectGatewayImageRuntime(image.imageId)) !== JSON.stringify(image.runtimeContract)) throw new Error("CANDIDATE_IMAGE_RUNTIME_CONTRACT_INVALID");
+  if (JSON.stringify(inspectGatewayImageRuntime(image.imageId, {
+    launcherSha256: expectedLauncherSha256,
+    pythonVersion: "3.11.2"
+  })) !== JSON.stringify(image.runtimeContract)) throw new Error("CANDIDATE_IMAGE_RUNTIME_CONTRACT_INVALID");
   if (receipt.release?.schemaHead !== Number(image.labels?.["org.architectureworld.family-ai.schema-head"] ?? receipt.release?.schemaHead)) throw new Error("CANDIDATE_SCHEMA_HEAD_MISMATCH");
   const definition = validateDefinition(args["--candidate-definition"], image, receiptSha);
   const parent = requireAbsolute(args["--target-parent"], "TARGET_PARENT", { type: "dir", mode: 0o700 });

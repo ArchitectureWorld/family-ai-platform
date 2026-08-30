@@ -6,6 +6,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_MANIFEST="${1:-}"
 [[ "$IMAGE_MANIFEST" == /* && -f "$IMAGE_MANIFEST" ]] || { printf 'real image manifest must be an absolute file\n' >&2; exit 1; }
 IMAGE_ID="$(node -e 'const value=require(process.argv[1]); if(value.manifestKind!=="gateway-image-v1"||!/^sha256:[0-9a-f]{64}$/.test(value.imageId))process.exit(1); process.stdout.write(value.imageId)' "$IMAGE_MANIFEST")"
+IMAGE_MANIFEST_SHA="$(awk 'NR==1 {print $1}' "$IMAGE_MANIFEST.sha256")"
+[[ "$IMAGE_MANIFEST_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
 
 TEST_ROOT="$(mktemp -d)"
 PROJECT="a5fixture${RANDOM}${RANDOM}"
@@ -101,7 +103,9 @@ node -e 'const fs=require("node:fs"); const [path,image,receipt]=process.argv.sl
   "$TEST_ROOT/evidence/migration.json" "$IMAGE_ID" "$CAPABILITY_SHA"
 bash "$ROOT_DIR/scripts/runtime-candidate-stage.sh" \
   --release-id fixture-a5 --source-snapshot "$SNAPSHOT" \
-  --candidate-image-manifest "$IMAGE_MANIFEST" --capability-receipt "$TEST_ROOT/evidence/capability.json" \
+  --candidate-image-manifest "$IMAGE_MANIFEST" \
+  --expected-candidate-image-manifest-sha256 "$IMAGE_MANIFEST_SHA" \
+  --capability-receipt "$TEST_ROOT/evidence/capability.json" \
   --expected-capability-receipt-sha256 "$CAPABILITY_SHA" --candidate-definition "$TEST_ROOT/evidence/migration.json" \
   --target-parent "$TEST_ROOT" --output-name candidate-a5 --manifest "$TEST_ROOT/evidence/candidate.json" >/dev/null
 node "$ROOT_DIR/scripts/runtime-candidate-manifest.mjs" validate \

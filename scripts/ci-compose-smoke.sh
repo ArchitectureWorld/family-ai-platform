@@ -21,13 +21,15 @@ done
 ARTIFACT_DIR="$(dirname "$MANIFEST")"
 [[ "$(basename "$MANIFEST")" == gateway-image-manifest.json ]] || fail IMAGE_MANIFEST_NAME_INVALID
 [[ "$(find "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" == \
-  "gateway-image-manifest.json gateway-image.tar gateway-image.tar.sha256 " ]] || fail ARTIFACT_FILE_SET_INVALID
+  "gateway-image-manifest.json gateway-image-manifest.json.sha256 gateway-image.tar gateway-image.tar.sha256 gateway-runtime-tools.json gateway-runtime-tools.json.sha256 " ]] || fail ARTIFACT_FILE_SET_INVALID
 
 command -v node >/dev/null 2>&1 || fail NODE_UNAVAILABLE
 command -v sha256sum >/dev/null 2>&1 || fail SHA256SUM_UNAVAILABLE
 
 cd "$ARTIFACT_DIR"
 sha256sum --check --status gateway-image.tar.sha256 || fail ARCHIVE_HASH_MISMATCH
+sha256sum --check --status gateway-image-manifest.json.sha256 || fail IMAGE_MANIFEST_HASH_MISMATCH
+sha256sum --check --status gateway-runtime-tools.json.sha256 || fail RUNTIME_TOOLS_HASH_MISMATCH
 cd "$ROOT_DIR"
 
 json_field() {
@@ -48,6 +50,9 @@ CLIENT_VERSION="$(json_field "$MANIFEST" clientDatabaseVersion)"
 CAPABILITY_SHA="$(json_field "$MANIFEST" releaseCapabilityReceiptSha256)"
 RELEASE_INPUTS_SHA="$(json_field "$MANIFEST" releaseBuildInputsSha256)"
 BUILD_INPUT_TREE_HASH="$(json_field "$MANIFEST" buildInputTreeHash)"
+EXPECTED_LAUNCHER_SHA="$(json_field "$MANIFEST" runtimeContract.expected.launcherSha256)"
+EXPECTED_PYTHON_VERSION="$(json_field "$MANIFEST" runtimeContract.expected.pythonVersion)"
+RUNTIME_TOOL_SHA="$(json_field "$MANIFEST" runtimeToolManifestSha256)"
 [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ && "$SOURCE_COMMIT" == "$(git rev-parse HEAD)" ]] || fail SOURCE_COMMIT_MISMATCH
 [[ "$IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ && "$ARCHIVE_SHA" =~ ^[0-9a-f]{64}$ ]] || fail IMAGE_ID_OR_ARCHIVE_HASH_INVALID
 [[ "$ARCHIVE_SHA" == "$(sha256sum "$ARTIFACT_DIR/gateway-image.tar" | awk '{print $1}')" ]] || fail MANIFEST_ARCHIVE_HASH_MISMATCH
@@ -96,8 +101,12 @@ command -v docker >/dev/null 2>&1 || fail DOCKER_UNAVAILABLE
 docker load --input "$ARTIFACT_DIR/gateway-image.tar" >/dev/null
 [[ "$(docker image inspect --format '{{.Id}}' "$IMAGE_ID" 2>/dev/null || true)" == "$IMAGE_ID" ]] \
   || fail LOADED_IMAGE_ID_MISMATCH
+[[ "$RUNTIME_TOOL_SHA" == "$(sha256sum "$ARTIFACT_DIR/gateway-runtime-tools.json" | awk '{print $1}')" ]] \
+  || fail RUNTIME_TOOLS_MANIFEST_MISMATCH
 ACTUAL_RUNTIME_CONTRACT="$(node "$ROOT_DIR/scripts/gateway-image-runtime-contract.mjs" \
-  inspect --image-id "$IMAGE_ID")" || fail IMAGE_RUNTIME_CONTRACT_INVALID
+  inspect --image-id "$IMAGE_ID" \
+  --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA" \
+  --expected-python-version "$EXPECTED_PYTHON_VERSION")" || fail IMAGE_RUNTIME_CONTRACT_INVALID
 if ! node --input-type=module - "$MANIFEST" "$ACTUAL_RUNTIME_CONTRACT" <<'NODE'
 import { readFileSync } from "node:fs";
 const [manifestPath, actualJson] = process.argv.slice(2);

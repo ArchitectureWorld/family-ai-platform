@@ -12,8 +12,12 @@ export const GATEWAY_IMAGE_ENTRYPOINT = [
 ];
 export const GATEWAY_IMAGE_CMD = ["node", "apps/gateway/dist/index.js"];
 
-export function inspectGatewayImageRuntime(imageId) {
-  if (!/^sha256:[0-9a-f]{64}$/u.test(imageId)) {
+export function inspectGatewayImageRuntime(imageId, expected) {
+  if (
+    !/^sha256:[0-9a-f]{64}$/u.test(imageId)
+    || !/^[0-9a-f]{64}$/u.test(expected?.launcherSha256 ?? "")
+    || expected?.pythonVersion !== "3.11.2"
+  ) {
     throw new Error("GATEWAY_IMAGE_RUNTIME_INVALID");
   }
   const image = JSON.parse(execFileSync(
@@ -36,32 +40,48 @@ export function inspectGatewayImageRuntime(imageId) {
     "import hashlib,json,os,platform,stat;p='/app/apps/gateway/runtime/gateway_lock_exec.py';s=os.stat(p);print(json.dumps({'pythonVersion':platform.python_version(),'launcher':{'path':p,'uid':s.st_uid,'gid':s.st_gid,'mode':stat.S_IMODE(s.st_mode),'nlink':s.st_nlink,'sha256':hashlib.sha256(open(p,'rb').read()).hexdigest()}},separators=(',',':')))"
   ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
   if (
-    !/^3\.11\.[0-9]+$/u.test(probe.pythonVersion ?? "")
+    probe.pythonVersion !== expected.pythonVersion
     || probe.launcher?.path !== "/app/apps/gateway/runtime/gateway_lock_exec.py"
     || probe.launcher?.uid !== 1000
     || probe.launcher?.gid !== 1000
     || probe.launcher?.mode !== 0o755
     || probe.launcher?.nlink !== 1
     || !/^[0-9a-f]{64}$/u.test(probe.launcher?.sha256 ?? "")
+    || probe.launcher.sha256 !== expected.launcherSha256
   ) {
     throw new Error("GATEWAY_IMAGE_RUNTIME_INVALID");
   }
   return {
-    user: "node",
-    entrypoint: GATEWAY_IMAGE_ENTRYPOINT,
-    cmd: GATEWAY_IMAGE_CMD,
-    pythonVersion: probe.pythonVersion,
-    launcher: probe.launcher
+    expected: {
+      pythonVersion: expected.pythonVersion,
+      launcherSha256: expected.launcherSha256
+    },
+    actual: {
+      user: "node",
+      entrypoint: GATEWAY_IMAGE_ENTRYPOINT,
+      cmd: GATEWAY_IMAGE_CMD,
+      pythonVersion: probe.pythonVersion,
+      launcher: probe.launcher
+    }
   };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  if (process.argv.length !== 5 || process.argv[2] !== "inspect" || process.argv[3] !== "--image-id") {
+  if (
+    process.argv.length !== 9
+    || process.argv[2] !== "inspect"
+    || process.argv[3] !== "--image-id"
+    || process.argv[5] !== "--expected-launcher-sha256"
+    || process.argv[7] !== "--expected-python-version"
+  ) {
     process.stderr.write("GATEWAY_IMAGE_RUNTIME_INVALID\n");
     process.exit(1);
   }
   try {
-    process.stdout.write(`${JSON.stringify(inspectGatewayImageRuntime(process.argv[4]))}\n`);
+    process.stdout.write(`${JSON.stringify(inspectGatewayImageRuntime(process.argv[4], {
+      launcherSha256: process.argv[6],
+      pythonVersion: process.argv[8]
+    }))}\n`);
   } catch {
     process.stderr.write("GATEWAY_IMAGE_RUNTIME_INVALID\n");
     process.exit(1);

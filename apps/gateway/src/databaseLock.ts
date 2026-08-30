@@ -40,14 +40,41 @@ interface GatewayDatabaseLockIdentity {
   gid: number;
 }
 
+interface GatewayDatabaseLockMetadata {
+  uid: number;
+  gid: number;
+  mode: number;
+  nlink: number;
+}
+
+function protectedDirectoryMetadata(
+  state: GatewayDatabaseLockMetadata,
+  identity: GatewayDatabaseLockIdentity
+): boolean {
+  return state.uid === identity.uid
+    && state.gid === identity.gid
+    && (state.mode & 0o777) === 0o700;
+}
+
+function protectedLockMetadata(
+  state: GatewayDatabaseLockMetadata,
+  identity: GatewayDatabaseLockIdentity
+): boolean {
+  return state.uid === identity.uid
+    && state.gid === identity.gid
+    && state.nlink === 1
+    && (state.mode & 0o777) === 0o600;
+}
+
 function protectedDirectory(
   state: BigIntStats,
   identity: GatewayDatabaseLockIdentity
 ): boolean {
   return state.isDirectory()
-    && state.uid === BigInt(identity.uid)
-    && state.gid === BigInt(identity.gid)
-    && (state.mode & 0o777n) === 0o700n;
+    && protectedDirectoryMetadata({
+      uid: Number(state.uid), gid: Number(state.gid),
+      mode: Number(state.mode), nlink: Number(state.nlink)
+    }, identity);
 }
 
 function protectedLock(
@@ -55,10 +82,18 @@ function protectedLock(
   identity: GatewayDatabaseLockIdentity
 ): boolean {
   return state.isFile()
-    && state.uid === BigInt(identity.uid)
-    && state.gid === BigInt(identity.gid)
-    && state.nlink === 1n
-    && (state.mode & 0o777n) === 0o600n;
+    && protectedLockMetadata({
+      uid: Number(state.uid), gid: Number(state.gid),
+      mode: Number(state.mode), nlink: Number(state.nlink)
+    }, identity);
+}
+
+export function gatewayDatabaseLockMetadataMatchesForTest(input: {
+  parent: GatewayDatabaseLockMetadata;
+  lock: GatewayDatabaseLockMetadata;
+}, identity: GatewayDatabaseLockIdentity): boolean {
+  return protectedDirectoryMetadata(input.parent, identity)
+    && protectedLockMetadata(input.lock, identity);
 }
 
 function requireInheritedGatewayDatabaseLockWithIdentity(input: {

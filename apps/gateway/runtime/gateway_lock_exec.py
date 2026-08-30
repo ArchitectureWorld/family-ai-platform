@@ -132,20 +132,27 @@ def assert_inherited(fd: int, role: str, database_path: str):
 
 
 def command_role(command: list[str], database: str) -> str:
-    if len(command) < 2 or command[0] != "node":
+    if len(command) >= 2 and command[0] == "node":
+        if command[1] == "apps/gateway/test/fixtures/authorizedLockProbe.mjs":
+            if os.environ.get("NODE_ENV") != "test":
+                fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+            role = "migrate"
+        else:
+            role = None
+        targets = {
+            "apps/gateway/dist/index.js": "gateway",
+            "dist/index.js": "gateway",
+            "apps/gateway/dist/migrate.js": "migrate",
+            "dist/migrate.js": "migrate",
+            "apps/gateway/dist/provisionFederationService.js": "provision",
+            "dist/provisionFederationService.js": "provision",
+        }
+        role = role or targets.get(command[1])
+        arguments = command[2:]
+    else:
         fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
-    targets = {
-        "apps/gateway/dist/index.js": "gateway",
-        "dist/index.js": "gateway",
-        "apps/gateway/dist/migrate.js": "migrate",
-        "dist/migrate.js": "migrate",
-        "apps/gateway/dist/provisionFederationService.js": "provision",
-        "dist/provisionFederationService.js": "provision",
-    }
-    role = targets.get(command[1])
     if role is None:
         fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
-    arguments = command[2:]
     if role == "gateway":
         if arguments:
             fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")

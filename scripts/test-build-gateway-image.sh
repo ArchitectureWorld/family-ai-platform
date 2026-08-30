@@ -44,6 +44,10 @@ grep -Fq 'buildInputTreeHash' "$ROOT_DIR/scripts/build-gateway-image.sh" \
   || fail 'build wrapper does not bind the canonical build input tree'
 grep -Fq 'runtimeContract: JSON.parse(runtimeContractJson)' "$ROOT_DIR/scripts/build-gateway-image.sh" \
   || fail 'build wrapper does not bind the inspected runtime contract'
+grep -Fq 'runtimeToolManifestSha256' "$ROOT_DIR/scripts/build-gateway-image.sh" \
+  || fail 'build wrapper does not bind the sealed runtime tool manifest'
+grep -Fq 'gateway-image-manifest.json.sha256' "$ROOT_DIR/scripts/build-gateway-image.sh" \
+  || fail 'build wrapper does not seal the image manifest'
 grep -Fq 'RUN rm /app/node_modules/@family-ai/contracts /app/node_modules/@family-ai/provider-adapter-sdk' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image still depends on npm workspace symlinks'
 grep -Fq '/app/node_modules/@family-ai/contracts/package.json' "$ROOT_DIR/Dockerfile" \
@@ -364,6 +368,9 @@ mkdir -m 700 "$TAMPER_DIR"
 printf 'tampered archive\n' > "$TAMPER_DIR/gateway-image.tar"
 printf '%064d  gateway-image.tar\n' 0 > "$TAMPER_DIR/gateway-image.tar.sha256"
 printf '{"manifestKind":"gateway-image-v1"}\n' > "$TAMPER_DIR/gateway-image-manifest.json"
+sha256sum "$TAMPER_DIR/gateway-image-manifest.json" | sed 's#  .*/#  #' > "$TAMPER_DIR/gateway-image-manifest.json.sha256"
+printf '{"manifestKind":"runtime-tool-manifest-v1"}\n' > "$TAMPER_DIR/gateway-runtime-tools.json"
+sha256sum "$TAMPER_DIR/gateway-runtime-tools.json" | sed 's#  .*/#  #' > "$TAMPER_DIR/gateway-runtime-tools.json.sha256"
 expect_failure ARCHIVE_HASH_MISMATCH \
   bash "$ROOT_DIR/scripts/ci-compose-smoke.sh" \
     --image-manifest "$TAMPER_DIR/gateway-image-manifest.json"

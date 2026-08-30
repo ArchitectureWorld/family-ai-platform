@@ -29,10 +29,22 @@ function docker(args, options = {}) {
   return spawnSync("docker", args, { encoding: "utf8", timeout: 15_000, ...options });
 }
 
+function authorizedHost(databasePath) {
+  return spawnSync("python3", [
+    launcher, "--database-from-env", "GATEWAY_DATABASE_PATH", "--",
+    "node", "apps/gateway/dist/migrate.js", "--database", databasePath
+  ], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, NODE_ENV: "production", GATEWAY_DATABASE_PATH: databasePath }
+  });
+}
+
 test("rootful containers and host contend on one lock inode across bind aliases and crash release", async () => {
   const directory = mkdtempSync(join(tmpdir(), "family-ai-rootful-lock-"));
   chmodSync(directory, 0o700);
   const databasePath = join(directory, "gateway.sqlite");
+  const hostProbePath = join(directory, "host-probe.sqlite");
   writeFileSync(databasePath, "fixture", { mode: 0o600 });
   const holder = `family-lock-holder-${process.pid}`;
   const second = `family-lock-second-${process.pid}`;
@@ -66,9 +78,7 @@ test("rootful containers and host contend on one lock inode across bind aliases 
       assert.equal(busy.stdout, "");
       assert.equal(busy.stderr, "GATEWAY_DATABASE_LOCK_BUSY\n");
     }
-    const hostBusy = spawnSync("python3", ["-c", fixedClaim.replaceAll("/launcher.py", launcher), databasePath], {
-      encoding: "utf8"
-    });
+    const hostBusy = authorizedHost(hostProbePath);
     assert.equal(hostBusy.status, 1);
     assert.equal(hostBusy.stderr, "GATEWAY_DATABASE_LOCK_BUSY\n");
 
@@ -94,11 +104,9 @@ test("rootful containers and host contend on one lock inode across bind aliases 
     await new Promise(resolve => setTimeout(resolve, 250));
     assert.equal(docker(["kill", "--signal", "KILL", second]).status, 0);
     assert.equal(docker(["wait", second]).status, 0);
-    const afterKill = spawnSync("python3", [
-      "-c", fixedClaim.replaceAll("/launcher.py", launcher), databasePath
-    ], { encoding: "utf8" });
+    const afterKill = authorizedHost(hostProbePath);
     assert.equal(afterKill.status, 0, afterKill.stderr);
-    assert.equal(afterKill.stdout, "LOCKED\n");
+    assert.equal(afterKill.stdout, '{"schemaVersion":15,"quickCheck":"ok","foreignKeyViolations":0}\n');
 
     const lock = statSync(join(directory, ".family-ai-gateway.lock"));
     assert.equal(lock.uid, 1000);
@@ -118,6 +126,7 @@ test("exact built image runs real roles with one immutable loser boundary", {
   chmodSync(directory, 0o700);
   mkdirSync(join(directory, "attachments"), { mode: 0o700 });
   const databasePath = join(directory, "gateway.sqlite");
+  const hostProbePath = join(directory, "host-probe.sqlite");
   const credentialPath = join(directory, "canvas.credential");
   writeFileSync(credentialPath, "Rootful-Canvas-Credential-0001", { mode: 0o600 });
   const holder = `family-built-lock-holder-${process.pid}`;
@@ -207,9 +216,7 @@ test("exact built image runs real roles with one immutable loser boundary", {
       assert.equal(snapshot(), beforeLosers);
     }
 
-    const hostBusy = spawnSync("python3", [
-      "-c", fixedClaim.replaceAll("/launcher.py", launcher), databasePath
-    ], { encoding: "utf8" });
+    const hostBusy = authorizedHost(hostProbePath);
     assert.equal(hostBusy.status, 1);
     assert.equal(hostBusy.stderr, "GATEWAY_DATABASE_LOCK_BUSY\n");
     assert.equal(snapshot(), beforeLosers);
@@ -223,12 +230,42 @@ test("exact built image runs real roles with one immutable loser boundary", {
     await waitReady(second);
     assert.equal(docker(["kill", "--signal", "KILL", second]).status, 0);
     assert.equal(docker(["wait", second]).status, 0);
-    const afterKill = spawnSync("python3", [
-      "-c", fixedClaim.replaceAll("/launcher.py", launcher), databasePath
-    ], { encoding: "utf8" });
+    const afterKill = authorizedHost(hostProbePath);
     assert.equal(afterKill.status, 0, afterKill.stderr);
-    assert.equal(afterKill.stdout, "LOCKED\n");
+    assert.equal(afterKill.stdout, '{"schemaVersion":15,"quickCheck":"ok","foreignKeyViolations":0}\n');
   } finally {
     cleanup();
+  }
+});
+
+test("exact built image rejects non-1000 identity even with test-shaped environment", {
+  skip: builtImage === undefined,
+  timeout: 60_000
+}, () => {
+  const volume = `family-lock-non1000-${process.pid}`;
+  try {
+    assert.equal(docker(["volume", "create", volume]).status, 0);
+    const prepared = docker([
+      "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
+      "--mount", `type=volume,src=${volume},dst=/probe`, builtImage,
+      "-c", "chown 1234:1234 /probe && chmod 0700 /probe"
+    ]);
+    assert.equal(prepared.status, 0, prepared.stderr);
+    const probe = docker([
+      "run", "--rm", "--user", "1234:1234", "--network", "none", "--read-only",
+      "--mount", `type=volume,src=${volume},dst=/probe`,
+      "--env", "NODE_ENV=test",
+      "--env", "FAMILY_AI_GATEWAY_LOCK_TEST_IDENTITY=1",
+      "--env", "FAMILY_AI_GATEWAY_EXPECTED_UID=1234",
+      "--env", "FAMILY_AI_GATEWAY_EXPECTED_GID=1234",
+      "--env", "GATEWAY_DATABASE_PATH=/probe/gateway.sqlite",
+      builtImage, "node", "apps/gateway/dist/migrate.js",
+      "--database", "/probe/gateway.sqlite"
+    ], { timeout: 30_000 });
+    assert.equal(probe.status, 1);
+    assert.equal(probe.stdout, "");
+    assert.equal(probe.stderr, "GATEWAY_DATABASE_LOCK_INVALID\n");
+  } finally {
+    docker(["volume", "rm", "-f", volume]);
   }
 });

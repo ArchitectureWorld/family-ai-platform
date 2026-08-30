@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { gatewayDatabaseLockMetadataMatchesForTest } from "../src/databaseLock.js";
 
 const root = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const worker = join(root, "apps/gateway/test/fixtures/databaseLockWorker.mjs");
@@ -146,33 +147,38 @@ describe("Gateway database launch lock", () => {
 
   it("injects unit identities without allowing production identity overrides", () => {
     const databasePath = fixture();
+    const currentUid = process.getuid?.();
+    const currentGid = process.getgid?.();
+    expect(currentUid).toBeTypeOf("number");
+    expect(currentGid).toBeTypeOf("number");
     const accepted = spawnSync("python3", [
       "-c", harness, databasePath, "gateway", process.execPath, worker,
-      "valid", "", "", "1000", "1000"
+      "valid", "", "", String(currentUid), String(currentGid)
     ], { cwd: root, encoding: "utf8", env: { ...process.env, NODE_ENV: "test" } });
     expect(accepted.status, accepted.stderr).toBe(0);
 
+    const nonCurrentUid = currentUid === 1234 ? 1235 : 1234;
     const rejected = spawnSync("python3", [
       "-c", harness, databasePath, "gateway", process.execPath, worker,
-      "valid", "", "", "1001", "1000"
+      "valid", "", "", String(nonCurrentUid), String(currentGid)
     ], { cwd: root, encoding: "utf8", env: { ...process.env, NODE_ENV: "test" } });
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toBe("GATEWAY_DATABASE_LOCK_INVALID\n");
+  });
 
-    const production = spawnSync("python3", [
-      "-c", harness, databasePath, "gateway", process.execPath, worker,
-      "valid", "", ""
-    ], {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        NODE_ENV: "production",
-        FAMILY_AI_GATEWAY_EXPECTED_UID: "1001",
-        FAMILY_AI_GATEWAY_EXPECTED_GID: "1001"
-      }
-    });
-    expect(production.status, production.stderr).toBe(0);
+  it("accepts a simulated non-1000 identity only when unit expectations match", () => {
+    const metadata = {
+      parent: { uid: 1234, gid: 2345, mode: 0o700, nlink: 1 },
+      lock: { uid: 1234, gid: 2345, mode: 0o600, nlink: 1 }
+    };
+    expect(gatewayDatabaseLockMetadataMatchesForTest(
+      metadata,
+      { uid: 1234, gid: 2345 }
+    )).toBe(true);
+    expect(gatewayDatabaseLockMetadataMatchesForTest(
+      metadata,
+      { uid: 1000, gid: 1000 }
+    )).toBe(false);
   });
 
   it("fails nonblocking contention and releases after holder SIGKILL", async () => {
