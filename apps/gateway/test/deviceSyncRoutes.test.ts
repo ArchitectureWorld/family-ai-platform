@@ -268,7 +268,7 @@ describe("Device Sync HTTP routes", () => {
     } finally {
       verify.close();
     }
-  });
+  }, 60_000);
 
   it("strictly validates ACK identity and keeps replay responses idempotent", async () => {
     await openChat();

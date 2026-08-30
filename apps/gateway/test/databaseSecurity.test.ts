@@ -1,10 +1,12 @@
 import {
   chmodSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync
@@ -18,6 +20,7 @@ import {
   type GatewayDatabase,
   type GatewayDatabaseOpenRequest
 } from "../src/database.js";
+import type { DatabaseSecurityHooks } from "../src/databaseSecurity.js";
 
 type PlannedLease = GatewayDatabase & {
   database: GatewayDatabase;
@@ -50,6 +53,25 @@ describe("secure Gateway database intents", () => {
     });
     opened.close();
     chmodSync(path, 0o600);
+  };
+
+  const openFileCount = (): number => readdirSync("/proc/self/fd").length;
+
+  const databaseDescriptorCount = (path: string): number => {
+    const identity = statSync(path);
+    let count = 0;
+    for (const name of readdirSync("/proc/self/fd")) {
+      if (!/^\d+$/u.test(name)) continue;
+      try {
+        const state = fstatSync(Number(name));
+        if (state.isFile() && state.dev === identity.dev && state.ino === identity.ino) {
+          count += 1;
+        }
+      } catch {
+        // The proc enumeration descriptor may disappear before inspection.
+      }
+    }
+    return count;
   };
 
   it("requires an explicit intent before creating any database path", () => {
@@ -196,4 +218,139 @@ describe("secure Gateway database intents", () => {
       migrationLimit: 14
     } as unknown as GatewayDatabaseOpenRequest)).toThrow("GATEWAY_DATABASE_INTENT_INVALID");
   });
+
+  it("holds an independent database proof descriptor through inspection, writable open and lease", () => {
+    const path = prepareDirectory();
+    createFixture(path, 15);
+    const observed = new Map<string, number>();
+
+    const lease = openGatewayDatabase(
+      path,
+      { intent: "gateway-existing" },
+      {
+        checkpoint: (stage) => {
+          if (stage !== "beforeMigrationCommit") {
+            observed.set(stage, databaseDescriptorCount(path));
+          }
+        }
+      }
+    );
+
+    expect(observed.get("afterReadonlyOpen")).toBeGreaterThanOrEqual(2);
+    expect(observed.get("afterReadonlyValidation")).toBeGreaterThanOrEqual(2);
+    expect(observed.get("afterWritableOpen")).toBeGreaterThanOrEqual(2);
+    expect(observed.get("beforeReturn")).toBeGreaterThanOrEqual(2);
+    expect(databaseDescriptorCount(path)).toBeGreaterThanOrEqual(2);
+    lease.close();
+    expect(databaseDescriptorCount(path)).toBe(0);
+  });
+
+  it.each(["path", "sidecar", "marker"] as const)(
+    "closes every held descriptor across 50 readonly-to-writable %s transition failures",
+    (failureKind) => {
+      const path = prepareDirectory();
+      createFixture(path, 15);
+      const replacementPath = join(directory, "replacement.sqlite");
+      const originalPath = join(directory, "original.sqlite");
+      if (failureKind === "path") createFixture(replacementPath, 15);
+      const initialBytes = readFileSync(path);
+      const baseline = openFileCount();
+
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const stages: string[] = [];
+        try {
+          expect(() => openGatewayDatabase(
+            path,
+            { intent: "gateway-existing" },
+            {
+              checkpoint: (stage) => {
+                stages.push(stage);
+                if (stage !== "afterReadonlyValidation") return;
+                if (failureKind === "path") {
+                  renameSync(path, originalPath);
+                  renameSync(replacementPath, path);
+                } else if (failureKind === "sidecar") {
+                  writeFileSync(`${path}-wal`, "transition-sidecar", { mode: 0o600 });
+                } else {
+                  mkdirSync(join(directory, ".gateway.sqlite.wal-recovery"), { mode: 0o700 });
+                }
+              }
+            }
+          )).toThrow("GATEWAY_DATABASE_INVALID");
+        } finally {
+          if (failureKind === "path" && existsSync(originalPath)) {
+            renameSync(path, replacementPath);
+            renameSync(originalPath, path);
+          }
+          rmSync(`${path}-wal`, { force: true });
+          rmSync(join(directory, ".gateway.sqlite.wal-recovery"), {
+            recursive: true,
+            force: true
+          });
+        }
+        expect(stages).not.toContain("afterWritableOpen");
+        expect(stages).not.toContain("beforeReturn");
+        expect(openFileCount()).toBe(baseline);
+      }
+
+      expect(readFileSync(path)).toEqual(initialBytes);
+      expect(databaseDescriptorCount(path)).toBe(0);
+    },
+    60_000
+  );
+
+  it("uses fixed production 1000:1000 ownership and test-only injected uid/gid expectations", () => {
+    const path = prepareDirectory();
+    createFixture(path, 15);
+    const uid = process.getuid();
+    const gid = process.getgid();
+    const currentIds: DatabaseSecurityHooks = {
+      expectedParentUid: uid,
+      expectedParentGid: gid,
+      expectedDatabaseUid: uid,
+      expectedDatabaseGid: gid
+    };
+
+    const testLease = openGatewayDatabase(
+      path,
+      { intent: "test-create-or-existing", simulate: "gateway-existing" },
+      currentIds
+    );
+    testLease.close();
+    const beforeHostileAttempts = readFileSync(path);
+
+    for (const hostile of [
+      { ...currentIds, expectedParentUid: uid + 1 },
+      { ...currentIds, expectedParentGid: gid + 1 },
+      { ...currentIds, expectedDatabaseUid: uid + 1 },
+      { ...currentIds, expectedDatabaseGid: gid + 1 },
+      {
+        expectedParentUid: 0,
+        expectedParentGid: 0,
+        expectedDatabaseUid: 0,
+        expectedDatabaseGid: 0
+      }
+    ]) {
+      expect(() => openGatewayDatabase(
+        path,
+        { intent: "test-create-or-existing", simulate: "gateway-existing" },
+        hostile
+      )).toThrow("GATEWAY_DATABASE_INVALID");
+      expect(readFileSync(path)).toEqual(beforeHostileAttempts);
+    }
+
+    const production = openGatewayDatabase(
+      path,
+      { intent: "gateway-existing" },
+      {
+        expectedParentUid: uid + 1,
+        expectedParentGid: gid + 1,
+        expectedDatabaseUid: uid + 1,
+        expectedDatabaseGid: gid + 1
+      }
+    );
+    production.close();
+    expect(readdirSync(directory).filter((name) => name.startsWith("gateway.sqlite-")))
+      .toEqual([]);
+  }, 60_000);
 });

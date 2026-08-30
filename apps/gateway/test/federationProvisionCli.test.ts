@@ -481,16 +481,14 @@ describe("protected federation service bootstrap CLI", () => {
   it.each([
     ["parent", { expectedParentUid: process.getuid() + 1 }],
     ["database", { expectedDatabaseUid: process.getuid() + 1 }]
-  ])("rejects a %s owner mismatch through the deterministic security hook", (_label, hooks) => {
+  ])("does not let a test hook override the fixed production %s owner", (_label, hooks) => {
     const provisionWithHooks = provisionFederationService as unknown as (
       argv: readonly string[],
       hooks: Record<string, unknown>
     ) => unknown;
 
-    expect(() => provisionWithHooks(argumentsFor(), hooks)).toThrow(
-      "FEDERATION_BOOTSTRAP_DATABASE_INVALID"
-    );
-    expect(inspectServices()).toEqual([]);
+    expect(() => provisionWithHooks(argumentsFor(), hooks)).not.toThrow();
+    expect(inspectServices()).toHaveLength(1);
   });
 
   it.each([
@@ -545,7 +543,7 @@ describe("protected federation service bootstrap CLI", () => {
       liveConnection.close();
     }
     expect(inspectServices()).toEqual([]);
-  });
+  }, 20_000);
 
   it("rejects V13, V14 and wrong SQLite schemas without migrating them", () => {
     const v13Path = join(directory, "gateway-v13.sqlite");

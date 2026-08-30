@@ -44,8 +44,6 @@ export type FederationProvisionCheckpoint =
 
 export interface FederationProvisionTestHooks {
   checkpoint?: (stage: FederationProvisionCheckpoint) => void;
-  expectedParentUid?: number;
-  expectedDatabaseUid?: number;
 }
 
 function failure(code: BootstrapErrorCode): never {
@@ -201,12 +199,6 @@ function openExistingV15Database(
       path,
       { intent: "provision-existing" },
       {
-        ...(hooks.expectedParentUid === undefined
-          ? {}
-          : { expectedParentUid: hooks.expectedParentUid }),
-        ...(hooks.expectedDatabaseUid === undefined
-          ? {}
-          : { expectedDatabaseUid: hooks.expectedDatabaseUid }),
         checkpoint: stage => {
           if (stage !== "beforeMigrationCommit") hooks.checkpoint?.(stage);
         }

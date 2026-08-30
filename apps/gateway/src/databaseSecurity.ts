@@ -43,7 +43,9 @@ export type DatabaseSecurityCheckpoint =
 export interface DatabaseSecurityHooks {
   checkpoint?: (stage: DatabaseSecurityCheckpoint) => void;
   expectedParentUid?: number;
+  expectedParentGid?: number;
   expectedDatabaseUid?: number;
+  expectedDatabaseGid?: number;
 }
 
 export interface SecureDatabaseFile {
@@ -73,6 +75,8 @@ type ImmutableDatabaseConstructor = new (
 ) => ImmutableDatabase;
 
 let immutableDatabaseConstructor: ImmutableDatabaseConstructor | undefined;
+const GATEWAY_APPLICATION_UID = 1000;
+const GATEWAY_APPLICATION_GID = 1000;
 
 function loadImmutableDatabaseConstructor(): ImmutableDatabaseConstructor {
   if (immutableDatabaseConstructor) return immutableDatabaseConstructor;
@@ -151,22 +155,25 @@ interface ProtectedPath {
   path: string;
   parentPath: string;
   parentDescriptor: number;
-  parentIdentity: Stats;
-  databaseIdentity: Stats;
+  databaseDescriptor: number;
   expectedParentUid: number;
+  expectedParentGid: number;
   expectedDatabaseUid: number;
+  expectedDatabaseGid: number;
 }
 
-function protectedParent(state: Stats, uid: number): boolean {
+function protectedParent(state: Stats, uid: number, gid: number): boolean {
   return state.isDirectory()
     && state.uid === uid
+    && state.gid === gid
     && (state.mode & 0o777) === 0o700;
 }
 
-function protectedDatabase(state: Stats, uid: number): boolean {
+function protectedDatabase(state: Stats, uid: number, gid: number): boolean {
   return state.isFile()
     && !state.isSymbolicLink()
     && state.uid === uid
+    && state.gid === gid
     && state.nlink === 1
     && (state.mode & 0o777) === 0o600;
 }
@@ -180,7 +187,12 @@ function assertNoSidecarsOrMarker(path: string): void {
     `${file}-journal`,
     `.${file}.wal-recovery`
   ]);
-  if (readdirSync(parent).some((name) => forbidden.has(name))) {
+  try {
+    if (readdirSync(parent).some((name) => forbidden.has(name))) {
+      fail("GATEWAY_DATABASE_INVALID");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "GATEWAY_DATABASE_INVALID") throw error;
     fail("GATEWAY_DATABASE_INVALID");
   }
 }
@@ -189,15 +201,32 @@ function assertProtectedPath(protectedPath: ProtectedPath): void {
   try {
     const parentFd = fstatSync(protectedPath.parentDescriptor);
     const parentPath = lstatSync(protectedPath.parentPath);
+    const databaseFd = fstatSync(protectedPath.databaseDescriptor);
     const databasePath = lstatSync(protectedPath.path);
     if (
       realpathSync(protectedPath.parentPath) !== protectedPath.parentPath
-      || !sameIdentity(parentFd, protectedPath.parentIdentity)
-      || !sameIdentity(parentPath, protectedPath.parentIdentity)
-      || !protectedParent(parentFd, protectedPath.expectedParentUid)
-      || !protectedParent(parentPath, protectedPath.expectedParentUid)
-      || !sameIdentity(databasePath, protectedPath.databaseIdentity)
-      || !protectedDatabase(databasePath, protectedPath.expectedDatabaseUid)
+      || !sameIdentity(parentPath, parentFd)
+      || !protectedParent(
+        parentFd,
+        protectedPath.expectedParentUid,
+        protectedPath.expectedParentGid
+      )
+      || !protectedParent(
+        parentPath,
+        protectedPath.expectedParentUid,
+        protectedPath.expectedParentGid
+      )
+      || !sameIdentity(databasePath, databaseFd)
+      || !protectedDatabase(
+        databaseFd,
+        protectedPath.expectedDatabaseUid,
+        protectedPath.expectedDatabaseGid
+      )
+      || !protectedDatabase(
+        databasePath,
+        protectedPath.expectedDatabaseUid,
+        protectedPath.expectedDatabaseGid
+      )
     ) {
       fail("GATEWAY_DATABASE_INVALID");
     }
@@ -229,12 +258,11 @@ function createDatabase(path: string, parentDescriptor: number): void {
 function capturePath(
   path: string,
   allowCreate: boolean,
+  publicIntent: GatewayDatabaseIntent,
   hooks: DatabaseSecurityHooks
 ): ProtectedPath {
-  const processUid = process.getuid?.();
   if (
-    processUid === undefined
-    || !isAbsolute(path)
+    !isAbsolute(path)
     || path === "/"
     || resolve(path) !== path
   ) {
@@ -250,45 +278,66 @@ function capturePath(
   } catch {
     return fail("GATEWAY_DATABASE_INVALID");
   }
+  let databaseDescriptor: number | undefined;
   try {
+    const injected = publicIntent === "test-create-or-existing";
+    const expectedParentUid = injected
+      ? hooks.expectedParentUid ?? GATEWAY_APPLICATION_UID
+      : GATEWAY_APPLICATION_UID;
+    const expectedParentGid = injected
+      ? hooks.expectedParentGid ?? GATEWAY_APPLICATION_GID
+      : GATEWAY_APPLICATION_GID;
+    const expectedDatabaseUid = injected
+      ? hooks.expectedDatabaseUid ?? GATEWAY_APPLICATION_UID
+      : GATEWAY_APPLICATION_UID;
+    const expectedDatabaseGid = injected
+      ? hooks.expectedDatabaseGid ?? GATEWAY_APPLICATION_GID
+      : GATEWAY_APPLICATION_GID;
     const parentIdentity = fstatSync(parentDescriptor);
-    const expectedParentUid = hooks.expectedParentUid ?? processUid;
     if (
       realpathSync(parentPath) !== parentPath
-      || !protectedParent(parentIdentity, expectedParentUid)
+      || !protectedParent(parentIdentity, expectedParentUid, expectedParentGid)
     ) {
       fail("GATEWAY_DATABASE_INVALID");
     }
-    let databaseIdentity: Stats;
     try {
-      databaseIdentity = lstatSync(path);
+      lstatSync(path);
     } catch (error) {
       if (!allowCreate || (error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
       createDatabase(path, parentDescriptor);
-      databaseIdentity = lstatSync(path);
     }
+    databaseDescriptor = openSync(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    );
     const protectedPath = {
       path,
       parentPath,
       parentDescriptor,
-      parentIdentity,
-      databaseIdentity,
+      databaseDescriptor,
       expectedParentUid,
-      expectedDatabaseUid: hooks.expectedDatabaseUid ?? processUid
+      expectedParentGid,
+      expectedDatabaseUid,
+      expectedDatabaseGid
     };
     assertProtectedPath(protectedPath);
     assertNoSidecarsOrMarker(path);
     return protectedPath;
   } catch (error) {
-    closeSync(parentDescriptor);
+    try {
+      if (databaseDescriptor !== undefined) closeSync(databaseDescriptor);
+    } finally {
+      closeSync(parentDescriptor);
+    }
     if (error instanceof Error && error.message === "GATEWAY_DATABASE_INVALID") throw error;
     fail("GATEWAY_DATABASE_INVALID");
   }
 }
 
-function openDescriptors(identity: Stats): Set<number> {
+function openDescriptors(proofDescriptor: number): Set<number> {
+  const identity = fstatSync(proofDescriptor);
   const descriptors = new Set<number>();
   for (const name of readdirSync("/proc/self/fd")) {
     if (!/^\d+$/u.test(name)) continue;
@@ -303,14 +352,33 @@ function openDescriptors(identity: Stats): Set<number> {
   return descriptors;
 }
 
-function newConnectionDescriptor(before: ReadonlySet<number>, identity: Stats): number {
-  const descriptor = [...openDescriptors(identity)].find((candidate) => !before.has(candidate));
+function newConnectionDescriptor(
+  before: ReadonlySet<number>,
+  proofDescriptor: number
+): number {
+  const descriptor = [...openDescriptors(proofDescriptor)]
+    .find((candidate) => !before.has(candidate));
   if (descriptor === undefined) return fail("GATEWAY_DATABASE_INVALID");
   const state = fstatSync(descriptor);
-  if (!state.isFile() || !sameIdentity(state, identity)) {
+  const proof = fstatSync(proofDescriptor);
+  if (!state.isFile() || !sameIdentity(state, proof)) {
     return fail("GATEWAY_DATABASE_INVALID");
   }
   return descriptor;
+}
+
+function assertConnectionBound(descriptor: number, protectedPath: ProtectedPath): void {
+  try {
+    assertProtectedPath(protectedPath);
+    const connection = fstatSync(descriptor);
+    const proof = fstatSync(protectedPath.databaseDescriptor);
+    if (!connection.isFile() || !sameIdentity(connection, proof)) {
+      fail("GATEWAY_DATABASE_INVALID");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "GATEWAY_DATABASE_INVALID") throw error;
+    fail("GATEWAY_DATABASE_INVALID");
+  }
 }
 
 export interface CanonicalSchemaObject {
@@ -452,80 +520,98 @@ export function openSecureDatabaseFile(
       return false;
     }
   })();
-  const protectedPath = capturePath(path, allowCreate, hooks);
-  if (existedBefore) {
-    const before = openDescriptors(protectedPath.databaseIdentity);
-    let inspection: ImmutableDatabase;
+  const protectedPath = capturePath(path, allowCreate, resolved.publicIntent, hooks);
+  let database: Database.Database | undefined;
+  try {
+    if (existedBefore) {
+      const before = openDescriptors(protectedPath.databaseDescriptor);
+      let inspection: ImmutableDatabase;
+      try {
+        const Immutable = loadImmutableDatabaseConstructor();
+        inspection = new Immutable(`${pathToFileURL(path).href}?immutable=1`, {
+          readOnly: true
+        });
+      } catch {
+        return fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+      }
+      try {
+        const descriptor = newConnectionDescriptor(
+          before,
+          protectedPath.databaseDescriptor
+        );
+        assertConnectionBound(descriptor, protectedPath);
+        assertNoSidecarsOrMarker(path);
+        hooks.checkpoint?.("afterReadonlyOpen");
+        assertConnectionBound(descriptor, protectedPath);
+        assertNoSidecarsOrMarker(path);
+        inspectSchema(
+          inspection,
+          resolved.publicIntent,
+          resolved.effectiveIntent,
+          resolved.migrationLimit
+        );
+        assertConnectionBound(descriptor, protectedPath);
+        assertNoSidecarsOrMarker(path);
+        hooks.checkpoint?.("afterReadonlyValidation");
+        assertConnectionBound(descriptor, protectedPath);
+        assertNoSidecarsOrMarker(path);
+      } finally {
+        inspection.close();
+      }
+    }
+    assertProtectedPath(protectedPath);
+    assertNoSidecarsOrMarker(path);
+    const writableBefore = openDescriptors(protectedPath.databaseDescriptor);
     try {
-      const Immutable = loadImmutableDatabaseConstructor();
-      inspection = new Immutable(`${pathToFileURL(path).href}?immutable=1`, {
-        readOnly: true
-      });
+      database = new Database(path, { fileMustExist: true });
     } catch {
-      closeSync(protectedPath.parentDescriptor);
-      return fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+      return fail("GATEWAY_DATABASE_INVALID");
     }
-    try {
-      const descriptor = newConnectionDescriptor(before, protectedPath.databaseIdentity);
-      assertProtectedPath(protectedPath);
-      assertNoSidecarsOrMarker(path);
-      fstatSync(descriptor);
-      hooks.checkpoint?.("afterReadonlyOpen");
-      inspectSchema(
-        inspection,
-        resolved.publicIntent,
-        resolved.effectiveIntent,
-        resolved.migrationLimit
-      );
-      assertProtectedPath(protectedPath);
-      assertNoSidecarsOrMarker(path);
-      hooks.checkpoint?.("afterReadonlyValidation");
-    } catch (error) {
-      closeSync(protectedPath.parentDescriptor);
-      throw error;
-    } finally {
-      inspection.close();
-    }
-  }
-  assertProtectedPath(protectedPath);
-  assertNoSidecarsOrMarker(path);
-  const writableBefore = openDescriptors(protectedPath.databaseIdentity);
-  let database: Database.Database;
-  try {
-    database = new Database(path, { fileMustExist: true });
-  } catch {
-    closeSync(protectedPath.parentDescriptor);
-    return fail("GATEWAY_DATABASE_INVALID");
-  }
-  try {
-    const descriptor = newConnectionDescriptor(writableBefore, protectedPath.databaseIdentity);
+    const descriptor = newConnectionDescriptor(
+      writableBefore,
+      protectedPath.databaseDescriptor
+    );
     const closeDatabase = database.close.bind(database);
     const assertBound = () => {
-      assertProtectedPath(protectedPath);
-      const connection = fstatSync(descriptor);
-      if (!connection.isFile() || !sameIdentity(connection, protectedPath.databaseIdentity)) {
-        fail("GATEWAY_DATABASE_INVALID");
-      }
+      assertConnectionBound(descriptor, protectedPath);
     };
     assertBound();
     hooks.checkpoint?.("afterWritableOpen");
-    return {
-      database,
-      intent: resolved.publicIntent,
-      effectiveIntent: resolved.effectiveIntent,
-      migrationLimit: resolved.migrationLimit,
-      assertBound,
-      close: () => {
+    assertBound();
+    const leasedDatabase = database;
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      try {
+        closeDatabase();
+      } finally {
         try {
-          closeDatabase();
+          closeSync(protectedPath.databaseDescriptor);
         } finally {
           closeSync(protectedPath.parentDescriptor);
         }
       }
     };
+    database = undefined;
+    return {
+      database: leasedDatabase,
+      intent: resolved.publicIntent,
+      effectiveIntent: resolved.effectiveIntent,
+      migrationLimit: resolved.migrationLimit,
+      assertBound,
+      close
+    };
   } catch (error) {
-    database.close();
-    closeSync(protectedPath.parentDescriptor);
+    try {
+      if (database !== undefined) database.close();
+    } finally {
+      try {
+        closeSync(protectedPath.databaseDescriptor);
+      } finally {
+        closeSync(protectedPath.parentDescriptor);
+      }
+    }
     throw error;
   }
 }

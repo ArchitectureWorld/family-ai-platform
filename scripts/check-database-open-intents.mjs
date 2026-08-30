@@ -53,7 +53,9 @@ const sourceFiles = [
   ...filesUnder(join(root, "apps/gateway/test"))
 ];
 const failures = [];
-let calls = 0;
+const callerPaths = new Set();
+let callSites = 0;
+let productionTestIntentCalls = 0;
 for (const path of sourceFiles) {
   const source = ts.createSourceFile(
     path,
@@ -67,16 +69,16 @@ for (const path of sourceFiles) {
       && ts.isIdentifier(node.expression)
       && node.expression.text === "openGatewayDatabase"
     ) {
-      calls += 1;
+      callSites += 1;
+      callerPaths.add(path);
       const intent = node.arguments[1] && intentFrom(node.arguments[1]);
       const appRequest = relative(root, path) === "apps/gateway/src/app.ts"
         && node.arguments[1]?.getText(source) === "options.databaseOpenRequest";
       if ((!intent || !allowedIntents.has(intent)) && !appRequest) {
         failures.push(`${relative(root, path)}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}:MISSING_INTENT`);
-      } else if (
-        !path.includes("/test/")
-        && intent === "test-create-or-existing"
-      ) {
+      }
+      if (!path.includes("/test/") && intent === "test-create-or-existing") {
+        productionTestIntentCalls += 1;
         failures.push(`${relative(root, path)}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}:TEST_INTENT_IN_PRODUCTION`);
       }
     }
@@ -86,10 +88,13 @@ for (const path of sourceFiles) {
 }
 
 const checkerPath = join(root, "scripts/check-database-open-intents.mjs");
+let scriptDirectCalls = 0;
 for (const path of filesUnder(join(root, "scripts"))) {
   if (path === checkerPath) continue;
   const source = readFileSync(path, "utf8");
-  if (/\bopenGatewayDatabase\s*\(/u.test(source)) {
+  const directCalls = [...source.matchAll(/\bopenGatewayDatabase\s*\(/gu)].length;
+  scriptDirectCalls += directCalls;
+  if (directCalls > 0) {
     failures.push(`${relative(root, path)}:DIRECT_DATABASE_OPEN`);
   }
   if (/\btest-create-or-existing\b/u.test(source)) {
@@ -101,4 +106,8 @@ if (failures.length > 0) {
   process.stderr.write(`DATABASE_OPEN_INTENTS_INVALID\n${failures.join("\n")}\n`);
   process.exit(1);
 }
-process.stdout.write(`DATABASE_OPEN_INTENTS_OK files=${sourceFiles.length} calls=${calls}\n`);
+process.stdout.write(
+  `DATABASE_OPEN_INTENTS_OK callerFiles=${callerPaths.size} callSites=${callSites} `
+    + `productionTestIntentCalls=${productionTestIntentCalls} `
+    + `scriptDirectCalls=${scriptDirectCalls}\n`
+);
