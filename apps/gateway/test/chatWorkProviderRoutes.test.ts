@@ -426,7 +426,7 @@ describe("Chat Work Provider HTTP flow", () => {
     expect(recovering.calls[4]?.externalSessionRef).toBe(
       "external-session:recovering-2"
     );
-  }, 20_000);
+  });
 
   it("lets an authorized in-flight Turn commit after unmount and blocks the next send", async () => {
     await app.close();
