@@ -180,17 +180,28 @@ function protectedDatabase(state: Stats, uid: number, gid: number): boolean {
     && (state.mode & 0o777) === 0o600;
 }
 
-function assertNoSidecarsOrMarker(path: string): void {
+function assertNoSidecars(path: string): void {
   const parent = dirname(path);
   const file = basename(path);
   const forbidden = new Set([
     `${file}-wal`,
     `${file}-shm`,
-    `${file}-journal`,
-    `.${file}.wal-recovery`
+    `${file}-journal`
   ]);
   try {
     if (readdirSync(parent).some((name) => forbidden.has(name))) {
+      fail("GATEWAY_DATABASE_INVALID");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "GATEWAY_DATABASE_INVALID") throw error;
+    fail("GATEWAY_DATABASE_INVALID");
+  }
+}
+
+function assertNoSidecarsOrMarker(path: string): void {
+  assertNoSidecars(path);
+  try {
+    if (readdirSync(dirname(path)).includes(`.${basename(path)}.wal-recovery`)) {
       fail("GATEWAY_DATABASE_INVALID");
     }
   } catch (error) {
@@ -534,6 +545,114 @@ function inspectSchema(
     if (error instanceof Error && error.message === "GATEWAY_DATABASE_SCHEMA_INVALID") throw error;
     fail("GATEWAY_DATABASE_SCHEMA_INVALID");
   }
+}
+
+export interface ImmutableGatewayV15ValidationInput {
+  databasePath: string;
+  parentProofFd: number;
+  databaseProofFd: number;
+  expectedParentIdentity: { dev: bigint; ino: bigint };
+  expectedDatabaseIdentity: { dev: bigint; ino: bigint };
+}
+
+export interface ImmutableGatewayV15ValidatorTestHooks {
+  connectionDescriptor?: (descriptor: number) => void;
+}
+
+function validateImmutableGatewayV15DatabaseWithHooks(
+  input: ImmutableGatewayV15ValidationInput,
+  hooks: ImmutableGatewayV15ValidatorTestHooks
+): void {
+  if (
+    !isAbsolute(input.databasePath)
+    || input.databasePath === "/"
+    || resolve(input.databasePath) !== input.databasePath
+    || dirname(input.databasePath) === input.databasePath
+  ) {
+    return fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+  }
+  const protectedPath: ProtectedPath = {
+    path: input.databasePath,
+    parentPath: dirname(input.databasePath),
+    parentDescriptor: input.parentProofFd,
+    databaseDescriptor: input.databaseProofFd,
+    expectedParentUid: GATEWAY_APPLICATION_UID,
+    expectedParentGid: GATEWAY_APPLICATION_GID,
+    expectedDatabaseUid: GATEWAY_APPLICATION_UID,
+    expectedDatabaseGid: GATEWAY_APPLICATION_GID
+  };
+  try {
+    const parent = fstatSync(input.parentProofFd, { bigint: true });
+    const database = fstatSync(input.databaseProofFd, { bigint: true });
+    if (
+      parent.dev !== input.expectedParentIdentity.dev
+      || parent.ino !== input.expectedParentIdentity.ino
+      || database.dev !== input.expectedDatabaseIdentity.dev
+      || database.ino !== input.expectedDatabaseIdentity.ino
+    ) {
+      fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+    }
+    assertProtectedPath(protectedPath);
+    assertNoSidecars(input.databasePath);
+    const before = openDescriptors(input.databaseProofFd);
+    const Immutable = loadImmutableDatabaseConstructor();
+    const inspection = new Immutable(
+      `${pathToFileURL(input.databasePath).href}?immutable=1`,
+      { readOnly: true }
+    );
+    let connectionDescriptor: number | undefined;
+    try {
+      connectionDescriptor = newConnectionDescriptor(before, input.databaseProofFd);
+      assertConnectionBound(connectionDescriptor, protectedPath);
+      hooks.connectionDescriptor?.(connectionDescriptor);
+      inspectSchema(inspection, "provision-existing", "provision-existing", 15);
+      assertConnectionBound(connectionDescriptor, protectedPath);
+      assertNoSidecars(input.databasePath);
+    } finally {
+      inspection.close();
+    }
+    if (connectionDescriptor === undefined) fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+    try {
+      fstatSync(connectionDescriptor);
+      fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+    } catch (error) {
+      if (
+        error instanceof Error
+        && error.message === "GATEWAY_DATABASE_SCHEMA_INVALID"
+      ) {
+        throw error;
+      }
+    }
+    const parentAfter = fstatSync(input.parentProofFd, { bigint: true });
+    const databaseAfter = fstatSync(input.databaseProofFd, { bigint: true });
+    if (
+      parentAfter.dev !== input.expectedParentIdentity.dev
+      || parentAfter.ino !== input.expectedParentIdentity.ino
+      || databaseAfter.dev !== input.expectedDatabaseIdentity.dev
+      || databaseAfter.ino !== input.expectedDatabaseIdentity.ino
+    ) {
+      fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+    }
+    assertProtectedPath(protectedPath);
+    assertNoSidecars(input.databasePath);
+  } catch (error) {
+    if (error instanceof Error && error.message === "GATEWAY_DATABASE_SCHEMA_INVALID") throw error;
+    fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+  }
+}
+
+export function validateImmutableGatewayV15Database(
+  input: ImmutableGatewayV15ValidationInput
+): void {
+  validateImmutableGatewayV15DatabaseWithHooks(input, {});
+}
+
+export function validateImmutableGatewayV15DatabaseForTest(
+  input: ImmutableGatewayV15ValidationInput,
+  hooks: ImmutableGatewayV15ValidatorTestHooks
+): void {
+  if (process.env.NODE_ENV !== "test") fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+  validateImmutableGatewayV15DatabaseWithHooks(input, hooks);
 }
 
 export function openSecureDatabaseFile(
