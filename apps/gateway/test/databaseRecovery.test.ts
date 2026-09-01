@@ -2,6 +2,7 @@ import {
   chmodSync,
   closeSync,
   constants,
+  cpSync,
   existsSync,
   fstatSync,
   mkdirSync,
@@ -15,6 +16,7 @@ import {
   truncateSync,
   writeFileSync
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -140,6 +142,12 @@ describe("offline Gateway database recovery engine", () => {
       databasePath,
       lockDev: identity.dev,
       lockIno: identity.ino,
+      assertHeld: () => {
+        const current = fstatSync(lockFd, { bigint: true });
+        if (current.dev !== identity.dev || current.ino !== identity.ino) {
+          throw new Error("TEST_LOCK_NOT_HELD");
+        }
+      },
       close: () => closeSync(lockFd)
     });
   };
@@ -208,6 +216,46 @@ describe("offline Gateway database recovery engine", () => {
     timeout: 30_000
   });
 
+  const cloneCompletedProof = (
+    databasePath: string,
+    sourceOperationId: string,
+    destinationOperationId: string
+  ): void => {
+    const completedRoot = join(directory, `.${basename(databasePath)}.wal-recovery-completed`);
+    const source = join(completedRoot, sourceOperationId);
+    const destination = join(completedRoot, destinationOperationId);
+    cpSync(source, destination, { recursive: true, errorOnExist: true, force: false });
+    chmodSync(destination, 0o700);
+    const workspace = statSync(destination, { bigint: true });
+    const receipts = join(destination, "receipts");
+    let previousHash: string | null = null;
+    const replaceOperationId = (value: unknown): unknown => {
+      if (typeof value === "string") return value.replaceAll(sourceOperationId, destinationOperationId);
+      if (Array.isArray(value)) return value.map(replaceOperationId);
+      if (value === null || typeof value !== "object") return value;
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+        .map(([key, child]) => [key, replaceOperationId(child)]));
+    };
+    for (const name of readdirSync(receipts).toSorted()) {
+      const path = join(receipts, name);
+      const receipt = replaceOperationId(JSON.parse(readFileSync(path, "utf8"))) as Record<string, unknown>;
+      receipt.prevHash = previousHash;
+      receipt.operationId = destinationOperationId;
+      receipt.workspace = {
+        logicalBasename: "work",
+        dev: workspace.dev.toString(),
+        ino: workspace.ino.toString(),
+        uid: workspace.uid.toString(),
+        gid: workspace.gid.toString(),
+        mode: (workspace.mode & 0o777n).toString(),
+        initialCtimeNs: workspace.ctimeNs.toString()
+      };
+      const bytes = JSON.stringify(receipt);
+      writeFileSync(path, bytes, "utf8");
+      previousHash = createHash("sha256").update(bytes).digest("hex");
+    }
+  };
+
   it("exports one complete stage authority with the retry predecessor split", () => {
     expect(RECOVERY_STAGE_DEFINITIONS.map(({ name }) => name)).toEqual(EXPECTED_STAGE_NAMES);
     expect(new Set(RECOVERY_STAGE_DEFINITIONS.map(({ name }) => name)).size).toBe(77);
@@ -235,6 +283,12 @@ describe("offline Gateway database recovery engine", () => {
         predecessor: invalidPredecessor.name
       } as never)).toThrow("GATEWAY_RECOVERY_INVALID");
     }
+  });
+
+  it("keeps fixed owned layouts inside the stage-definition authority", () => {
+    const source = readFileSync(join(import.meta.dirname, "../src/databaseRecovery.ts"), "utf8");
+
+    expect(source).not.toContain("MAIN_STAGE_LAYOUTS");
   });
 
   it("keeps both bounded snapshot stages self-resumable only after their exact branch entry", () => {
@@ -277,6 +331,19 @@ describe("offline Gateway database recovery engine", () => {
     } as never, { action: "status", databasePath }, dependencies))
       .toThrow("GATEWAY_RECOVERY_LOCK_INVALID");
   });
+
+  it("rejects a claimed test lease after its held descriptor becomes EBADF", async () => {
+    const databasePath = prepareV15();
+    await crashWalWriter(databasePath);
+    const lease = claimedLease(databasePath);
+    lease.close();
+
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "recover", databasePath },
+      dependencies
+    )).toThrow("GATEWAY_RECOVERY_LOCK_INVALID");
+  }, 30_000);
 
   it("reports a canonical marker-only root as initializing without closing the lease", () => {
     const databasePath = prepareV15();
@@ -523,6 +590,26 @@ describe("offline Gateway database recovery engine", () => {
     30_000
   );
 
+  it("rejects multiple sealed completed proofs matching the same current public database", async () => {
+    const databasePath = prepareV15();
+    await crashWalWriter(databasePath);
+    const lease = claimedLease(databasePath);
+    const firstOperationId = "000102030405060708090a0b0c0d0e0f";
+    const secondOperationId = "101112131415161718191a1b1c1d1e1f";
+    expect(runGatewayRecoveryWithLease(
+      lease,
+      { action: "recover", databasePath },
+      dependencies
+    )).toEqual({ kind: "execution", status: "recovered", operationId: firstOperationId });
+    cloneCompletedProof(databasePath, firstOperationId, secondOperationId);
+
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "status", databasePath },
+      dependencies
+    )).toThrow("GATEWAY_RECOVERY_INVALID");
+  }, 30_000);
+
   it("supports a second completed recovery with a fresh operation id", async () => {
     const databasePath = prepareV15();
     await crashWalWriter(databasePath);
@@ -551,7 +638,89 @@ describe("offline Gateway database recovery engine", () => {
     )).toEqual({ kind: "execution", status: "recovered", operationId: secondOperationId });
     expect(readdirSync(join(directory, ".gateway.sqlite.wal-recovery-completed")).toSorted())
       .toEqual([firstOperationId, secondOperationId]);
+    expect(runGatewayRecoveryWithLease(
+      lease,
+      { action: "status", databasePath },
+      dependencies
+    )).toEqual({
+      kind: "status",
+      state: "completed",
+      operationId: secondOperationId,
+      stage: "marker-removed"
+    });
+    expect(runGatewayRecoveryWithLease(
+      lease,
+      { action: "resume", databasePath, operationId: secondOperationId },
+      dependencies
+    )).toEqual({ kind: "execution", status: "recovered", operationId: secondOperationId });
   }, 60_000);
+
+  it.each([0, 1, 2, 3, 4, 5] as const)(
+    "keeps a marker-only fixed empty bootstrap prefix of %i directories read-only",
+    (prefixLength) => {
+      const databasePath = prepareV15();
+      const activeRoot = join(directory, `.${basename(databasePath)}.wal-recovery`);
+      const work = join(activeRoot, "work");
+      const operationId = "000102030405060708090a0b0c0d0e0f";
+      mkdirSync(activeRoot, { mode: 0o700 });
+      writeFileSync(join(activeRoot, "marker.json"), JSON.stringify({
+        version: 1,
+        operationId,
+        databaseBasename: "gateway.sqlite",
+        workspaceBasename: "work",
+        createdAt: "2026-08-31T00:00:00.000Z"
+      }), { mode: 0o600, flag: "wx" });
+      mkdirSync(work, { mode: 0o700 });
+      const order = ["receipts", "original", "candidate", "quarantine", "candidate-quarantine"];
+      for (const name of order.slice(0, prefixLength)) mkdirSync(join(work, name), { mode: 0o700 });
+      const before = readdirSync(work).toSorted();
+
+      expect(runGatewayRecoveryWithLease(
+        claimedLease(databasePath),
+        { action: "status", databasePath },
+        dependencies
+      )).toEqual({ kind: "status", state: "initializing", operationId });
+      expect(readdirSync(work).toSorted()).toEqual(before);
+    }
+  );
+
+  it.each(["out-of-order", "nonempty", "extra"] as const)(
+    "rejects a marker bootstrap %s without subsequent mutation",
+    (kind) => {
+      const databasePath = prepareV15();
+      const activeRoot = join(directory, `.${basename(databasePath)}.wal-recovery`);
+      const work = join(activeRoot, "work");
+      const operationId = "000102030405060708090a0b0c0d0e0f";
+      mkdirSync(activeRoot, { mode: 0o700 });
+      writeFileSync(join(activeRoot, "marker.json"), JSON.stringify({
+        version: 1,
+        operationId,
+        databaseBasename: "gateway.sqlite",
+        workspaceBasename: "work",
+        createdAt: "2026-08-31T00:00:00.000Z"
+      }), { mode: 0o600, flag: "wx" });
+      mkdirSync(work, { mode: 0o700 });
+      if (kind === "out-of-order") {
+        mkdirSync(join(work, "candidate"), { mode: 0o700 });
+      } else if (kind === "nonempty") {
+        mkdirSync(join(work, "receipts"), { mode: 0o700 });
+        writeFileSync(join(work, "receipts", "unknown"), "sentinel", { mode: 0o600 });
+      } else {
+        mkdirSync(join(work, "extra"), { mode: 0o700 });
+      }
+      const before = readdirSync(work).toSorted();
+
+      expect(() => runGatewayRecoveryWithLease(
+        claimedLease(databasePath),
+        { action: "status", databasePath },
+        dependencies
+      )).toThrow("GATEWAY_RECOVERY_INVALID");
+      expect(readdirSync(work).toSorted()).toEqual(before);
+      if (kind === "nonempty") {
+        expect(readFileSync(join(work, "receipts", "unknown"), "utf8")).toBe("sentinel");
+      }
+    }
+  );
 
   it("resumes from the durable marker when the first process dies before work creation", async () => {
     const databasePath = prepareV15();
@@ -623,6 +792,107 @@ describe("offline Gateway database recovery engine", () => {
     )).toEqual({ kind: "execution", status: "recovered", operationId });
   }, 30_000);
 
+  it("preserves exact captured mtime on immutable snapshot and candidate copies", async () => {
+    const databasePath = prepareV15();
+    await crashWalWriter(databasePath);
+    const lease = claimedLease(databasePath);
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "recover", databasePath },
+      {
+        ...dependencies,
+        fault: (boundary) => {
+          if (boundary === "receipt:snapshot-complete") throw new Error("SIMULATED_SIGKILL");
+        }
+      }
+    )).toThrow("SIMULATED_SIGKILL");
+    const receipts = join(directory, ".gateway.sqlite.wal-recovery", "work", "receipts");
+    const receipt = JSON.parse(readFileSync(
+      join(receipts, readdirSync(receipts).filter((name) => name.endsWith(".json")).toSorted().at(-1)!),
+      "utf8"
+    )) as {
+      original: Record<"main" | "wal" | "shm", { mtimeNs: string }>;
+      owned: {
+        snapshot: Record<"main" | "wal" | "shm", { mtimeNs: string }>;
+        candidate: Record<"main" | "wal" | "shm", { mtimeNs: string }>;
+      };
+    };
+    for (const piece of ["main", "wal", "shm"] as const) {
+      expect(receipt.owned.snapshot[piece].mtimeNs).toBe(receipt.original[piece].mtimeNs);
+      expect(receipt.owned.candidate[piece].mtimeNs).toBe(receipt.original[piece].mtimeNs);
+    }
+  }, 30_000);
+
+  it.each([
+    ["snapshot-complete", "non-null-before-validation"],
+    ["candidate-validated", "null-after-validation"],
+    ["candidate-validated", "wrong-hash-after-validation"]
+  ] as const)("rejects %s candidateSha rule %s", async (stage, mutation) => {
+    const databasePath = prepareV15();
+    await crashWalWriter(databasePath);
+    const lease = claimedLease(databasePath);
+    const operationId = "000102030405060708090a0b0c0d0e0f";
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "recover", databasePath },
+      {
+        ...dependencies,
+        fault: (boundary) => {
+          if (boundary === `receipt:${stage}`) throw new Error("SIMULATED_SIGKILL");
+        }
+      }
+    )).toThrow("SIMULATED_SIGKILL");
+    const receipts = join(directory, ".gateway.sqlite.wal-recovery", "work", "receipts");
+    const path = join(
+      receipts,
+      readdirSync(receipts).filter((name) => name.endsWith(".json")).toSorted().at(-1)!
+    );
+    const receipt = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    receipt.candidateSha256 = mutation === "null-after-validation"
+      ? null
+      : "a".repeat(64);
+    writeFileSync(path, JSON.stringify(receipt), "utf8");
+
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "status", databasePath, operationId },
+      dependencies
+    )).toThrow("GATEWAY_RECOVERY_INVALID");
+  }, 30_000);
+
+  it("rejects a post-validation receipt that clears the candidate hash", async () => {
+    const databasePath = prepareV15();
+    await crashWalWriter(databasePath);
+    const lease = claimedLease(databasePath);
+    const operationId = "000102030405060708090a0b0c0d0e0f";
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "recover", databasePath },
+      {
+        ...dependencies,
+        fault: (boundary) => {
+          if (boundary === "receipt:quarantine-wal-intent") {
+            throw new Error("SIMULATED_SIGKILL");
+          }
+        }
+      }
+    )).toThrow("SIMULATED_SIGKILL");
+    const receipts = join(directory, ".gateway.sqlite.wal-recovery", "work", "receipts");
+    const path = join(
+      receipts,
+      readdirSync(receipts).filter((name) => name.endsWith(".json")).toSorted().at(-1)!
+    );
+    const receipt = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    receipt.candidateSha256 = null;
+    writeFileSync(path, JSON.stringify(receipt), "utf8");
+
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "status", databasePath, operationId },
+      dependencies
+    )).toThrow("GATEWAY_RECOVERY_INVALID");
+  }, 30_000);
+
   it("uses a real claimed fd3 lease and two fresh recovery children after SIGKILL", async () => {
     const databasePath = prepareV15();
     await crashWalWriter(databasePath);
@@ -658,6 +928,92 @@ describe("offline Gateway database recovery engine", () => {
       operationId
     });
   }, 60_000);
+
+  it.each([
+    "snapshot-publish:original:wal",
+    "quarantine:wal",
+    "cleanup:cleanup-quarantine-wal-intent",
+    "archive:work",
+    "marker-unlinked",
+    "active-root-removed"
+  ] as const)(
+    "resumes twice after real child SIGKILL at post-action boundary %s",
+    async (killBoundary) => {
+      const databasePath = prepareV15();
+      await crashWalWriter(databasePath);
+      const operationId = "000102030405060708090a0b0c0d0e0f";
+      const killed = runLockedRecoveryChild({
+        databasePath,
+        action: "recover",
+        killBoundary
+      });
+      expect(killed.status).toBeNull();
+      expect(killed.signal).toBe("SIGKILL");
+      expect(killed.stdout).toBe("");
+      expect(killed.stderr).toBe("");
+
+      for (let index = 0; index < 2; index += 1) {
+        const resumed = runLockedRecoveryChild({
+          databasePath,
+          action: "resume",
+          operationId
+        });
+        expect({
+          status: resumed.status,
+          signal: resumed.signal,
+          stdout: resumed.stdout,
+          stderr: resumed.stderr
+        }).toMatchObject({ status: 0, signal: null, stderr: "" });
+        expect(JSON.parse(resumed.stdout)).toEqual({
+          kind: "execution",
+          status: "recovered",
+          operationId
+        });
+      }
+    },
+    120_000
+  );
+
+  it.each([
+    "candidate-after-checkpoint",
+    "candidate-before-sidecar-unlink:wal",
+    "candidate-before-sidecar-unlink:shm"
+  ] as const)(
+    "strictly resets candidate O to C after real child SIGKILL at %s",
+    async (killBoundary) => {
+      const databasePath = prepareV15();
+      await crashWalWriter(databasePath);
+      const operationId = "000102030405060708090a0b0c0d0e0f";
+      const killed = runLockedRecoveryChild({
+        databasePath,
+        action: "recover",
+        killBoundary
+      });
+      expect(killed.status).toBeNull();
+      expect(killed.signal).toBe("SIGKILL");
+      expect(killed.stdout).toBe("");
+      expect(killed.stderr).toBe("");
+
+      for (let index = 0; index < 2; index += 1) {
+        const resumed = runLockedRecoveryChild({
+          databasePath,
+          action: "resume",
+          operationId
+        });
+        expect({
+          status: resumed.status,
+          signal: resumed.signal,
+          stderr: resumed.stderr
+        }).toMatchObject({ status: 0, signal: null, stderr: "" });
+        expect(JSON.parse(resumed.stdout)).toEqual({
+          kind: "execution",
+          status: "recovered",
+          operationId
+        });
+      }
+    },
+    120_000
+  );
 
   it.each([
     ["extra top-level key", (receipt: Record<string, unknown>) => {
@@ -1035,6 +1391,195 @@ describe("offline Gateway database recovery engine", () => {
       { action: "resume", databasePath, operationId },
       dependencies
     )).toEqual({ kind: "execution", status: "recovered", operationId });
+  }, 30_000);
+
+  it.each([
+    "quarantine-noreplace",
+    "publish-noreplace",
+    "quarantine-fsync"
+  ] as const)("rolls back a recover pre-cut %s fault through the shared driver", async (kind) => {
+    const databasePath = prepareV15();
+    await crashWalWriter(databasePath);
+    const lease = claimedLease(databasePath);
+    const operationId = "000102030405060708090a0b0c0d0e0f";
+    let injected = false;
+    const faulting: GatewayRecoveryDependencies = {
+      ...dependencies,
+      renameNoReplace: ({ sourcePath, destinationPath }) => {
+        if (!injected && (
+          (kind === "quarantine-noreplace" && destinationPath.includes("/quarantine/"))
+          || (kind === "publish-noreplace" && destinationPath === databasePath)
+        )) {
+          injected = true;
+          throw new Error("NOREPLACE_FAILED");
+        }
+        expect(statSync(destinationPath, { throwIfNoEntry: false })).toBeUndefined();
+        renameSync(sourcePath, destinationPath);
+      },
+      fault: (boundary) => {
+        if (!injected && kind === "quarantine-fsync" && boundary === "quarantine:wal") {
+          injected = true;
+          throw new Error("FSYNC_FAILED");
+        }
+      }
+    };
+
+    expect(runGatewayRecoveryWithLease(
+      lease,
+      { action: "recover", databasePath },
+      faulting
+    )).toEqual({ kind: "execution", status: "restored", operationId });
+    expect(runGatewayRecoveryWithLease(
+      lease,
+      { action: "resume", databasePath, operationId },
+      dependencies
+    )).toEqual({ kind: "execution", status: "restored", operationId });
+  }, 30_000);
+
+  it.each(["candidate-validation", "quarantine-noreplace"] as const)(
+    "rolls back a resume pre-cut %s fault through the shared driver",
+    async (kind) => {
+      const databasePath = prepareV15();
+      await crashWalWriter(databasePath);
+      const lease = claimedLease(databasePath);
+      const operationId = "000102030405060708090a0b0c0d0e0f";
+      const stopBoundary = kind === "candidate-validation"
+        ? "receipt:snapshot-complete"
+        : "receipt:quarantine-wal-intent";
+      expect(() => runGatewayRecoveryWithLease(
+        lease,
+        { action: "recover", databasePath },
+        {
+          ...dependencies,
+          fault: (boundary) => {
+            if (boundary === stopBoundary) throw new Error("SIMULATED_SIGKILL");
+          }
+        }
+      )).toThrow("SIMULATED_SIGKILL");
+      const faulting: GatewayRecoveryDependencies = kind === "candidate-validation"
+        ? {
+            ...dependencies,
+            validateImmutableV15: (input) => {
+              if (input.databasePath.includes("/candidate/")) throw new Error("CANDIDATE_INVALID");
+              validateImmutableGatewayV15Database(input);
+            }
+          }
+        : {
+            ...dependencies,
+            renameNoReplace: ({ sourcePath, destinationPath }) => {
+              if (destinationPath.includes("/quarantine/")) throw new Error("NOREPLACE_FAILED");
+              renameSync(sourcePath, destinationPath);
+            }
+          };
+
+      expect(runGatewayRecoveryWithLease(
+        lease,
+        { action: "resume", databasePath, operationId },
+        faulting
+      )).toEqual({ kind: "execution", status: "restored", operationId });
+    },
+    30_000
+  );
+
+  it("maps resume snapshot I/O to aborted through the shared driver", async () => {
+    const databasePath = prepareV15();
+    await crashWalWriter(databasePath);
+    const lease = claimedLease(databasePath);
+    const operationId = "000102030405060708090a0b0c0d0e0f";
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "recover", databasePath },
+      {
+        ...dependencies,
+        fault: (boundary) => {
+          if (boundary === "receipt:snapshot-intent") throw new Error("SIMULATED_SIGKILL");
+        }
+      }
+    )).toThrow("SIMULATED_SIGKILL");
+
+    expect(runGatewayRecoveryWithLease(
+      lease,
+      { action: "resume", databasePath, operationId },
+      {
+        ...dependencies,
+        fault: (boundary) => {
+          if (boundary === "snapshot-copy:original:wal") {
+            throw new Error("SNAPSHOT_IO_FAILED");
+          }
+        }
+      }
+    )).toEqual({ kind: "execution", status: "aborted", operationId });
+  }, 30_000);
+
+  it("rejects a rollback receipt whose source stage differs from its exact forward predecessor", async () => {
+    const databasePath = prepareV15();
+    await crashWalWriter(databasePath);
+    const lease = claimedLease(databasePath);
+    const operationId = "000102030405060708090a0b0c0d0e0f";
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "recover", databasePath },
+      {
+        ...dependencies,
+        renameNoReplace: ({ sourcePath, destinationPath }) => {
+          if (destinationPath.includes("/quarantine/")) {
+            throw new Error("NOREPLACE_FAILED");
+          }
+          renameSync(sourcePath, destinationPath);
+        },
+        fault: (boundary) => {
+          if (boundary === "receipt:rollback-intent") throw new Error("SIMULATED_SIGKILL");
+        }
+      }
+    )).toThrow("SIMULATED_SIGKILL");
+    const receipts = join(directory, ".gateway.sqlite.wal-recovery", "work", "receipts");
+    const path = join(
+      receipts,
+      readdirSync(receipts).filter((name) => name.endsWith("-rollback-intent.json")).at(-1)!
+    );
+    const receipt = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    receipt.rollbackFromStage = "public-verified";
+    writeFileSync(path, JSON.stringify(receipt), "utf8");
+
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "status", databasePath, operationId },
+      dependencies
+    )).toThrow("GATEWAY_RECOVERY_INVALID");
+  }, 30_000);
+
+  it("keeps resume post-cut faults blocked in the shared driver", async () => {
+    const databasePath = prepareV15();
+    await crashWalWriter(databasePath);
+    const lease = claimedLease(databasePath);
+    const operationId = "000102030405060708090a0b0c0d0e0f";
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "recover", databasePath },
+      {
+        ...dependencies,
+        fault: (boundary) => {
+          if (boundary === "receipt:cleanup-quarantine-wal-intent") {
+            throw new Error("SIMULATED_SIGKILL");
+          }
+        }
+      }
+    )).toThrow("SIMULATED_SIGKILL");
+    const blocked = runGatewayRecoveryWithLease(
+      lease,
+      { action: "resume", databasePath, operationId },
+      {
+        ...dependencies,
+        fault: (boundary) => {
+          if (boundary === "cleanup-before-unlink:cleanup-quarantine-wal-intent") {
+            const error = new Error("ENOSPC") as NodeJS.ErrnoException;
+            error.code = "ENOSPC";
+            throw error;
+          }
+        }
+      }
+    );
+    expect(blocked).toEqual({ kind: "execution", status: "blocked", operationId });
   }, 30_000);
 
   it.each([

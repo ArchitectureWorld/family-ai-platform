@@ -15,6 +15,7 @@ export type GatewayDatabaseLockRole = "gateway" | "migrate" | "provision";
 export interface GatewayDatabaseLockLease {
   lockDev: bigint;
   lockIno: bigint;
+  assertHeld: () => void;
   close: () => void;
 }
 
@@ -172,6 +173,17 @@ function requireInheritedGatewayDatabaseLockWithIdentity(input: {
     return {
       lockDev: inherited.dev,
       lockIno: inherited.ino,
+      assertHeld: () => {
+        let current: BigIntStats;
+        try {
+          current = fstatSync(LOCK_DESCRIPTOR, { bigint: true });
+        } catch {
+          fail();
+        }
+        if (!protectedLock(current, identity) || current.dev !== inherited.dev || current.ino !== inherited.ino) {
+          fail();
+        }
+      },
       close: () => {
         if (closed) return;
         closed = true;
