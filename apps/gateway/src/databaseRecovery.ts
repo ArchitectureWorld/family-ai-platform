@@ -2252,6 +2252,36 @@ const inspectWorkBootstrap = (paths: RecoveryPaths): {
       return fail("GATEWAY_RECOVERY_INVALID");
     }
   }
+  if (entries.length === PRIVATE_DIRECTORIES.length) {
+    const receipts = readdirSync(paths.receipts);
+    if (receipts.length === 0) {
+      if (
+        readdirSync(paths.quarantine).length !== 0
+        || readdirSync(paths.candidateQuarantine).length !== 0
+      ) {
+        return fail("GATEWAY_RECOVERY_INVALID");
+      }
+      const marker = readMarker(paths.databasePath);
+      if (marker === undefined) return fail("GATEWAY_RECOVERY_INVALID");
+      for (const directory of [paths.original, paths.candidate]) {
+        const names = readdirSync(directory).toSorted();
+        const expected = ["wal", "shm", "main"].slice(0, names.length)
+          .map((piece) => tempPath(directory, marker.databaseBasename, marker.operationId, piece as Piece))
+          .map((path) => basename(path))
+          .toSorted();
+        if (
+          names.length > 3
+          || JSON.stringify(names) !== JSON.stringify(expected)
+          || names.some((name) => {
+            const state = lstatSync(join(directory, name), { bigint: true });
+            return !state.isFile() || state.isSymbolicLink() || state.size !== 0n;
+          })
+        ) {
+          return fail("GATEWAY_RECOVERY_INVALID");
+        }
+      }
+    }
+  }
   return {
     workExists: true,
     prefixLength: entries.length,

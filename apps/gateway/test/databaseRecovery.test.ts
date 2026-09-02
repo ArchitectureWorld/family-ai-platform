@@ -722,6 +722,38 @@ describe("offline Gateway database recovery engine", () => {
     }
   );
 
+  it.each(["original", "candidate", "quarantine", "candidate-quarantine"] as const)(
+    "rejects complete bootstrap work with an unknown nonempty %s directory without mutation",
+    async (dirtyDirectory) => {
+      const databasePath = prepareV15();
+      await crashWalWriter(databasePath);
+      const activeRoot = join(directory, `.${basename(databasePath)}.wal-recovery`);
+      const work = join(activeRoot, "work");
+      const operationId = "000102030405060708090a0b0c0d0e0f";
+      mkdirSync(activeRoot, { mode: 0o700 });
+      writeFileSync(join(activeRoot, "marker.json"), JSON.stringify({
+        version: 1,
+        operationId,
+        databaseBasename: "gateway.sqlite",
+        workspaceBasename: "work",
+        createdAt: "2026-08-31T00:00:00.000Z"
+      }), { mode: 0o600, flag: "wx" });
+      mkdirSync(work, { mode: 0o700 });
+      for (const name of ["receipts", "original", "candidate", "quarantine", "candidate-quarantine"]) {
+        mkdirSync(join(work, name), { mode: 0o700 });
+      }
+      const sentinel = join(work, dirtyDirectory, "unknown");
+      writeFileSync(sentinel, "sentinel", { mode: 0o600 });
+
+      expect(() => runGatewayRecoveryWithLease(
+        claimedLease(databasePath),
+        { action: "status", databasePath },
+        dependencies
+      )).toThrow("GATEWAY_RECOVERY_INVALID");
+      expect(readFileSync(sentinel, "utf8")).toBe("sentinel");
+    }
+  );
+
   it("resumes from the durable marker when the first process dies before work creation", async () => {
     const databasePath = prepareV15();
     await crashWalWriter(databasePath);
