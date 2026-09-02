@@ -8,6 +8,7 @@ import {
   openSync,
   readdirSync,
   realpathSync,
+  type BigIntStats,
   type Stats
 } from "node:fs";
 import { createRequire } from "node:module";
@@ -557,6 +558,155 @@ export interface ImmutableGatewayV15ValidationInput {
 
 export interface ImmutableGatewayV15ValidatorTestHooks {
   connectionDescriptor?: (descriptor: number) => void;
+  afterConnectionClose?: (descriptor: number) => void;
+}
+
+interface ImmutableValidatorProtectedPath {
+  path: string;
+  parentPath: string;
+  parentDescriptor: number;
+  databaseDescriptor: number;
+  expectedParentIdentity: ImmutableGatewayV15ValidationInput["expectedParentIdentity"];
+  expectedDatabaseIdentity: ImmutableGatewayV15ValidationInput["expectedDatabaseIdentity"];
+}
+
+function sameBigIntIdentity(
+  left: Pick<BigIntStats, "dev" | "ino">,
+  right: { dev: bigint; ino: bigint }
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function protectedImmutableValidatorParent(state: BigIntStats): boolean {
+  return state.isDirectory()
+    && state.uid === BigInt(GATEWAY_APPLICATION_UID)
+    && state.gid === BigInt(GATEWAY_APPLICATION_GID)
+    && (state.mode & 0o777n) === 0o700n;
+}
+
+function protectedImmutableValidatorDatabase(state: BigIntStats): boolean {
+  return state.isFile()
+    && !state.isSymbolicLink()
+    && state.uid === BigInt(GATEWAY_APPLICATION_UID)
+    && state.gid === BigInt(GATEWAY_APPLICATION_GID)
+    && state.nlink === 1n
+    && (state.mode & 0o777n) === 0o600n;
+}
+
+function assertImmutableValidatorPathAndProof(
+  protectedPath: ImmutableValidatorProtectedPath
+): void {
+  try {
+    const parentProof = fstatSync(protectedPath.parentDescriptor, { bigint: true });
+    const parentPath = lstatSync(protectedPath.parentPath, { bigint: true });
+    const databaseProof = fstatSync(protectedPath.databaseDescriptor, { bigint: true });
+    const databasePath = lstatSync(protectedPath.path, { bigint: true });
+    if (
+      realpathSync(protectedPath.parentPath) !== protectedPath.parentPath
+      || !sameBigIntIdentity(parentProof, protectedPath.expectedParentIdentity)
+      || !sameBigIntIdentity(parentPath, protectedPath.expectedParentIdentity)
+      || !protectedImmutableValidatorParent(parentProof)
+      || !protectedImmutableValidatorParent(parentPath)
+      || !sameBigIntIdentity(databaseProof, protectedPath.expectedDatabaseIdentity)
+      || !sameBigIntIdentity(databasePath, protectedPath.expectedDatabaseIdentity)
+      || !protectedImmutableValidatorDatabase(databaseProof)
+      || !protectedImmutableValidatorDatabase(databasePath)
+    ) {
+      fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "GATEWAY_DATABASE_SCHEMA_INVALID") {
+      throw error;
+    }
+    fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+  }
+}
+
+function immutableValidatorOpenDescriptors(proofDescriptor: number): Set<number> {
+  const proof = fstatSync(proofDescriptor, { bigint: true });
+  const descriptors = new Set<number>();
+  for (const name of readdirSync("/proc/self/fd")) {
+    if (!/^\d+$/u.test(name)) continue;
+    const descriptor = Number(name);
+    try {
+      const state = fstatSync(descriptor, { bigint: true });
+      if (state.isFile() && sameBigIntIdentity(state, proof)) {
+        descriptors.add(descriptor);
+      }
+    } catch {
+      // The proc enumeration descriptor may disappear before inspection.
+    }
+  }
+  return descriptors;
+}
+
+function newImmutableValidatorConnectionDescriptor(
+  before: ReadonlySet<number>,
+  protectedPath: ImmutableValidatorProtectedPath
+): number {
+  const candidates = [...immutableValidatorOpenDescriptors(protectedPath.databaseDescriptor)]
+    .filter((candidate) => !before.has(candidate));
+  if (candidates.length !== 1) return fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+  const descriptor = candidates[0]!;
+  const connection = fstatSync(descriptor, { bigint: true });
+  const proof = fstatSync(protectedPath.databaseDescriptor, { bigint: true });
+  if (
+    !connection.isFile()
+    || !sameBigIntIdentity(connection, proof)
+    || !sameBigIntIdentity(connection, protectedPath.expectedDatabaseIdentity)
+  ) {
+    return fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+  }
+  return descriptor;
+}
+
+function assertImmutableValidatorConnectionBound(
+  descriptor: number,
+  protectedPath: ImmutableValidatorProtectedPath
+): void {
+  try {
+    assertImmutableValidatorPathAndProof(protectedPath);
+    const connection = fstatSync(descriptor, { bigint: true });
+    const proof = fstatSync(protectedPath.databaseDescriptor, { bigint: true });
+    if (
+      !connection.isFile()
+      || !sameBigIntIdentity(connection, proof)
+      || !sameBigIntIdentity(connection, protectedPath.expectedDatabaseIdentity)
+    ) {
+      fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "GATEWAY_DATABASE_SCHEMA_INVALID") {
+      throw error;
+    }
+    fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+  }
+}
+
+function assertImmutableValidatorConnectionClosed(
+  descriptor: number,
+  before: ReadonlySet<number>,
+  protectedPath: ImmutableValidatorProtectedPath
+): void {
+  try {
+    fstatSync(descriptor, { bigint: true });
+    fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+  } catch (error) {
+    if (error instanceof Error && error.message === "GATEWAY_DATABASE_SCHEMA_INVALID") {
+      throw error;
+    }
+    if ((error as NodeJS.ErrnoException).code !== "EBADF") {
+      fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+    }
+  }
+  assertImmutableValidatorPathAndProof(protectedPath);
+  const after = immutableValidatorOpenDescriptors(protectedPath.databaseDescriptor);
+  if (
+    after.size !== before.size
+    || [...before].some((candidate) => !after.has(candidate))
+  ) {
+    fail("GATEWAY_DATABASE_SCHEMA_INVALID");
+  }
 }
 
 function validateImmutableGatewayV15DatabaseWithHooks(
@@ -571,30 +721,18 @@ function validateImmutableGatewayV15DatabaseWithHooks(
   ) {
     return fail("GATEWAY_DATABASE_SCHEMA_INVALID");
   }
-  const protectedPath: ProtectedPath = {
+  const protectedPath: ImmutableValidatorProtectedPath = {
     path: input.databasePath,
     parentPath: dirname(input.databasePath),
     parentDescriptor: input.parentProofFd,
     databaseDescriptor: input.databaseProofFd,
-    expectedParentUid: GATEWAY_APPLICATION_UID,
-    expectedParentGid: GATEWAY_APPLICATION_GID,
-    expectedDatabaseUid: GATEWAY_APPLICATION_UID,
-    expectedDatabaseGid: GATEWAY_APPLICATION_GID
+    expectedParentIdentity: input.expectedParentIdentity,
+    expectedDatabaseIdentity: input.expectedDatabaseIdentity
   };
   try {
-    const parent = fstatSync(input.parentProofFd, { bigint: true });
-    const database = fstatSync(input.databaseProofFd, { bigint: true });
-    if (
-      parent.dev !== input.expectedParentIdentity.dev
-      || parent.ino !== input.expectedParentIdentity.ino
-      || database.dev !== input.expectedDatabaseIdentity.dev
-      || database.ino !== input.expectedDatabaseIdentity.ino
-    ) {
-      fail("GATEWAY_DATABASE_SCHEMA_INVALID");
-    }
-    assertProtectedPath(protectedPath);
+    assertImmutableValidatorPathAndProof(protectedPath);
     assertNoSidecars(input.databasePath);
-    const before = openDescriptors(input.databaseProofFd);
+    const before = immutableValidatorOpenDescriptors(input.databaseProofFd);
     const Immutable = loadImmutableDatabaseConstructor();
     const inspection = new Immutable(
       `${pathToFileURL(input.databasePath).href}?immutable=1`,
@@ -602,38 +740,18 @@ function validateImmutableGatewayV15DatabaseWithHooks(
     );
     let connectionDescriptor: number | undefined;
     try {
-      connectionDescriptor = newConnectionDescriptor(before, input.databaseProofFd);
-      assertConnectionBound(connectionDescriptor, protectedPath);
+      connectionDescriptor = newImmutableValidatorConnectionDescriptor(before, protectedPath);
+      assertImmutableValidatorConnectionBound(connectionDescriptor, protectedPath);
       hooks.connectionDescriptor?.(connectionDescriptor);
       inspectSchema(inspection, "provision-existing", "provision-existing", 15);
-      assertConnectionBound(connectionDescriptor, protectedPath);
+      assertImmutableValidatorConnectionBound(connectionDescriptor, protectedPath);
       assertNoSidecars(input.databasePath);
     } finally {
       inspection.close();
     }
     if (connectionDescriptor === undefined) fail("GATEWAY_DATABASE_SCHEMA_INVALID");
-    try {
-      fstatSync(connectionDescriptor);
-      fail("GATEWAY_DATABASE_SCHEMA_INVALID");
-    } catch (error) {
-      if (
-        error instanceof Error
-        && error.message === "GATEWAY_DATABASE_SCHEMA_INVALID"
-      ) {
-        throw error;
-      }
-    }
-    const parentAfter = fstatSync(input.parentProofFd, { bigint: true });
-    const databaseAfter = fstatSync(input.databaseProofFd, { bigint: true });
-    if (
-      parentAfter.dev !== input.expectedParentIdentity.dev
-      || parentAfter.ino !== input.expectedParentIdentity.ino
-      || databaseAfter.dev !== input.expectedDatabaseIdentity.dev
-      || databaseAfter.ino !== input.expectedDatabaseIdentity.ino
-    ) {
-      fail("GATEWAY_DATABASE_SCHEMA_INVALID");
-    }
-    assertProtectedPath(protectedPath);
+    hooks.afterConnectionClose?.(connectionDescriptor);
+    assertImmutableValidatorConnectionClosed(connectionDescriptor, before, protectedPath);
     assertNoSidecars(input.databasePath);
   } catch (error) {
     if (error instanceof Error && error.message === "GATEWAY_DATABASE_SCHEMA_INVALID") throw error;

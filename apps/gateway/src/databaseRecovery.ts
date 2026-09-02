@@ -5,7 +5,7 @@ import {
   existsSync,
   fstatSync,
   ftruncateSync,
-  fsyncSync,
+  fsyncSync as nodeFsyncSync,
   mkdirSync,
   openSync,
   lstatSync,
@@ -23,7 +23,10 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import Database from "better-sqlite3";
-import type { GatewayDatabaseLockLease } from "./databaseLock.js";
+import {
+  assertGatewayDatabaseLockLeaseIssued,
+  type GatewayDatabaseLockLease
+} from "./databaseLock.js";
 import type { validateImmutableGatewayV15Database } from "./databaseSecurity.js";
 
 const claimedRecoveryLockBrand: unique symbol = Symbol("claimedRecoveryLock");
@@ -70,6 +73,71 @@ type FixedOwnedLayout = Readonly<Partial<Record<OwnedSlot, string>>>;
 const fixedOwnedLayout = (layout: FixedOwnedLayout): FixedOwnedLayout =>
   Object.freeze({ ...layout });
 
+export interface RecoveryActionDescriptor {
+  readonly kind: "move" | "unlink" | "copy" | "sqlite" | "rename-dir" | "remove-marker";
+  readonly boundaries: readonly string[];
+}
+
+export interface ResolvedRecoveryActionDescriptor {
+  readonly stage: string;
+  readonly boundary: string;
+  readonly kind: RecoveryActionDescriptor["kind"];
+  readonly piece: "main" | "wal" | "shm" | null;
+  readonly edge: "post";
+}
+
+const actionDescriptor = (
+  kind: RecoveryActionDescriptor["kind"],
+  boundaries: readonly string[]
+): RecoveryActionDescriptor => Object.freeze({ kind, boundaries: Object.freeze([...boundaries]) });
+
+const deriveStageActions = (name: string): readonly RecoveryActionDescriptor[] => {
+  const descriptors: RecoveryActionDescriptor[] = [];
+  const pieces = ["main", "wal", "shm"] as const;
+  const quarantine = name.match(/^quarantine-(wal|shm|main)-intent$/u);
+  const restore = name.match(/^restore-(wal|shm|main)-intent$/u);
+  const cleanup = name.match(/^(cleanup-(?:quarantine|snapshot)-(?:wal|shm|main)-intent)$/u);
+  const retryCleanup = name.match(/^(retry-cleanup-candidate-quarantine-(?:wal|shm|main)-intent)$/u);
+  const abort = name.match(/^(snapshot-abort-.+-intent)$/u);
+  if (quarantine) descriptors.push(actionDescriptor("move", [`quarantine:${quarantine[1]}`]));
+  if (restore) descriptors.push(actionDescriptor("move", [`restore:${restore[1]}`]));
+  if (name === "publish-intent") descriptors.push(actionDescriptor("move", ["publish:candidate"]));
+  if (name === "candidate-quarantine-intent") descriptors.push(actionDescriptor("move", [
+    "candidate-quarantine:main", "candidate-quarantine:wal", "candidate-quarantine:shm",
+    "candidate-quarantine:published-main"
+  ]));
+  for (const match of [cleanup, retryCleanup, abort]) {
+    if (match) descriptors.push(actionDescriptor("unlink", [
+      `cleanup-before-unlink:${match[1]}`, `cleanup:${match[1]}`
+    ]));
+  }
+  if (name === "snapshot-intent") descriptors.push(actionDescriptor("copy", [
+    ...["original", "candidate"].flatMap((slot) => pieces.flatMap((piece) => [
+      `snapshot-copy:${slot}:${piece}`, `snapshot-publish:${slot}:${piece}`
+    ])),
+    "snapshot-chunk:<slot>:<piece>:<offset>"
+  ]));
+  if (name === "retry-snapshot-intent") descriptors.push(actionDescriptor("copy", [
+    ...pieces.map((piece) => `retry-snapshot:${piece}`)
+  ]));
+  if (name === "snapshot-retry-intent") descriptors.push(actionDescriptor("copy", [
+    ...["original", "candidate"].flatMap((slot) =>
+      pieces.map((piece) => `snapshot-retry:${slot}:${piece}`)
+    )
+  ]));
+  if (name === "snapshot-complete" || name === "retry-reset-done") {
+    descriptors.push(actionDescriptor("sqlite", [
+      "candidate-before-open", "candidate-after-checkpoint", "candidate-before-sidecar-unlink:wal",
+      "candidate-before-sidecar-unlink:shm"
+    ]));
+  }
+  if (name === "archive-intent") descriptors.push(actionDescriptor("rename-dir", ["archive:work"]));
+  if (name === "marker-remove-intent") descriptors.push(actionDescriptor("remove-marker", [
+    "marker-before-unlink", "marker-unlinked", "active-root-before-rmdir", "active-root-removed"
+  ]));
+  return Object.freeze(descriptors);
+};
+
 const defineStage = <
   const Name extends string,
   const Predecessor extends string
@@ -82,6 +150,7 @@ const defineStage = <
 ) => {
   const sealedPredecessors = Object.freeze([...predecessors]);
   return Object.freeze({
+    actions: deriveStageActions(name),
     name,
     phase,
     predecessors: sealedPredecessors,
@@ -365,6 +434,18 @@ export type RecoveryStageDefinition = typeof RECOVERY_STAGE_DEFINITIONS[number];
 export const RECOVERY_STAGES: readonly RecoveryStage[] = Object.freeze(
   RECOVERY_STAGE_DEFINITIONS.map(({ name }) => name)
 );
+export const RECOVERY_ACTION_DESCRIPTORS: readonly ResolvedRecoveryActionDescriptor[] = Object.freeze(
+  RECOVERY_STAGE_DEFINITIONS.flatMap((definition) => definition.actions.flatMap((action) =>
+    action.boundaries.map((boundary) => Object.freeze({
+      stage: definition.name,
+      boundary,
+      kind: action.kind,
+      piece: (boundary.match(/(?:^|:)(main|wal|shm)(?::|$)/u)?.[1] ?? null) as
+        "main" | "wal" | "shm" | null,
+      edge: "post" as const
+    }))
+  ))
+);
 
 export interface ClaimedRecoveryLockLease extends GatewayDatabaseLockLease {
   readonly [claimedRecoveryLockBrand]: true;
@@ -421,6 +502,11 @@ export function createClaimedRecoveryLockLeaseForTest(
   lease: GatewayDatabaseLockLease & { databasePath: string }
 ): ClaimedRecoveryLockLease {
   if (process.env.NODE_ENV !== "test") return fail("GATEWAY_RECOVERY_LOCK_INVALID");
+  try {
+    assertGatewayDatabaseLockLeaseIssued(lease);
+  } catch {
+    return fail("GATEWAY_RECOVERY_LOCK_INVALID");
+  }
   const databasePath = exactDatabasePath(lease.databasePath);
   const lockPath = join(dirname(databasePath), ".family-ai-gateway.lock");
   try {
@@ -460,72 +546,130 @@ interface RecoveryMarker {
   operationId: string;
   databaseBasename: string;
   workspaceBasename: "work";
-  createdAt: string;
+  activeRootDev: string;
+  activeRootIno: string;
+  markerDev: string;
+  markerIno: string;
 }
 
-const readMarker = (databasePath: string): RecoveryMarker | undefined => {
+const markerBytes = (
+  databasePath: string,
+  operationId: string,
+  root: BigIntStats,
+  marker: BigIntStats
+): { marker: RecoveryMarker; bytes: string } => {
+  const value: RecoveryMarker = {
+    version: 1,
+    operationId,
+    databaseBasename: basename(databasePath),
+    workspaceBasename: "work",
+    activeRootDev: root.dev.toString(),
+    activeRootIno: root.ino.toString(),
+    markerDev: marker.dev.toString(),
+    markerIno: marker.ino.toString()
+  };
+  return { marker: value, bytes: JSON.stringify(value) };
+};
+
+const readMarker = (
+  databasePath: string,
+  repairPublication = false,
+  dependencies?: GatewayRecoveryDependencies
+): RecoveryMarker | undefined => {
   const activeRoot = join(dirname(databasePath), `.${basename(databasePath)}.wal-recovery`);
-  let root: BigIntStats;
+  let rootDescriptor: number | undefined;
   try {
-    root = lstatSync(activeRoot, { bigint: true });
+    rootDescriptor = openSync(
+      activeRoot,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     return fail("GATEWAY_RECOVERY_INVALID");
   }
-  if (
-    !root.isDirectory()
-    || root.isSymbolicLink()
-    || root.uid !== BigInt(APP_UID)
-    || root.gid !== BigInt(APP_GID)
-    || (root.mode & 0o777n) !== 0o700n
-    || realpathSync(activeRoot) !== activeRoot
-  ) {
-    return fail("GATEWAY_RECOVERY_INVALID");
-  }
-  const children = readdirSync(activeRoot).toSorted();
-  if (children.length === 0) return undefined;
-  if (
-    children.length > 2
-    || children[0] !== "marker.json"
-    || (children.length === 2 && children[1] !== "work")
-  ) {
-    return fail("GATEWAY_RECOVERY_INVALID");
-  }
-  const markerPath = join(activeRoot, "marker.json");
-  const markerState = lstatSync(markerPath, { bigint: true });
-  if (
-    !markerState.isFile()
-    || markerState.isSymbolicLink()
-    || markerState.uid !== BigInt(APP_UID)
-    || markerState.gid !== BigInt(APP_GID)
-    || markerState.nlink !== 1n
-    || (markerState.mode & 0o777n) !== 0o600n
-  ) {
-    return fail("GATEWAY_RECOVERY_INVALID");
-  }
-  const bytes = readFileSync(markerPath, "utf8");
-  let marker: RecoveryMarker;
   try {
-    marker = JSON.parse(bytes) as RecoveryMarker;
-  } catch {
-    return fail("GATEWAY_RECOVERY_INVALID");
+    const root = fstatSync(rootDescriptor, { bigint: true });
+    const rootPath = assertPrivateDirectory(activeRoot);
+    if (!sameIdentity(root, rootPath)) return fail("GATEWAY_RECOVERY_INVALID");
+    const children = readdirSync(activeRoot).toSorted();
+    if (children.length === 0) return undefined;
+    const finalName = "marker.json";
+    const tempNames = children.filter((name) => /^\.marker\.[0-9a-f]{32}\.json\.tmp$/u.test(name));
+    const finalVisible = children.includes(finalName);
+    if (
+      (finalVisible && JSON.stringify(children) !== JSON.stringify(
+        existsSync(join(activeRoot, "work")) ? [finalName, "work"] : [finalName]
+      ))
+      || (!finalVisible && (children.length !== 1 || tempNames.length !== 1))
+    ) return fail("GATEWAY_RECOVERY_INVALID");
+    const selected = finalVisible ? finalName : tempNames[0]!;
+    const operationIdFromName = finalVisible
+      ? undefined
+      : selected.slice(".marker.".length, -".json.tmp".length);
+    const path = join(activeRoot, selected);
+    const descriptor = openSync(path, constants.O_RDWR | constants.O_NOFOLLOW);
+    try {
+      const held = fstatSync(descriptor, { bigint: true });
+      const pathState = lstatSync(path, { bigint: true });
+      if (
+        !held.isFile() || !pathState.isFile() || pathState.isSymbolicLink()
+        || !sameIdentity(held, pathState) || held.uid !== BigInt(APP_UID)
+        || held.gid !== BigInt(APP_GID) || held.nlink !== 1n
+        || (held.mode & 0o777n) !== 0o600n
+      ) return fail("GATEWAY_RECOVERY_INVALID");
+      const actual = readFileSync(descriptor, "utf8");
+      let operationId = operationIdFromName;
+      if (finalVisible) {
+        try {
+          operationId = (JSON.parse(actual) as RecoveryMarker).operationId;
+        } catch {
+          return fail("GATEWAY_RECOVERY_INVALID");
+        }
+      }
+      if (operationId === undefined || !/^[0-9a-f]{32}$/u.test(operationId)) {
+        return fail("GATEWAY_RECOVERY_INVALID");
+      }
+      const expected = markerBytes(databasePath, operationId, root, held);
+      if (actual !== expected.bytes) {
+        const legacyPrefix = `${expected.bytes.slice(0, -1)},\"createdAt\":\"`;
+        const legacyTail = actual.startsWith(legacyPrefix) ? actual.slice(legacyPrefix.length) : "";
+        const acceptedPartial = actual === ""
+          || expected.bytes.startsWith(actual)
+          || (
+            actual.startsWith(legacyPrefix)
+            && legacyTail.length <= 24
+            && /^[0-9TZ:.+-]*$/u.test(legacyTail)
+          );
+        if (finalVisible || !acceptedPartial) {
+          return fail("GATEWAY_RECOVERY_INVALID");
+        }
+        if (!repairPublication) return expected.marker;
+        ftruncateSync(descriptor, 0);
+        const data = Buffer.from(expected.bytes);
+        if (writeSync(descriptor, data, 0, data.length, 0) !== data.length) {
+          return fail("FSYNC_FAILED");
+        }
+        dependencies?.fault?.("marker-temp-rewritten");
+      }
+      if (repairPublication || finalVisible) {
+        fsyncRecovery(descriptor);
+        if (!finalVisible) {
+          if (!dependencies) return fail("GATEWAY_RECOVERY_INVALID");
+          dependencies.fault?.("marker-temp-fsynced");
+          dependencies.renameNoReplace({ sourcePath: path, destinationPath: join(activeRoot, finalName) });
+          dependencies.fault?.("marker-visible");
+        }
+        fsyncRecovery(rootDescriptor);
+        dependencies?.fault?.("marker-root-fsynced");
+        fsyncDirectory(dirname(databasePath));
+      }
+      return expected.marker;
+    } finally {
+      closeSync(descriptor);
+    }
+  } finally {
+    closeSync(rootDescriptor);
   }
-  if (
-    JSON.stringify(marker) !== bytes
-    || JSON.stringify(Object.keys(marker)) !== JSON.stringify([
-      "version", "operationId", "databaseBasename", "workspaceBasename", "createdAt"
-    ])
-    || marker.version !== 1
-    || !/^[0-9a-f]{32}$/u.test(marker.operationId)
-    || marker.databaseBasename !== basename(databasePath)
-    || marker.workspaceBasename !== "work"
-    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(marker.createdAt)
-    || Number.isNaN(Date.parse(marker.createdAt))
-    || new Date(marker.createdAt).toISOString() !== marker.createdAt
-  ) {
-    return fail("GATEWAY_RECOVERY_INVALID");
-  }
-  return marker;
 };
 
 type Piece = "main" | "wal" | "shm";
@@ -1366,7 +1510,7 @@ const holdSnapshotCrashAheadFile = (input: {
       const truncateSize = Number(durableSize);
       if (!Number.isSafeInteger(truncateSize)) return fail("GATEWAY_RECOVERY_INVALID");
       ftruncateSync(descriptor, truncateSize);
-      fsyncSync(descriptor);
+      fsyncRecovery(descriptor);
       fsyncDirectory(dirname(input.path));
     }
     return descriptor;
@@ -1714,6 +1858,7 @@ interface RecoveryJournal {
   safeErrorCode: RecoverySafeErrorCode | null;
   rollbackFromStage: RecoveryStage | null;
   initialCtimes: Map<string, string>;
+  workspaceExpected: WorkspaceMetadata | undefined;
 }
 
 const pathsFor = (databasePath: string): RecoveryPaths => {
@@ -1748,13 +1893,29 @@ const tempPath = (
   piece: Piece
 ): string => join(directory, `.${databaseBasename}.${operationId}.${piece}.tmp`);
 
+const fsyncRecovery = (
+  descriptor: number,
+  execute: (descriptor: number) => void = nodeFsyncSync
+): void => {
+  try {
+    execute(descriptor);
+  } catch {
+    return fail("FSYNC_FAILED");
+  }
+};
+
+export function fsyncRecoveryForTest(execute: () => void): void {
+  if (process.env.NODE_ENV !== "test") return fail("FSYNC_FAILED");
+  fsyncRecovery(0, execute);
+}
+
 const fsyncDirectory = (path: string): void => {
   const descriptor = openSync(
     path,
     constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
   );
   try {
-    fsyncSync(descriptor);
+    fsyncRecovery(descriptor);
   } finally {
     closeSync(descriptor);
   }
@@ -1979,7 +2140,7 @@ const appendReceipt = (
   }
   try {
     writeFileSync(descriptor, bytes, "utf8");
-    fsyncSync(descriptor);
+    fsyncRecovery(descriptor);
   } finally {
     closeSync(descriptor);
   }
@@ -1991,6 +2152,7 @@ const appendReceipt = (
   journal.previousStage = journal.lastStage ?? "marker-only";
   journal.lastStage = stage;
   journal.currentOwned = (JSON.parse(bytes) as RecoveryReceipt).owned;
+  journal.workspaceExpected = (JSON.parse(bytes) as RecoveryReceipt).workspace;
   journal.layoutPosition = "preAction";
   dependencies.fault?.(`receipt:${stage}`);
 };
@@ -2053,7 +2215,8 @@ const moveNoReplace = (
   dependencies: GatewayRecoveryDependencies,
   boundary: string,
   expectedSource?: FileMetadata,
-  expectedDestination?: FileMetadata
+  expectedDestination?: FileMetadata,
+  expectedDirectory?: WorkspaceMetadata
 ): void => {
   const sourcePathState = lstatSync(sourcePath, { bigint: true });
   const directory = sourcePathState.isDirectory();
@@ -2072,6 +2235,13 @@ const moveNoReplace = (
   try {
     const held = fstatSync(descriptor, { bigint: true });
     if (!sameIdentity(held, sourcePathState)) return fail("GATEWAY_RECOVERY_INVALID");
+    if (directory && expectedDirectory !== undefined && (
+      held.dev.toString() !== expectedDirectory.dev
+      || held.ino.toString() !== expectedDirectory.ino
+      || held.uid.toString() !== expectedDirectory.uid
+      || held.gid.toString() !== expectedDirectory.gid
+      || (held.mode & 0o777n).toString() !== expectedDirectory.mode
+    )) return fail("GATEWAY_RECOVERY_INVALID");
     dependencies.renameNoReplace({ sourcePath, destinationPath });
     const destination = lstatSync(destinationPath, { bigint: true });
     if (!sameIdentity(held, destination)) return fail("GATEWAY_RECOVERY_INVALID");
@@ -2097,12 +2267,16 @@ const unlinkHeldOwnedFile = (
 ): void => {
   if (expected === null) {
     if (existsSync(path)) return fail("GATEWAY_RECOVERY_INVALID");
+    dependencies.fault?.(`cleanup-before-unlink:${boundary}`);
     fsyncDirectory(dirname(path));
+    dependencies.fault?.(`cleanup:${boundary}`);
     return;
   }
   if (!existsSync(path)) {
     if (expected !== undefined) return fail("GATEWAY_RECOVERY_INVALID");
+    dependencies.fault?.(`cleanup-before-unlink:${boundary}`);
     fsyncDirectory(dirname(path));
+    dependencies.fault?.(`cleanup:${boundary}`);
     return;
   }
   const descriptor = expected === undefined
@@ -2173,6 +2347,7 @@ const moveJournalOwnedPiece = (
     if (existsSync(sourcePath)) return fail("GATEWAY_RECOVERY_INVALID");
     const descriptor = validateHeldOwnedFile(destinationPath, destinationExpected);
     closeSync(descriptor);
+    dependencies.fault?.(boundary);
     journal.layoutPosition = "postAction";
     return;
   }
@@ -2263,6 +2438,7 @@ const inspectWorkBootstrap = (paths: RecoveryPaths): {
       }
       const marker = readMarker(paths.databasePath);
       if (marker === undefined) return fail("GATEWAY_RECOVERY_INVALID");
+      const bootstrapMasks: number[] = [];
       for (const directory of [paths.original, paths.candidate]) {
         const names = readdirSync(directory).toSorted();
         const expected = ["wal", "shm", "main"].slice(0, names.length)
@@ -2272,13 +2448,36 @@ const inspectWorkBootstrap = (paths: RecoveryPaths): {
         if (
           names.length > 3
           || JSON.stringify(names) !== JSON.stringify(expected)
-          || names.some((name) => {
-            const state = lstatSync(join(directory, name), { bigint: true });
-            return !state.isFile() || state.isSymbolicLink() || state.size !== 0n;
-          })
         ) {
           return fail("GATEWAY_RECOVERY_INVALID");
         }
+        bootstrapMasks.push(names.length);
+        for (const name of names) {
+          const path = join(directory, name);
+          const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+          try {
+            const held = fstatSync(descriptor, { bigint: true });
+            const pathState = lstatSync(path, { bigint: true });
+            if (
+              !held.isFile()
+              || !pathState.isFile()
+              || pathState.isSymbolicLink()
+              || !sameIdentity(held, pathState)
+              || held.uid !== BigInt(APP_UID)
+              || held.gid !== BigInt(APP_GID)
+              || (held.mode & 0o777n) !== 0o600n
+              || held.nlink !== 1n
+              || held.size !== 0n
+            ) {
+              return fail("GATEWAY_RECOVERY_INVALID");
+            }
+          } finally {
+            closeSync(descriptor);
+          }
+        }
+      }
+      if (bootstrapMasks[1]! > 0 && bootstrapMasks[0] !== 3) {
+        return fail("GATEWAY_RECOVERY_INVALID");
       }
     }
   }
@@ -2337,14 +2536,14 @@ const journalFromMarker = (databasePath: string, marker: RecoveryMarker): Recove
     candidateSha256: null,
     safeErrorCode: null,
     rollbackFromStage: null,
-    initialCtimes
+    initialCtimes,
+    workspaceExpected: undefined
   };
 };
 
 const createRecoveryJournal = (
   databasePath: string,
   operationId: string,
-  createdAt: string,
   dependencies: GatewayRecoveryDependencies
 ): RecoveryJournal => {
   const paths = pathsFor(databasePath);
@@ -2356,27 +2555,49 @@ const createRecoveryJournal = (
     validateDirectoryByDescriptor(paths.completedRoot);
   }
   mkdirSync(paths.activeRoot, { mode: 0o700 });
-  fsyncDirectory(paths.parent);
-  const marker: RecoveryMarker = {
-    version: 1,
-    operationId,
-    databaseBasename: basename(databasePath),
-    workspaceBasename: "work",
-    createdAt
-  };
-  const markerPath = join(paths.activeRoot, "marker.json");
+  const rootDescriptor = openSync(
+    paths.activeRoot,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+  );
+  const markerTempPath = join(paths.activeRoot, `.marker.${operationId}.json.tmp`);
   const markerDescriptor = openSync(
-    markerPath,
+    markerTempPath,
     constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
     0o600
   );
   try {
-    writeFileSync(markerDescriptor, JSON.stringify(marker), "utf8");
-    fsyncSync(markerDescriptor);
+    dependencies.fault?.("marker-temp-open");
+    const marker = markerBytes(
+      databasePath,
+      operationId,
+      fstatSync(rootDescriptor, { bigint: true }),
+      fstatSync(markerDescriptor, { bigint: true })
+    );
+    const data = Buffer.from(marker.bytes);
+    const split = Math.max(1, Math.floor(data.length / 2));
+    if (writeSync(markerDescriptor, data, 0, split, 0) !== split) return fail("FSYNC_FAILED");
+    dependencies.fault?.("marker-temp-partial");
+    if (writeSync(markerDescriptor, data, split, data.length - split, split) !== data.length - split) {
+      return fail("FSYNC_FAILED");
+    }
+    dependencies.fault?.("marker-temp-rewritten");
+    fsyncRecovery(markerDescriptor);
+    dependencies.fault?.("marker-temp-fsynced");
+    dependencies.renameNoReplace({
+      sourcePath: markerTempPath,
+      destinationPath: join(paths.activeRoot, "marker.json")
+    });
+    dependencies.fault?.("marker-visible");
+    fsyncRecovery(rootDescriptor);
+    dependencies.fault?.("marker-root-fsynced");
+    fsyncDirectory(paths.parent);
   } finally {
-    closeSync(markerDescriptor);
+    try {
+      closeSync(markerDescriptor);
+    } finally {
+      closeSync(rootDescriptor);
+    }
   }
-  fsyncDirectory(paths.activeRoot);
   dependencies.fault?.("marker-created");
   initializeWork(paths);
   const initialCtimes = new Map<string, string>();
@@ -2398,7 +2619,8 @@ const createRecoveryJournal = (
     candidateSha256: null,
     safeErrorCode: null,
     rollbackFromStage: null,
-    initialCtimes
+    initialCtimes,
+    workspaceExpected: undefined
   };
 };
 
@@ -2498,7 +2720,8 @@ const loadActiveJournal = (
       candidateSha256: lastReceipt.candidateSha256,
       safeErrorCode: lastReceipt.safeErrorCode,
       rollbackFromStage: lastReceipt.rollbackFromStage,
-      initialCtimes
+      initialCtimes,
+      workspaceExpected: lastReceipt.workspace
   };
   validateNextReceiptTemporary(journal, lastReceipt.stage, temporaryReceipts[0]);
   return {
@@ -2563,7 +2786,7 @@ const copySnapshots = (
           0o600
         );
         try {
-          fsyncSync(descriptor);
+          fsyncRecovery(descriptor);
         } finally {
           closeSync(descriptor);
         }
@@ -2625,7 +2848,7 @@ const copySnapshots = (
           if (offset === Number(sourceState.size)) {
             restoreExactFileTimes(destinationDescriptor, sourceState);
           }
-          fsyncSync(destinationDescriptor);
+          fsyncRecovery(destinationDescriptor);
           fsyncDirectory(directory);
           dependencies.fault?.(`snapshot-chunk:${slot}:${piece}:${offset}`);
           appendReceipt(journal, "snapshot-intent", dependencies);
@@ -2732,7 +2955,7 @@ const copySnapshotPieceIdempotent = (
       0o600
     );
     try {
-      fsyncSync(created);
+      fsyncRecovery(created);
     } finally {
       closeSync(created);
     }
@@ -2762,7 +2985,7 @@ const copySnapshotPieceIdempotent = (
       if (written !== read) return fail("SNAPSHOT_IO_FAILED");
       offset += written;
       if (offset === sourceSize) restoreExactFileTimes(descriptor, sourceState);
-      fsyncSync(descriptor);
+      fsyncRecovery(descriptor);
       fsyncDirectory(directory);
       appendReceipt(journal, progressStage, dependencies);
     }
@@ -2953,7 +3176,7 @@ const continueRollback = (
       );
       const owned = journal.currentOwned;
       if (owned === undefined) return fail("GATEWAY_RECOVERY_INVALID");
-      if (owned.candidate[piece] === null && owned.candidateQuarantine[piece] === null) continue;
+      if (owned.candidate[piece] === null) continue;
       moveJournalOwnedPiece(
         journal,
         "candidate",
@@ -3186,7 +3409,7 @@ const rollbackCandidateFailure = (
     );
     const owned = journal.currentOwned;
     if (owned === undefined) return fail("GATEWAY_RECOVERY_INVALID");
-    if (owned.candidate[piece] === null && owned.candidateQuarantine[piece] === null) continue;
+    if (owned.candidate[piece] === null) continue;
     moveJournalOwnedPiece(
       journal,
       "candidate",
@@ -3464,7 +3687,15 @@ const continueArchiveCompleted = (
     if (journal.paths.work === completed && existsSync(completed)) {
       assertPrivateDirectory(completed);
     } else if (existsSync(journal.paths.work) && !existsSync(completed)) {
-      moveNoReplace(journal.paths.work, completed, dependencies, "archive:work");
+      moveNoReplace(
+        journal.paths.work,
+        completed,
+        dependencies,
+        "archive:work",
+        undefined,
+        undefined,
+        journal.workspaceExpected
+      );
     } else if (!existsSync(journal.paths.work) && existsSync(completed)) {
       assertPrivateDirectory(completed);
     } else {
@@ -3566,7 +3797,10 @@ const lastCompletedStage = (
     operationId,
     databaseBasename: basename(databasePath),
     workspaceBasename: "work",
-    createdAt: "1970-01-01T00:00:00.000Z"
+    activeRootDev: "0",
+    activeRootIno: "0",
+    markerDev: "0",
+    markerIno: "0"
   });
   if (loaded.lastReceipt) {
     const held = holdAndValidateExactOwnedLayout(
@@ -3591,7 +3825,10 @@ const completedMatchesCurrentPublic = (
     operationId,
     databaseBasename: basename(databasePath),
     workspaceBasename: "work",
-    createdAt: "1970-01-01T00:00:00.000Z"
+    activeRootDev: "0",
+    activeRootIno: "0",
+    markerDev: "0",
+    markerIno: "0"
   });
   const receipt = loaded.lastReceipt;
   if (
@@ -3772,8 +4009,7 @@ export function runGatewayRecoveryWithLease(
       fsyncDirectory(recoveryPaths.parent);
     }
     const operationId = operationIdFromDependencies(dependencies);
-    const createdAt = dependencies.now().toISOString();
-    const journal = createRecoveryJournal(databasePath, operationId, createdAt, dependencies);
+    const journal = createRecoveryJournal(databasePath, operationId, dependencies);
     const snapshotResult = runRecoveryStep(
       journal,
       dependencies,
@@ -3807,7 +4043,7 @@ export function runGatewayRecoveryWithLease(
     if (forwardResult) return forwardResult;
     return { kind: "execution", status: "recovered", operationId };
   }
-  const marker = readMarker(databasePath);
+  const marker = readMarker(databasePath, input.action !== "status", dependencies);
   if (!marker) {
     const operationIds = input.operationId === undefined
       ? completedOperationIds(databasePath)
@@ -3833,7 +4069,10 @@ export function runGatewayRecoveryWithLease(
             operationId: terminal.operationId,
             databaseBasename: basename(databasePath),
             workspaceBasename: "work",
-            createdAt: dependencies.now().toISOString()
+            activeRootDev: "0",
+            activeRootIno: "0",
+            markerDev: "0",
+            markerIno: "0"
           });
           try {
             continueArchiveCompleted(
@@ -3891,6 +4130,12 @@ export function runGatewayRecoveryWithLease(
       journal.currentOwned = held.owned;
       journal.layoutPosition = held.position;
       held.close();
+      if (
+        held.position === "postAction"
+        && loaded.lastReceipt.stage === "candidate-quarantine-intent"
+      ) {
+        appendReceipt(journal, "candidate-quarantine-intent", dependencies);
+      }
     }
     let current = loaded.lastStage;
     let definition = current === undefined

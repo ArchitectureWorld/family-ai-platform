@@ -10,8 +10,14 @@ export function createRecoveryStageFault(target, errorCode = "SIMULATED_SIGKILL"
 
 export function createRecoveryStageKill(target) {
   let fired = false;
+  const escaped = target.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const pattern = new RegExp(`^${escaped
+    .replace("<slot>", "[^:]+")
+    .replace("<piece>", "(?:main|wal|shm)")
+    .replace("<offset>", "[0-9]+")}$`, "u");
   return (boundary) => {
-    if (!fired && boundary === target) {
+    const matches = pattern.test(boundary);
+    if (!fired && matches) {
       fired = true;
       process.kill(process.pid, "SIGKILL");
     }

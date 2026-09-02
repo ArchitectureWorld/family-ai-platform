@@ -1,9 +1,12 @@
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
   fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -12,7 +15,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
 import {
@@ -21,6 +24,10 @@ import {
   type GatewayDatabaseOpenRequest
 } from "../src/database.js";
 import type { DatabaseSecurityHooks } from "../src/databaseSecurity.js";
+import {
+  validateImmutableGatewayV15DatabaseForTest,
+  type ImmutableGatewayV15ValidationInput
+} from "../src/databaseSecurity.js";
 
 type PlannedLease = GatewayDatabase & {
   database: GatewayDatabase;
@@ -73,6 +80,106 @@ describe("secure Gateway database intents", () => {
     }
     return count;
   };
+
+  const immutableProof = (path: string): ImmutableGatewayV15ValidationInput => {
+    const parentProofFd = openSync(
+      dirname(path),
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+    );
+    const databaseProofFd = openSync(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW
+    );
+    const parent = fstatSync(parentProofFd, { bigint: true });
+    const database = fstatSync(databaseProofFd, { bigint: true });
+    return {
+      databasePath: path,
+      parentProofFd,
+      databaseProofFd,
+      expectedParentIdentity: { dev: parent.dev, ino: parent.ino },
+      expectedDatabaseIdentity: { dev: database.dev, ino: database.ino }
+    };
+  };
+
+  const matchingBigIntDescriptors = (proofDescriptor: number): number[] => {
+    const proof = fstatSync(proofDescriptor, { bigint: true });
+    const descriptors: number[] = [];
+    for (const name of readdirSync("/proc/self/fd")) {
+      if (!/^\d+$/u.test(name)) continue;
+      const descriptor = Number(name);
+      try {
+        const state = fstatSync(descriptor, { bigint: true });
+        if (state.isFile() && state.dev === proof.dev && state.ino === proof.ino) {
+          descriptors.push(descriptor);
+        }
+      } catch {
+        // The proc enumeration descriptor may disappear before inspection.
+      }
+    }
+    return descriptors.toSorted((left, right) => left - right);
+  };
+
+  it("keeps caller BigInt proofs open and removes the immutable connection identity", () => {
+    const path = prepareDirectory();
+    createFixture(path, 15);
+    const input = immutableProof(path);
+    const before = matchingBigIntDescriptors(input.databaseProofFd);
+    let connectionDescriptor = -1;
+
+    try {
+      validateImmutableGatewayV15DatabaseForTest(input, {
+        connectionDescriptor: (descriptor) => {
+          connectionDescriptor = descriptor;
+          const connection = fstatSync(descriptor, { bigint: true });
+          expect(typeof connection.dev).toBe("bigint");
+          expect(connection.dev).toBe(input.expectedDatabaseIdentity.dev);
+          expect(connection.ino).toBe(input.expectedDatabaseIdentity.ino);
+        }
+      });
+
+      expect(connectionDescriptor).toBeGreaterThan(2);
+      expect(() => fstatSync(connectionDescriptor, { bigint: true }))
+        .toThrow(expect.objectContaining({ code: "EBADF" }));
+      expect(matchingBigIntDescriptors(input.databaseProofFd)).toEqual(before);
+      const parentAfter = fstatSync(input.parentProofFd, { bigint: true });
+      const databaseAfter = fstatSync(input.databaseProofFd, { bigint: true });
+      expect({ dev: parentAfter.dev, ino: parentAfter.ino })
+        .toEqual(input.expectedParentIdentity);
+      expect({ dev: databaseAfter.dev, ino: databaseAfter.ino })
+        .toEqual(input.expectedDatabaseIdentity);
+    } finally {
+      closeSync(input.databaseProofFd);
+      closeSync(input.parentProofFd);
+    }
+  });
+
+  it.each(["same-database", "different-file"] as const)(
+    "rejects a post-close %s descriptor reuse instead of treating every fstat error as EBADF",
+    (kind) => {
+      const path = prepareDirectory();
+      createFixture(path, 15);
+      const input = immutableProof(path);
+      const otherPath = join(directory, "other.txt");
+      writeFileSync(otherPath, "other", { mode: 0o600 });
+      let replacementDescriptor = -1;
+
+      try {
+        expect(() => validateImmutableGatewayV15DatabaseForTest(input, {
+          afterConnectionClose: (descriptor) => {
+            replacementDescriptor = openSync(
+              kind === "same-database" ? path : otherPath,
+              constants.O_RDONLY | constants.O_NOFOLLOW
+            );
+            expect(replacementDescriptor).toBe(descriptor);
+          }
+        })).toThrow("GATEWAY_DATABASE_SCHEMA_INVALID");
+      } finally {
+        if (replacementDescriptor >= 0) closeSync(replacementDescriptor);
+        closeSync(input.databaseProofFd);
+        closeSync(input.parentProofFd);
+      }
+    }
+  );
 
   it("requires an explicit intent before creating any database path", () => {
     const path = prepareDirectory();

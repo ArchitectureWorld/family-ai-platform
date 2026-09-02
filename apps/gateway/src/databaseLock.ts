@@ -19,6 +19,8 @@ export interface GatewayDatabaseLockLease {
   close: () => void;
 }
 
+const issuedGatewayDatabaseLockLeases = new WeakSet<object>();
+
 const LOCK_DESCRIPTOR = 3;
 const LOCK_NAME = ".family-ai-gateway.lock";
 const APP_UID = 1000;
@@ -170,7 +172,7 @@ function requireInheritedGatewayDatabaseLockWithIdentity(input: {
       fail();
     }
     let closed = false;
-    return {
+    const lease: GatewayDatabaseLockLease = {
       lockDev: inherited.dev,
       lockIno: inherited.ino,
       assertHeld: () => {
@@ -190,12 +192,57 @@ function requireInheritedGatewayDatabaseLockWithIdentity(input: {
         closeSync(LOCK_DESCRIPTOR);
       }
     };
+    issuedGatewayDatabaseLockLeases.add(lease);
+    return lease;
   } catch (error) {
     if (error instanceof Error && error.message === "GATEWAY_DATABASE_LOCK_INVALID") throw error;
     return fail();
   } finally {
     if (parentDescriptor !== undefined) closeSync(parentDescriptor);
   }
+}
+
+export function assertGatewayDatabaseLockLeaseIssued(
+  lease: GatewayDatabaseLockLease
+): void {
+  if (!issuedGatewayDatabaseLockLeases.has(lease)) fail();
+  lease.assertHeld();
+}
+
+export function issueGatewayDatabaseLockLeaseForTest(input: {
+  lockDescriptor: number;
+}): GatewayDatabaseLockLease {
+  if (process.env.NODE_ENV !== "test") fail();
+  const identity = fstatSync(input.lockDescriptor, { bigint: true });
+  const expected = {
+    uid: process.getuid?.() ?? APP_UID,
+    gid: process.getgid?.() ?? APP_GID
+  };
+  if (!protectedLock(identity, expected)) fail();
+  let closed = false;
+  const lease: GatewayDatabaseLockLease = {
+    lockDev: identity.dev,
+    lockIno: identity.ino,
+    assertHeld: () => {
+      if (closed) fail();
+      let current: BigIntStats;
+      try {
+        current = fstatSync(input.lockDescriptor, { bigint: true });
+      } catch {
+        fail();
+      }
+      if (!protectedLock(current, expected) || current.dev !== identity.dev || current.ino !== identity.ino) {
+        fail();
+      }
+    },
+    close: () => {
+      if (closed) return;
+      closed = true;
+      closeSync(input.lockDescriptor);
+    }
+  };
+  issuedGatewayDatabaseLockLeases.add(lease);
+  return lease;
 }
 
 export function requireInheritedGatewayDatabaseLock(input: {

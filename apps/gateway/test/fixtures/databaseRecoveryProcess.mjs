@@ -43,7 +43,7 @@ async function runEngine(args) {
   const options = exactOptions(args);
   const allowed = new Set([
     "action", "operation-id", "kill-boundary", "disk-boundary", "candidate-invalid",
-    "snapshot-failure"
+    "candidate-failure-before-open", "public-invalid", "snapshot-failure"
   ]);
   if ([...options.keys()].some((key) => !allowed.has(key))) {
     throw new Error("RECOVERY_PROCESS_ARGUMENTS_INVALID");
@@ -57,7 +57,9 @@ async function runEngine(args) {
   if ((action === "resume" || action === "retry") !== (operationId !== undefined)) {
     throw new Error("RECOVERY_PROCESS_ARGUMENTS_INVALID");
   }
-  for (const flag of ["candidate-invalid", "snapshot-failure"]) {
+  for (const flag of [
+    "candidate-invalid", "candidate-failure-before-open", "public-invalid", "snapshot-failure"
+  ]) {
     if (options.has(flag) && options.get(flag) !== "1") {
       throw new Error("RECOVERY_PROCESS_ARGUMENTS_INVALID");
     }
@@ -77,10 +79,9 @@ async function runEngine(args) {
     uid: process.getuid(),
     gid: process.getgid()
   });
-  const lease = recoveryModule.createClaimedRecoveryLockLeaseForTest({
-    ...inherited,
-    databasePath
-  });
+  const lease = recoveryModule.createClaimedRecoveryLockLeaseForTest(
+    Object.assign(inherited, { databasePath })
+  );
   const killFault = options.has("kill-boundary")
     ? stageFaultModule.createRecoveryStageKill(options.get("kill-boundary"))
     : null;
@@ -107,8 +108,15 @@ async function runEngine(args) {
             }
             securityModule.validateImmutableGatewayV15Database(input);
           }
-        : securityModule.validateImmutableGatewayV15Database,
-      fault: killFault === null && diskFault === null && !options.has("snapshot-failure")
+        : options.has("public-invalid")
+          ? (input) => {
+              if (input.databasePath === databasePath) throw new Error("CANDIDATE_INVALID");
+              securityModule.validateImmutableGatewayV15Database(input);
+            }
+          : securityModule.validateImmutableGatewayV15Database,
+          fault: killFault === null && diskFault === null && !options.has("snapshot-failure")
+            && !options.has("candidate-failure-before-open")
+            && !options.has("public-invalid")
         ? null
         : (boundary) => {
             if (
@@ -116,6 +124,12 @@ async function runEngine(args) {
               && boundary === "snapshot-copy:original:wal"
             ) {
               throw new Error("SNAPSHOT_IO_FAILED");
+            }
+            if (
+              options.has("candidate-failure-before-open")
+              && boundary === "candidate-before-open"
+            ) {
+              throw new Error("CANDIDATE_INVALID");
             }
             killFault?.(boundary);
             diskFault?.(boundary);
