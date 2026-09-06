@@ -847,7 +847,9 @@ describe("offline Gateway database recovery engine", () => {
       status: "recovered",
       operationId: "000102030405060708090a0b0c0d0e0f"
     });
-  }, 30_000);
+  // Real journal/fsync barriers took 35.9s in the full durability suite; use the
+  // same bounded budget as the neighboring marker publication recovery cases.
+  }, 60_000);
 
   it.each(["marker-temp-open", "marker-temp-partial", "marker-visible", "marker-root-fsynced"] as const)(
     "resumes marker two-phase publication twice after %s",

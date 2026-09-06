@@ -122,9 +122,17 @@ test("real built CLI recovers committed WAL only, seals completion, and keeps st
         });
         let ready = false;
         let failure;
+        let polling = false;
         const timer = setTimeout(() => { failure = new Error("GATEWAY_START_TIMEOUT"); child.kill("SIGKILL"); }, 20_000);
-        child.stdout.on("data", chunk => {
-          if (!ready && chunk.toString().includes("Server listening")) {
+        // Gateway intentionally disables Fastify logging; readiness is an HTTP
+        // response inside this isolated container, never a log substring.
+        const poll = setInterval(async () => {
+          if (ready || polling) return;
+          polling = true;
+          try {
+            const response = await fetch("http://127.0.0.1:8790/health", { signal: AbortSignal.timeout(1000) });
+            if (!response.ok) return;
+            await response.arrayBuffer();
             ready = true;
             try {
               assert.equal(existsSync(database + "-wal"), true);
@@ -132,11 +140,13 @@ test("real built CLI recovers committed WAL only, seals completion, and keeps st
               assert.equal(protectedRun(database, "status", value.operationId).stderr, "RECOVERY_FAILED\n");
             } catch (error) { failure = error; }
             child.kill("SIGTERM");
-          }
-        });
+          } catch { /* The listener may not yet be ready. */ }
+          finally { polling = false; }
+        }, 100);
         child.once("error", reject);
         child.once("close", code => {
           clearTimeout(timer);
+          clearInterval(poll);
           if (failure) reject(failure);
           else if (!ready || code !== 0) reject(new Error("GATEWAY_RESTART_PROOF_FAILED"));
           else resolve();
