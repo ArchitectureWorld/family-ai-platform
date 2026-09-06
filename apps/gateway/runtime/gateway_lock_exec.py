@@ -134,10 +134,10 @@ def assert_inherited(
             or os.get_inheritable(fd) is False
         ):
             fail("GATEWAY_DATABASE_LOCK_INVALID")
-        # Prove a lock already exists before touching the inherited OFD. Reversing
-        # these checks would turn an arbitrary, unlocked fd3 into a valid lease.
+        # An independent shared probe must conflict: only an already-exclusive
+        # lock suffices. An EX probe would also accept SH, then upgrade fd3 below.
         try:
-            fcntl.flock(path_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(path_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError:
             pass
         else:

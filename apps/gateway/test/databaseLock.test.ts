@@ -32,6 +32,44 @@ if (currentUid === undefined || currentGid === undefined) {
   throw new Error("Gateway lock tests require POSIX uid/gid");
 }
 
+it.each(["naked", "shared", "other-exclusive", "exclusive"] as const)(
+  "accepts only an already exclusive inherited OFD: %s",
+  (kind) => {
+    const directory = mkdtempSync(join(tmpdir(), "family-ai-lock-exclusive-proof-"));
+    chmodSync(directory, 0o700);
+    try {
+      const result = spawnSync("python3", ["-c", `${loadLauncher}
+import fcntl, os, subprocess
+database, kind = sys.argv[2:]
+p,l=gateway_lock.open_validated_lock(database,os.getuid(),os.getgid())
+os.close(p)
+os.dup2(l,3,inheritable=True)
+if l != 3: os.close(l)
+other=None
+if kind == 'shared': fcntl.flock(3,fcntl.LOCK_SH)
+elif kind == 'exclusive': fcntl.flock(3,fcntl.LOCK_EX)
+elif kind == 'other-exclusive':
+    other=subprocess.Popen([sys.executable,'-c',"import fcntl,os,sys;f=os.open(sys.argv[1],os.O_RDWR);fcntl.flock(f,fcntl.LOCK_EX);print('LOCKED',flush=True);sys.stdin.read()",os.path.join(os.path.dirname(database),'.family-ai-gateway.lock')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+    assert other.stdout.readline() == 'LOCKED\\n'
+code=0
+try:
+    gateway_lock.assert_inherited(3,'recovery',database,os.getuid(),os.getgid())
+except gateway_lock.LockFailure as error:
+    sys.stderr.write(error.code+'\\n')
+    code=1
+finally:
+    if other is not None:
+        other.stdin.close()
+        other.wait(timeout=5)
+raise SystemExit(code)
+`, launcher, join(directory, "gateway.sqlite"), kind], { encoding: "utf8", timeout: 10_000 });
+      expect(result.status).toBe(kind === "exclusive" ? 0 : 1);
+      expect(result.stdout).toBe(kind === "exclusive" ? "GATEWAY_DATABASE_LOCK_OK\n" : "");
+      expect(result.stderr).toBe(kind === "exclusive" ? "" : "GATEWAY_DATABASE_LOCK_INVALID\n");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }
+);
+
 function claimHostLock(databasePath: string) {
   return spawnSync("python3", [
     "-c",
