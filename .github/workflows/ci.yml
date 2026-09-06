@@ -12,26 +12,18 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 150
     steps:
       - name: Check out exact event revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.sha }}
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.16.0
-          cache: npm
-      - name: Install locked dependencies
+      - name: Run repository quality gate as fixed container UID 1000
         run: |
           set -euo pipefail
           test -f package-lock.json
-          npm ci
-      - name: Run repository quality gate
-        run: |
-          set -euo pipefail
-          npm run check
+          docker build --platform linux/amd64 --target build \
+            --tag "family-ai-quality:$GITHUB_SHA" .
           install -m 600 /dev/null "$RUNNER_TEMP/gateway-config-check.env"
           FAMILY_AI_GATEWAY_ENV_FILE="$RUNNER_TEMP/gateway-config-check.env" \
             docker compose config --quiet
@@ -60,7 +52,7 @@ jobs:
       - quality
       - production-audit
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 150
     steps:
       - name: Check out exact event revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -82,6 +74,33 @@ jobs:
           path: ${{ runner.temp }}/gateway-artifacts/gateway-image-${{ github.sha }}
           if-no-files-found: error
           compression-level: 0
+
+  protected-wal-recovery:
+    needs: docker-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.16.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: gateway-image-${{ github.sha }}
+          path: ${{ runner.temp }}/gateway-image-${{ github.sha }}
+      - name: Verify sealed provenance and offline recovery with numeric UID 1000
+        run: |
+          set -euo pipefail
+          artifact="$RUNNER_TEMP/gateway-image-$GITHUB_SHA"
+          (cd "$artifact" && sha256sum --check gateway-image.tar.sha256 gateway-image-manifest.json.sha256 gateway-runtime-tools.json.sha256)
+          docker load --input "$artifact/gateway-image.tar"
+          export GATEWAY_LOCK_TEST_MANIFEST="$artifact/gateway-image-manifest.json"
+          export GATEWAY_LOCK_TEST_IMAGE="$(node -p 'require(process.env.GATEWAY_LOCK_TEST_MANIFEST).imageId')"
+          export GATEWAY_WAL_TEST_IMAGE="$GATEWAY_LOCK_TEST_IMAGE"
+          node --test scripts/gateway-database-lock-image.test.mjs
+          node --test --test-name-pattern='rootful sealed image' scripts/gateway-wal-recovery-runtime.test.mjs
 
   container-smoke:
     needs: docker-build
@@ -107,7 +126,7 @@ jobs:
   retained-runtime-smoke:
     needs: docker-build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Check out exact event revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -127,8 +146,6 @@ jobs:
       - name: Run stopped-runtime snapshot, candidate, and restore fixture
         run: |
           set -euo pipefail
-          npm ci
-          npm run build
-          docker load --input "$RUNNER_TEMP/gateway-image-$GITHUB_SHA/gateway-image.tar"
-          bash scripts/test-runtime-backup-restore.sh --real-image-manifest \
-            "$RUNNER_TEMP/gateway-image-$GITHUB_SHA/gateway-image-manifest.json"
+          bash scripts/ci-retained-runtime-smoke.sh \
+            --repository "$GITHUB_WORKSPACE" --source-commit "$GITHUB_SHA" \
+            --image-artifact "$RUNNER_TEMP/gateway-image-$GITHUB_SHA"

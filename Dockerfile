@@ -101,6 +101,7 @@ LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
       org.architectureworld.family-ai.client-database-version="${CLIENT_DATABASE_VERSION}" \
       org.architectureworld.family-ai.schema-head="${SCHEMA_HEAD}" \
       org.architectureworld.family-ai.gateway-database-flock-v1="true" \
+      org.architectureworld.family-ai.protected-wal-recovery-v1="true" \
       org.architectureworld.family-ai.release-capability-receipt-sha256="${RELEASE_CAPABILITY_RECEIPT_SHA256}" \
       org.architectureworld.family-ai.release-build-inputs-sha256="${RELEASE_BUILD_INPUTS_SHA256}" \
       org.architectureworld.family-ai.build-input-tree-hash="${BUILD_INPUT_TREE_HASH}" \
@@ -138,7 +139,8 @@ COPY --from=build --chown=node:node /app/apps/gateway/public /app/apps/gateway/p
 RUN chmod -R a+rX /app
 USER 65532:65532
 RUN node --input-type=module -e 'await import("@family-ai/contracts"); await import("@family-ai/provider-adapter-sdk"); await import("./apps/gateway/dist/app.js"); const { access } = await import("node:fs/promises"); await access("./apps/gateway/member-public/index.html"); await access("./apps/gateway/public/qr.js");' \
-  && python3 apps/gateway/runtime/gateway_lock_exec.py --self-check
+  && python3 apps/gateway/runtime/gateway_lock_exec.py --self-check \
+  && node apps/gateway/dist/recoverGatewayDatabase.js --self-check
 
 USER node
 EXPOSE 8790

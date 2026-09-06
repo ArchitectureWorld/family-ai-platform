@@ -20,7 +20,7 @@ os.execv(node, [node, "--import", "tsx", target, *args])
 
 export function spawnLockedSource(input: {
   root: string;
-  role: "gateway" | "migrate" | "provision";
+  role: "gateway" | "migrate" | "provision" | "recovery";
   databasePath: string;
   target: string;
   args?: readonly string[];

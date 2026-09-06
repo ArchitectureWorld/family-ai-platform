@@ -47,6 +47,14 @@ function launcherShaFromSealedTools(imageManifestPath, image) {
   if (launcher?.mode !== "100755" || !/^[0-9a-f]{64}$/.test(launcher?.sha256 ?? "")) {
     throw new Error("CANDIDATE_RUNTIME_TOOLS_INVALID");
   }
+  for (const path of ["apps/gateway/src/databaseRecovery.ts", "apps/gateway/src/databaseRecoveryRuntime.ts", "apps/gateway/src/recoverGatewayDatabase.ts", "apps/gateway/src/databaseSecurity.ts", "apps/gateway/runtime/rename_noreplace.py"]) {
+    const rows = tools.tools?.filter(row => row.path === path);
+    if (rows?.length !== 1 || rows[0].mode !== (path.endsWith(".py") ? "100755" : "100644")
+      || !/^[0-9a-f]{64}$/.test(rows[0].sha256 ?? "")) throw new Error("CANDIDATE_RUNTIME_TOOLS_INVALID");
+    if (path.endsWith(".py") && rows[0].sha256 !== image.runtimeContract?.expected?.renameHelperSha256) {
+      throw new Error("CANDIDATE_RUNTIME_TOOLS_INVALID");
+    }
+  }
   return launcher.sha256;
 }
 
@@ -92,19 +100,24 @@ async function main() {
   if (receiptSha !== snapshotManifest.capabilityReceiptSha256) throw new Error("CAPABILITY_RECEIPT_SNAPSHOT_MISMATCH");
   const receipt = readJson(capability, "CAPABILITY_RECEIPT");
   if (receipt.release?.gatewayDatabaseFlockV1 !== true) throw new Error("CANDIDATE_DATABASE_FLOCK_REQUIRED");
+  if (receipt.release?.protectedWalRecoveryV1 !== true) throw new Error("CANDIDATE_WAL_RECOVERY_REQUIRED");
   const imageManifestPath = args["--candidate-image-manifest"];
   const image = imageRecord(
     imageManifestPath,
     args["--expected-candidate-image-manifest-sha256"]
   );
   const expectedLauncherSha256 = launcherShaFromSealedTools(imageManifestPath, image);
+  if (image.protectedWalRecoveryV1 !== true || image.labels?.["org.architectureworld.family-ai.protected-wal-recovery-v1"] !== "true") throw new Error("CANDIDATE_WAL_RECOVERY_REQUIRED");
   if (image.releaseCapabilityReceiptSha256 !== receiptSha || image.sourceCommit !== image.labels?.["org.opencontainers.image.revision"] || image.labels?.["org.architectureworld.family-ai.gateway-database-flock-v1"] !== "true" || !/^sha256:[0-9a-f]{64}$/.test(image.imageId ?? "")) throw new Error("CANDIDATE_IMAGE_BINDING_INVALID");
   const inspectedImage = JSON.parse(execFileSync("docker", ["image", "inspect", image.imageId], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }))[0];
   const actualLabels = inspectedImage?.Config?.Labels ?? {};
+  if (actualLabels["org.architectureworld.family-ai.protected-wal-recovery-v1"] !== "true") throw new Error("CANDIDATE_WAL_RECOVERY_REQUIRED");
   if (inspectedImage?.Id !== image.imageId || actualLabels["org.opencontainers.image.revision"] !== image.sourceCommit || actualLabels["org.architectureworld.family-ai.release-capability-receipt-sha256"] !== receiptSha || actualLabels["org.architectureworld.family-ai.release-build-inputs-sha256"] !== image.releaseBuildInputsSha256 || actualLabels["org.architectureworld.family-ai.build-input-tree-hash"] !== image.buildInputTreeHash || actualLabels["org.architectureworld.family-ai.gateway-database-flock-v1"] !== "true" || Number(actualLabels["org.architectureworld.family-ai.client-database-version"]) !== receipt.release.clientDatabaseVersion) throw new Error("CANDIDATE_IMAGE_RUNTIME_PROVENANCE_INVALID");
   if (JSON.stringify(inspectGatewayImageRuntime(image.imageId, {
     launcherSha256: expectedLauncherSha256,
-    pythonVersion: "3.11.2"
+    pythonVersion: "3.11.2",
+    renameHelperSha256: image.runtimeContract?.expected?.renameHelperSha256,
+    builtSha256: image.runtimeContract?.expected?.builtSha256
   })) !== JSON.stringify(image.runtimeContract)) throw new Error("CANDIDATE_IMAGE_RUNTIME_CONTRACT_INVALID");
   if (receipt.release?.schemaHead !== Number(image.labels?.["org.architectureworld.family-ai.schema-head"] ?? receipt.release?.schemaHead)) throw new Error("CANDIDATE_SCHEMA_HEAD_MISMATCH");
   const definition = validateDefinition(args["--candidate-definition"], image, receiptSha);

@@ -1,5 +1,6 @@
 {
   "formatVersion": 1,
+  "protectedWalRecoverySchemaVersions": [15],
   "snapshotFormat": {
     "write": 1,
     "read": [1]

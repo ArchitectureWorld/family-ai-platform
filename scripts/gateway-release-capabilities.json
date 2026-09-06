@@ -1,10 +1,11 @@
 {
   "formatVersion": 1,
-  "capabilitySetId": "work-canvas-links-v1",
+  "capabilitySetId": "protected-wal-recovery-v1",
   "schemaHead": 15,
   "clientDatabaseVersion": 2,
   "databaseNameScheme": "identity-scoped-v2",
   "gatewayDatabaseFlockV1": true,
+  "protectedWalRecoveryV1": true,
   "rollbackClientRequired": false,
   "rollbackClientBundleFormat": "none",
   "rollbackGuardFormat": "none"

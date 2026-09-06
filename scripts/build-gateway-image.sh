@@ -98,6 +98,7 @@ TOOL_SHA="$(node "$WORKTREE_DIR/scripts/runtime-tool-manifest.mjs" create \
   --output "$TOOL_RECEIPT")"
 [[ "$TOOL_SHA" =~ ^[0-9a-f]{64}$ ]] || fail TOOL_RECEIPT_HASH_INVALID
 EXPECTED_LAUNCHER_SHA="$(sha256sum "$WORKTREE_DIR/apps/gateway/runtime/gateway_lock_exec.py" | awk '{print $1}')"
+EXPECTED_RENAME_SHA="$(sha256sum "$WORKTREE_DIR/apps/gateway/runtime/rename_noreplace.py" | awk '{print $1}')"
 TOOL_LAUNCHER_SHA="$(node -e 'const v=require(process.argv[1]);const row=v.tools.find(x=>x.path==="apps/gateway/runtime/gateway_lock_exec.py");if(!row)process.exit(1);process.stdout.write(row.sha256)' "$TOOL_RECEIPT")"
 [[ "$EXPECTED_LAUNCHER_SHA" == "$TOOL_LAUNCHER_SHA" ]] || fail TOOL_LAUNCHER_HASH_MISMATCH
 
@@ -154,6 +155,13 @@ docker build --platform "$PLATFORM" --pull=false \
   --tag "$IMAGE_TAG" "$WORKTREE_DIR"
 
 IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
+# Independently inspect the exact source build stage; runtime bytes must match this output.
+# This target reuses the completed quality/build layers and does not rerun unchanged tests.
+BUILD_IMAGE_ID="$(docker build --platform "$PLATFORM" --pull=false --target build --quiet "$WORKTREE_DIR")"
+EXPECTED_BUILT_SHA_JSON="$(docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --entrypoint node "$BUILD_IMAGE_ID" \
+  scripts/gateway-image-runtime-contract.mjs built-digests)"
+EXPECTED_RECOVERY_JSON="$(node -e 'process.stdout.write(JSON.stringify({renameHelperSha256:process.argv[1],builtSha256:JSON.parse(process.argv[2])}))' "$EXPECTED_RENAME_SHA" "$EXPECTED_BUILT_SHA_JSON")"
 [[ "$IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || fail IMAGE_ID_INVALID
 inspect_label() {
   docker image inspect --format "{{index .Config.Labels \"$1\"}}" "$IMAGE_ID"
@@ -162,6 +170,7 @@ inspect_label() {
 [[ "$(inspect_label org.architectureworld.family-ai.client-database-version)" == "$CLIENT_VERSION" ]] || fail CLIENT_VERSION_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.schema-head)" == "$SCHEMA_HEAD" ]] || fail SCHEMA_HEAD_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.gateway-database-flock-v1)" == true ]] || fail DATABASE_FLOCK_LABEL_MISMATCH
+[[ "$(inspect_label org.architectureworld.family-ai.protected-wal-recovery-v1)" == true ]] || fail RECOVERY_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.release-capability-receipt-sha256)" == "$CAPABILITY_SHA" ]] || fail CAPABILITY_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.release-build-inputs-sha256)" == "$RELEASE_INPUTS_SHA" ]] || fail BUILD_INPUT_MANIFEST_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.build-input-tree-hash)" == "$BUILD_INPUT_TREE_HASH" ]] || fail BUILD_INPUT_TREE_LABEL_MISMATCH
@@ -172,7 +181,8 @@ inspect_label() {
 RUNTIME_CONTRACT="$(node "$WORKTREE_DIR/scripts/gateway-image-runtime-contract.mjs" \
   inspect --image-id "$IMAGE_ID" \
   --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA" \
-  --expected-python-version "$EXPECTED_PYTHON_VERSION")" || fail RUNTIME_CONTRACT_INVALID
+  --expected-python-version "$EXPECTED_PYTHON_VERSION" \
+  --expected-recovery-json "$EXPECTED_RECOVERY_JSON")" || fail RUNTIME_CONTRACT_INVALID
 [[ -n "$RUNTIME_CONTRACT" ]] || fail RUNTIME_CONTRACT_INVALID
 
 mkdir -m 700 "$OUTPUT_DIR"
@@ -204,6 +214,7 @@ const labels = {
   "org.architectureworld.family-ai.client-database-version": clientVersion,
   "org.architectureworld.family-ai.schema-head": schemaHead,
   "org.architectureworld.family-ai.gateway-database-flock-v1": "true",
+  "org.architectureworld.family-ai.protected-wal-recovery-v1": "true",
   "org.architectureworld.family-ai.release-capability-receipt-sha256": capabilitySha,
   "org.architectureworld.family-ai.release-build-inputs-sha256": releaseInputsSha,
   "org.architectureworld.family-ai.build-input-tree-hash": inputTreeHash,
@@ -220,6 +231,7 @@ const manifest = {
   clientDatabaseVersion: Number(clientVersion),
   schemaHead: Number(schemaHead),
   gatewayDatabaseFlockV1: true,
+  protectedWalRecoveryV1: true,
   releaseCapabilityReceiptSha256: capabilitySha,
   releaseBuildInputsSha256: releaseInputsSha,
   buildInputTreeHash: inputTreeHash,

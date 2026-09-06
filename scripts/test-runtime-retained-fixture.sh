@@ -76,6 +76,15 @@ node "$ROOT_DIR/scripts/runtime-tool-manifest.mjs" create \
   --release-build-inputs "$ROOT_DIR/scripts/release-build-inputs.json" \
   --output "$TEST_ROOT/evidence/tools.json" > "$TEST_ROOT/tool-sha"
 TOOL_SHA="$(<"$TEST_ROOT/tool-sha")"
+node --input-type=module - "$IMAGE_MANIFEST" "$TEST_ROOT/evidence/tools.json" <<'NODE'
+import { readFileSync } from "node:fs";
+const image = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const tools = JSON.parse(readFileSync(process.argv[3], "utf8")).tools;
+if (image.protectedWalRecoveryV1 !== true) process.exit(1);
+for (const path of ["apps/gateway/src/databaseRecovery.ts", "apps/gateway/src/recoverGatewayDatabase.ts", "apps/gateway/runtime/rename_noreplace.py"]) {
+  if (!tools.some(row => row.path === path && /^[0-9a-f]{64}$/.test(row.sha256))) process.exit(1);
+}
+NODE
 
 node "$ROOT_DIR/scripts/runtime-backup-preflight.mjs" \
   --scope fixture-rehearsal --phase fixture-source-snapshot --release-id fixture-a5 \

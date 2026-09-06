@@ -27,6 +27,8 @@ const rejectText = (path, pattern, code) => {
 const ROOT_PROVISION =
   "python3 apps/gateway/runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node apps/gateway/dist/provisionFederationService.js";
 const ROOT_PROVISION_DEV = `npm run build:gateway && ${ROOT_PROVISION}`;
+const ROOT_RECOVERY = "python3 apps/gateway/runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node apps/gateway/dist/recoverGatewayDatabase.js";
+const GATEWAY_RECOVERY = "python3 runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node dist/recoverGatewayDatabase.js";
 const GATEWAY_START =
   "python3 runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node dist/index.js";
 const GATEWAY_MIGRATE =
@@ -126,6 +128,9 @@ try {
   const allowed = new Map([
     ["package.json\0provision:federation-service", ROOT_PROVISION],
     ["package.json\0provision:federation-service:dev", ROOT_PROVISION_DEV],
+    ["package.json\0recover:gateway-database", ROOT_RECOVERY],
+    ["package.json\0recover:gateway-database:dev", `npm run build:gateway && ${ROOT_RECOVERY}`],
+    ["apps/gateway/package.json\0recover-database", GATEWAY_RECOVERY],
     ["apps/gateway/package.json\0start", GATEWAY_START],
     ["apps/gateway/package.json\0migrate", GATEWAY_MIGRATE]
   ]);
@@ -171,7 +176,7 @@ try {
   requireOnce("scripts/runtime-candidate-manifest.mjs", /"node", "apps\/gateway\/dist\/migrate\.js", "--database", "\/runtime\/data\/gateway\.sqlite"/u, "CANDIDATE_COMMAND");
   requireOnce("scripts/runtime-candidate-manifest.mjs", /image\.imageId, \.\.\.definition\.command/u, "CANDIDATE_CMD_OVERRIDE");
   requireOnce("scripts/runtime-candidate-manifest.mjs", /inspectGatewayImageRuntime\(image\.imageId,\s*\{/u, "CANDIDATE_IMAGE_INSPECT");
-  requireOnce("scripts/runtime-candidate-manifest.mjs", /image\.runtimeContract/u, "CANDIDATE_RUNTIME_BINDING");
+  requireOnce("scripts/runtime-candidate-manifest.mjs", /JSON\.stringify\(image\.runtimeContract\)/u, "CANDIDATE_RUNTIME_BINDING");
   requireOnce("scripts/runtime-candidate-manifest.mjs", /required: \[[^\n]*"--expected-candidate-image-manifest-sha256"/u, "CANDIDATE_IMAGE_MANIFEST_DIGEST");
   rejectText("scripts/runtime-candidate-manifest.mjs", /definition\.entrypoint|--entrypoint/u, "CANDIDATE_ENTRYPOINT_OVERRIDE");
   requireOnce("scripts/member-preview-up.sh", /exec python3 "\$2" --database-from-env GATEWAY_DATABASE_PATH -- node apps\/gateway\/dist\/index\.js/u, "PREVIEW_COMMAND");
@@ -190,7 +195,21 @@ try {
   requireOnce("scripts/build-gateway-image.sh", /EXPECTED_LAUNCHER_SHA=.*gateway_lock_exec\.py/u, "BUILD_EXPECTED_LAUNCHER");
   requireOnce("scripts/build-gateway-image.sh", /runtimeToolManifestSha256, runtimeContractJson/u, "BUILD_TOOL_BINDING");
   const release = json("scripts/gateway-release-capabilities.json");
+  requireOnce(".github/workflows/ci.yml", /docker build --platform linux\/amd64 --target build/u, "CI_FIXED_UID_QUALITY");
+  rejectText(".github/workflows/ci.yml", /(?:^|\n)\s*npm run check\b/u, "CI_HOST_IDENTITY_QUALITY");
+  requireOnce(".github/workflows/ci.yml", /--test-name-pattern='rootful sealed image' scripts\/gateway-wal-recovery-runtime\.test\.mjs/u, "CI_RECOVERY_MATRIX");
+  requireOnce(".github/workflows/ci.yml", /bash scripts\/ci-retained-runtime-smoke\.sh/u, "CI_RETAINED_FIXED_UID");
+  requireOnce("scripts/ci-retained-runtime-smoke.sh", /git clone --quiet --no-hardlinks/u, "CI_RETAINED_PRIVATE_CLONE");
+  requireOnce("scripts/ci-retained-runtime-smoke.sh", /sudo -n chown -hR 1000:1000 -- "\$fixture_root"/u, "CI_RETAINED_PRIVATE_OWNER");
+  requireOnce("scripts/ci-retained-runtime-smoke.sh", /sudo -n setpriv --reuid=1000 --regid=1000 --groups="\$socket_gid" -- \\/u, "CI_RETAINED_IDENTITY");
+  requireOnce("scripts/ci-retained-runtime-smoke.sh", /sudo -n find -P "\$fixture_root" -depth -mindepth 1 -delete/u, "CI_RETAINED_CLEANUP");
   if (release.gatewayDatabaseFlockV1 !== true) fail("CAPABILITY_FLOCK");
+  if (release.protectedWalRecoveryV1 !== true) fail("CAPABILITY_RECOVERY");
+  for (const name of ["databaseRecovery.ts", "databaseRecoveryRuntime.ts", "recoverGatewayDatabase.ts", "databaseSecurity.ts"]) {
+    requireOnce("scripts/runtime-tool-manifest.mjs", new RegExp(`apps/gateway/src/${name.replaceAll(".", "\\.")}`, "u"), "TOOL_MANIFEST_RECOVERY");
+  }
+  requireOnce("scripts/runtime-tool-manifest.mjs", /apps\/gateway\/runtime\/rename_noreplace\.py/u, "TOOL_MANIFEST_NOREPLACE");
+  rejectText("compose.yaml", /recoverGatewayDatabase|recover-database|recover:gateway-database/u, "COMPOSE_AUTOMATIC_RECOVERY");
   const inputs = json("scripts/release-build-inputs.json");
   if (!inputs.rules?.some((rule) =>
     rule.pattern === "apps/gateway/runtime/**" && rule.classification === "runtime-build"
@@ -211,4 +230,4 @@ if (failures.length > 0) {
   process.stderr.write(`GATEWAY_DATABASE_LOCK_ENTRYPOINTS_INVALID:${failures.join(",")}\n`);
   process.exit(1);
 }
-process.stdout.write("GATEWAY_DATABASE_LOCK_ENTRYPOINTS_OK roles=3 directBypasses=0\n");
+process.stdout.write("GATEWAY_DATABASE_LOCK_ENTRYPOINTS_OK roles=4 directBypasses=0\n");

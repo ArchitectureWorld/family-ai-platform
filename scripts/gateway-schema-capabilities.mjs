@@ -77,6 +77,7 @@ if (!Array.isArray(registry.snapshotFormat.read) || !registry.snapshotFormat.rea
   fail("SNAPSHOT_READ_ALLOWLIST_INVALID");
 }
 if (!Array.isArray(registry.schemas) || registry.schemas.length === 0) fail("SCHEMAS_MISSING");
+if (JSON.stringify(registry.protectedWalRecoverySchemaVersions) !== "[15]") fail("RECOVERY_SCHEMA_INVALID");
 for (let index = 0; index < registry.schemas.length; index += 1) {
   const entry = registry.schemas[index];
   const expected = 3 + index;
@@ -97,6 +98,7 @@ if (
   release.clientDatabaseVersion <= 0 ||
   typeof release.databaseNameScheme !== "string" ||
   release.gatewayDatabaseFlockV1 !== true ||
+  release.protectedWalRecoveryV1 !== true ||
   typeof release.rollbackClientRequired !== "boolean"
 ) {
   fail("RELEASE_CAPABILITIES_INVALID");
@@ -131,6 +133,7 @@ const receipt = {
   manifestKind: "gateway-capability-receipt-v1",
   formatVersion: 1,
   snapshotFormat: registry.snapshotFormat,
+  protectedWalRecoverySchemaVersions: registry.protectedWalRecoverySchemaVersions,
   schemas: registry.schemas,
   release,
   evidence: {

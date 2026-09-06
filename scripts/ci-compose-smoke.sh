@@ -37,7 +37,7 @@ json_field() {
 import { readFileSync } from "node:fs";
 const [path, field] = process.argv.slice(2);
 const value = field.split(".").reduce((current, key) => current?.[key], JSON.parse(readFileSync(path, "utf8")));
-if (typeof value !== "string" && typeof value !== "number") process.exit(2);
+if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") process.exit(2);
 process.stdout.write(String(value));
 NODE
 }
@@ -53,6 +53,8 @@ BUILD_INPUT_TREE_HASH="$(json_field "$MANIFEST" buildInputTreeHash)"
 EXPECTED_LAUNCHER_SHA="$(json_field "$MANIFEST" runtimeContract.expected.launcherSha256)"
 EXPECTED_PYTHON_VERSION="$(json_field "$MANIFEST" runtimeContract.expected.pythonVersion)"
 RUNTIME_TOOL_SHA="$(json_field "$MANIFEST" runtimeToolManifestSha256)"
+[[ "$(json_field "$MANIFEST" protectedWalRecoveryV1)" == true ]] || fail WAL_RECOVERY_REQUIRED
+EXPECTED_RECOVERY_JSON="$(node -e 'const e=require(process.argv[1]).runtimeContract.expected;process.stdout.write(JSON.stringify({renameHelperSha256:e.renameHelperSha256,builtSha256:e.builtSha256}))' "$MANIFEST")"
 [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ && "$SOURCE_COMMIT" == "$(git rev-parse HEAD)" ]] || fail SOURCE_COMMIT_MISMATCH
 [[ "$IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ && "$ARCHIVE_SHA" =~ ^[0-9a-f]{64}$ ]] || fail IMAGE_ID_OR_ARCHIVE_HASH_INVALID
 [[ "$ARCHIVE_SHA" == "$(sha256sum "$ARTIFACT_DIR/gateway-image.tar" | awk '{print $1}')" ]] || fail MANIFEST_ARCHIVE_HASH_MISMATCH
@@ -87,6 +89,7 @@ node "$ROOT_DIR/scripts/gateway-schema-capabilities.mjs" validate \
   --output "$VERIFY_ROOT/capability.json" >/dev/null
 [[ "$(awk 'NR==1 {print $1}' "$VERIFY_ROOT/capability.json.sha256")" == "$CAPABILITY_SHA" ]] \
   || fail CAPABILITY_RECEIPT_MISMATCH
+[[ "$(json_field "$VERIFY_ROOT/capability.json" release.protectedWalRecoveryV1)" == true ]] || fail WAL_RECOVERY_CAPABILITY_INVALID
 node "$ROOT_DIR/scripts/release-build-inputs.mjs" validate \
   --repository "$ROOT_DIR" \
   --source-commit "$SOURCE_COMMIT" \
@@ -103,10 +106,14 @@ docker load --input "$ARTIFACT_DIR/gateway-image.tar" >/dev/null
   || fail LOADED_IMAGE_ID_MISMATCH
 [[ "$RUNTIME_TOOL_SHA" == "$(sha256sum "$ARTIFACT_DIR/gateway-runtime-tools.json" | awk '{print $1}')" ]] \
   || fail RUNTIME_TOOLS_MANIFEST_MISMATCH
+node "$ROOT_DIR/scripts/runtime-tool-manifest.mjs" verify --repository "$ROOT_DIR" \
+  --manifest "$ARTIFACT_DIR/gateway-runtime-tools.json" --expected-sha256 "$RUNTIME_TOOL_SHA" >/dev/null \
+  || fail RUNTIME_TOOL_SOURCE_DRIFT
 ACTUAL_RUNTIME_CONTRACT="$(node "$ROOT_DIR/scripts/gateway-image-runtime-contract.mjs" \
   inspect --image-id "$IMAGE_ID" \
   --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA" \
-  --expected-python-version "$EXPECTED_PYTHON_VERSION")" || fail IMAGE_RUNTIME_CONTRACT_INVALID
+  --expected-python-version "$EXPECTED_PYTHON_VERSION" \
+  --expected-recovery-json "$EXPECTED_RECOVERY_JSON")" || fail IMAGE_RUNTIME_CONTRACT_INVALID
 if ! node --input-type=module - "$MANIFEST" "$ACTUAL_RUNTIME_CONTRACT" <<'NODE'
 import { readFileSync } from "node:fs";
 const [manifestPath, actualJson] = process.argv.slice(2);
@@ -118,6 +125,7 @@ then
 fi
 label() { docker image inspect --format "{{index .Config.Labels \"$1\"}}" "$IMAGE_ID"; }
 [[ "$(label org.opencontainers.image.revision)" == "$SOURCE_COMMIT" ]] || fail REVISION_LABEL_MISMATCH
+[[ "$(label org.architectureworld.family-ai.protected-wal-recovery-v1)" == true ]] || fail WAL_RECOVERY_LABEL_MISMATCH
 [[ "$(label org.architectureworld.family-ai.client-database-version)" == "$CLIENT_VERSION" ]] || fail CLIENT_LABEL_MISMATCH
 [[ "$(label org.architectureworld.family-ai.release-capability-receipt-sha256)" == "$CAPABILITY_SHA" ]] || fail CAPABILITY_LABEL_MISMATCH
 [[ "$(label org.architectureworld.family-ai.release-build-inputs-sha256)" == "$RELEASE_INPUTS_SHA" ]] || fail INPUT_LABEL_MISMATCH

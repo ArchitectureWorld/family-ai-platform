@@ -19,15 +19,17 @@ import {
   writeFileSync,
   type BigIntStats
 } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import {
   assertGatewayDatabaseLockLeaseIssued,
+  requireInheritedGatewayDatabaseLock,
   type GatewayDatabaseLockLease
 } from "./databaseLock.js";
-import type { validateImmutableGatewayV15Database } from "./databaseSecurity.js";
+import { validateImmutableGatewayV15Database } from "./databaseSecurity.js";
+import { renameGatewayRecoveryNoReplace } from "./databaseRecoveryRuntime.js";
 
 const claimedRecoveryLockBrand: unique symbol = Symbol("claimedRecoveryLock");
 const claimedRecoveryLeases = new WeakSet<object>();
@@ -508,6 +510,14 @@ export function createClaimedRecoveryLockLeaseForTest(
   lease: GatewayDatabaseLockLease & { databasePath: string }
 ): ClaimedRecoveryLockLease {
   if (process.env.NODE_ENV !== "test") return fail("GATEWAY_RECOVERY_LOCK_INVALID");
+  return createClaimedRecoveryLockLease(lease, process.getuid?.() ?? APP_UID, process.getgid?.() ?? APP_GID);
+}
+
+function createClaimedRecoveryLockLease(
+  lease: GatewayDatabaseLockLease & { databasePath: string },
+  uid: number,
+  gid: number
+): ClaimedRecoveryLockLease {
   try {
     assertGatewayDatabaseLockLeaseIssued(lease);
   } catch {
@@ -529,8 +539,8 @@ export function createClaimedRecoveryLockLeaseForTest(
   if (
     !state.isFile()
     || state.isSymbolicLink()
-    || state.uid !== BigInt(process.getuid?.() ?? APP_UID)
-    || state.gid !== BigInt(process.getgid?.() ?? APP_GID)
+    || state.uid !== BigInt(uid)
+    || state.gid !== BigInt(gid)
     || (state.mode & 0o777n) !== 0o600n
     || state.nlink !== 1n
     || state.dev !== lease.lockDev
@@ -545,6 +555,28 @@ export function createClaimedRecoveryLockLeaseForTest(
   };
   claimedRecoveryLeases.add(claimed);
   return claimed;
+}
+
+/** Sole production entry: fixed identity, inherited fd3, no injectable dependencies. */
+export function runGatewayRecovery(input: GatewayRecoveryCommand): GatewayRecoveryResult {
+  process.umask(0o077);
+  if (process.getuid?.() !== APP_UID || process.getgid?.() !== APP_GID) {
+    return fail("GATEWAY_RECOVERY_LOCK_INVALID");
+  }
+  const databasePath = exactDatabasePath(input.databasePath);
+  const inherited = requireInheritedGatewayDatabaseLock({ role: "recovery", databasePath });
+  try {
+    const lease = createClaimedRecoveryLockLease(Object.assign(inherited, { databasePath }), APP_UID, APP_GID);
+    return runGatewayRecoveryWithLease(lease, input, {
+      randomBytes16: () => randomBytes(16),
+      now: () => new Date(),
+      renameNoReplace: (paths) => renameGatewayRecoveryNoReplace(dirname(databasePath), paths),
+      validateImmutableV15: validateImmutableGatewayV15Database,
+      fault: null
+    });
+  } finally {
+    inherited.close();
+  }
 }
 
 interface RecoveryMarker {

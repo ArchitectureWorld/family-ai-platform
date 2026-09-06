@@ -133,6 +133,19 @@ node "$CAPABILITY_DIR/validator.mjs" validate \
 [[ "$(sha256sum "$CAPABILITY_DIR/receipt.json" | awk '{print $1}')" == \
   "$(awk 'NR==1 {print $1}' "$CAPABILITY_DIR/receipt.json.sha256")" ]] || fail 'capability sidecar is not replayable'
 cp "$CAPABILITY_DIR/release.json" "$CAPABILITY_DIR/release-bad.json"
+node --input-type=module - "$CAPABILITY_DIR/release.json" "$CAPABILITY_DIR/release-no-recovery.json" <<'NODE'
+import { readFileSync, writeFileSync } from "node:fs";
+const value = JSON.parse(readFileSync(process.argv[2], "utf8"));
+delete value.protectedWalRecoveryV1;
+writeFileSync(process.argv[3], JSON.stringify(value));
+NODE
+expect_failure RELEASE_CAPABILITIES_INVALID \
+  node "$CAPABILITY_DIR/validator.mjs" validate \
+    --schema-registry "$CAPABILITY_DIR/schema.json" \
+    --release-capabilities "$CAPABILITY_DIR/release-no-recovery.json" \
+    --database-source "$CAPABILITY_DIR/database.ts" \
+    --client-cache-source "$CAPABILITY_DIR/cache.js" \
+    --output "$CAPABILITY_DIR/receipt-no-recovery.json"
 sed -i 's/"clientDatabaseVersion": 2/"clientDatabaseVersion": 3/' "$CAPABILITY_DIR/release-bad.json"
 expect_failure CLIENT_DATABASE_VERSION_MISMATCH \
   node "$CAPABILITY_DIR/validator.mjs" validate \

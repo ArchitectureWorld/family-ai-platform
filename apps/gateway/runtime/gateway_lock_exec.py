@@ -2,13 +2,15 @@
 import errno
 import fcntl
 import os
+import re
 import stat
 import sys
 
 APP_UID = 1000
 APP_GID = 1000
 LOCK_NAME = ".family-ai-gateway.lock"
-ROLES = {"gateway", "migrate", "provision"}
+ROLES = {"gateway", "migrate", "provision", "recovery"}
+RECOVERY_TARGETS = {"apps/gateway/dist/recoverGatewayDatabase.js", "dist/recoverGatewayDatabase.js"}
 
 
 class LockFailure(Exception):
@@ -132,16 +134,18 @@ def assert_inherited(
             or os.get_inheritable(fd) is False
         ):
             fail("GATEWAY_DATABASE_LOCK_INVALID")
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            fail("GATEWAY_DATABASE_LOCK_INVALID")
+        # Prove a lock already exists before touching the inherited OFD. Reversing
+        # these checks would turn an arbitrary, unlocked fd3 into a valid lease.
         try:
             fcntl.flock(path_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             pass
         else:
             fcntl.flock(path_fd, fcntl.LOCK_UN)
+            fail("GATEWAY_DATABASE_LOCK_INVALID")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
             fail("GATEWAY_DATABASE_LOCK_INVALID")
     finally:
         os.close(path_fd)
@@ -164,6 +168,8 @@ def command_role(command: list[str], database: str) -> str:
             "dist/migrate.js": "migrate",
             "apps/gateway/dist/provisionFederationService.js": "provision",
             "dist/provisionFederationService.js": "provision",
+            "apps/gateway/dist/recoverGatewayDatabase.js": "recovery",
+            "dist/recoverGatewayDatabase.js": "recovery",
         }
         role = role or targets.get(command[1])
         arguments = command[2:]
@@ -185,6 +191,19 @@ def command_role(command: list[str], database: str) -> str:
         pairs[flag] = value
     if role == "migrate":
         if pairs != {"--database": database}:
+            fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+        return role
+    if role == "recovery":
+        action = pairs.get("--action")
+        operation = pairs.get("--operation-id")
+        required = {"--database", "--action"}
+        if action in {"resume", "retry"} or (action == "status" and operation is not None):
+            required.add("--operation-id")
+            if operation is None or re.fullmatch(r"[0-9a-f]{32}", operation) is None:
+                fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+        if action not in {"recover", "resume", "retry", "status"} or set(pairs) != required:
+            fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+        if pairs["--database"] != database:
             fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
         return role
     if set(pairs) != {"--service-ref", "--product", "--credential-file", "--database"}:
@@ -231,6 +250,8 @@ def main():
         )
         return
     role, database, command = parse_normal(argv)
+    if role == "recovery" and (os.getuid() != APP_UID or os.getgid() != APP_GID):
+        fail("GATEWAY_DATABASE_LOCK_INVALID")
     parent_fd, lock_fd = claim_lock(database, APP_UID, APP_GID)
     try:
         os.close(parent_fd)
@@ -253,5 +274,11 @@ if __name__ == "__main__":
     try:
         main()
     except LockFailure as error:
-        sys.stderr.write(error.code + "\n")
+        recovery = any(value in RECOVERY_TARGETS for value in sys.argv[1:])
+        code = ("RECOVERY_FAILED" if error.code == "GATEWAY_DATABASE_LOCK_BUSY" else "RECOVERY_INVALID") if recovery else error.code
+        sys.stderr.write(code + "\n")
+        raise SystemExit(1)
+    except (OSError, ValueError, TypeError):
+        recovery = any(value in RECOVERY_TARGETS for value in sys.argv[1:])
+        sys.stderr.write("RECOVERY_INVALID\n" if recovery else "GATEWAY_DATABASE_LOCK_INVALID\n")
         raise SystemExit(1)

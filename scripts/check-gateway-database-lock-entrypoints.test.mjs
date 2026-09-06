@@ -47,13 +47,15 @@ test("accepts only launcher-bound Gateway database entrypoints and manifests", (
   assert.equal(result.stderr, "");
   assert.equal(
     result.stdout,
-    "GATEWAY_DATABASE_LOCK_ENTRYPOINTS_OK roles=3 directBypasses=0\n"
+    "GATEWAY_DATABASE_LOCK_ENTRYPOINTS_OK roles=4 directBypasses=0\n"
   );
 });
 
 test("rejects every independent direct-node or missing-manifest launcher bypass", () => {
   const fixture = mkdtempSync(join(tmpdir(), "family-ai-lock-entrypoints-"));
   const files = [
+    ".github/workflows/ci.yml",
+    "scripts/ci-retained-runtime-smoke.sh",
     "package.json",
     "apps/gateway/package.json",
     "Dockerfile",
@@ -75,6 +77,16 @@ test("rejects every independent direct-node or missing-manifest launcher bypass"
       cpSync(join(root, path), target);
     }
     const mutations = [
+      ["scripts/ci-retained-runtime-smoke.sh", /git clone --quiet --no-hardlinks/u, "git clone --quiet"],
+      ["scripts/ci-retained-runtime-smoke.sh", /sudo -n chown -hR 1000:1000 -- "\$fixture_root"/u, 'sudo -n chown -hR 1000:1000 -- "$repository"'],
+      ["scripts/ci-retained-runtime-smoke.sh", /sudo -n find -P "\$fixture_root"/u, 'sudo -n find -L "$fixture_root"'],
+      [".github/workflows/ci.yml", /docker build --platform linux\/amd64 --target build/u, "npm run check"],
+      [".github/workflows/ci.yml", /--test-name-pattern='rootful sealed image' scripts\/gateway-wal-recovery-runtime\.test\.mjs/u, "--test-name-pattern='self-check' scripts/gateway-wal-recovery-runtime.test.mjs"],
+      ["package.json", /python3 apps\/gateway\/runtime\/gateway_lock_exec\.py --database-from-env GATEWAY_DATABASE_PATH -- node apps\/gateway\/dist\/recoverGatewayDatabase\.js/u, "node apps/gateway/dist/recoverGatewayDatabase.js"],
+      ["apps/gateway/package.json", /python3 runtime\/gateway_lock_exec\.py --database-from-env GATEWAY_DATABASE_PATH -- node dist\/recoverGatewayDatabase\.js/u, "node dist/recoverGatewayDatabase.js"],
+      ["scripts/gateway-release-capabilities.json", /"protectedWalRecoveryV1": true/u, '"protectedWalRecoveryV1": false'],
+      ["scripts/runtime-tool-manifest.mjs", /apps\/gateway\/src\/recoverGatewayDatabase\.ts/u, "apps/gateway/src/missing.ts"],
+      ["scripts/runtime-tool-manifest.mjs", /apps\/gateway\/runtime\/rename_noreplace\.py/u, "apps/gateway/runtime/missing.py"],
       ["package.json", /python3 apps\/gateway\/runtime\/gateway_lock_exec\.py --database-from-env GATEWAY_DATABASE_PATH -- node apps\/gateway\/dist\/provisionFederationService\.js/u, "node apps/gateway/dist/provisionFederationService.js"],
       ["apps/gateway/package.json", /python3 runtime\/gateway_lock_exec\.py --database-from-env GATEWAY_DATABASE_PATH -- node dist\/index\.js/u, "node dist/index.js"],
       ["apps/gateway/package.json", /python3 runtime\/gateway_lock_exec\.py --database-from-env GATEWAY_DATABASE_PATH -- node dist\/migrate\.js/u, "node dist/migrate.js"],
@@ -117,6 +129,8 @@ test("rejects every independent direct-node or missing-manifest launcher bypass"
 test("rejects additive workspace bypasses, shell indirection, and duplicate Docker instructions", () => {
   const fixture = mkdtempSync(join(tmpdir(), "family-ai-lock-entrypoints-additive-"));
   const files = [
+    ".github/workflows/ci.yml",
+    "scripts/ci-retained-runtime-smoke.sh",
     "package.json",
     "apps/gateway/package.json",
     "Dockerfile",

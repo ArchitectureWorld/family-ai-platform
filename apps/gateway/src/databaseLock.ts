@@ -10,7 +10,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type GatewayDatabaseLockRole = "gateway" | "migrate" | "provision";
+export type GatewayDatabaseLockRole = "gateway" | "migrate" | "provision" | "recovery";
 
 export interface GatewayDatabaseLockLease {
   lockDev: bigint;

@@ -6,10 +6,15 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { readGatewayBuildDigests } from "./gateway-image-runtime-contract.mjs";
 
 const image = process.env.GATEWAY_LOCK_TEST_IMAGE;
 const manifestPath = process.env.GATEWAY_LOCK_TEST_MANIFEST;
 const root = fileURLToPath(new URL("../", import.meta.url));
+const recoveryExpectation = () => JSON.stringify({
+  renameHelperSha256: createHash("sha256").update(readFileSync(join(root, "apps/gateway/runtime/rename_noreplace.py"))).digest("hex"),
+  builtSha256: manifestPath ? JSON.parse(readFileSync(manifestPath, "utf8")).runtimeContract.expected.builtSha256 : readGatewayBuildDigests()
+});
 
 test("built Gateway image exposes only the approved CMD-through-launcher contract", {
   skip: image === undefined
@@ -43,14 +48,16 @@ test("built Gateway image exposes only the approved CMD-through-launcher contrac
     join(root, "scripts/gateway-image-runtime-contract.mjs"),
     "inspect", "--image-id", inspected.Id,
     "--expected-launcher-sha256", expectedLauncherSha256,
-    "--expected-python-version", "3.11.2"
+    "--expected-python-version", "3.11.2",
+    "--expected-recovery-json", recoveryExpectation()
   ], { encoding: "utf8" });
   assert.equal(contract.status, 0, contract.stderr);
   const wrongSource = spawnSync(process.execPath, [
     join(root, "scripts/gateway-image-runtime-contract.mjs"),
     "inspect", "--image-id", inspected.Id,
     "--expected-launcher-sha256", "0".repeat(64),
-    "--expected-python-version", "3.11.2"
+    "--expected-python-version", "3.11.2",
+    "--expected-recovery-json", recoveryExpectation()
   ], { encoding: "utf8" });
   assert.equal(wrongSource.status, 1);
 });
@@ -66,6 +73,13 @@ test("sealed image manifest binds expected source and runtime tool digests", {
   );
   assert.equal(manifest.runtimeContract.expected.pythonVersion, "3.11.2");
   assert.equal(manifest.runtimeContract.actual.pythonVersion, "3.11.2");
+  assert.equal(manifest.protectedWalRecoveryV1, true);
+  for (const file of manifest.runtimeContract.actual.recoveryFiles) {
+    const expected = file.path.endsWith(".py") ? manifest.runtimeContract.expected.renameHelperSha256 : manifest.runtimeContract.expected.builtSha256[file.path];
+    assert.equal(file.sha256, expected);
+    assert.equal(file.uid, 1000);
+    assert.equal(file.gid, 1000);
+  }
   const artifactDirectory = dirname(manifestPath);
   const toolBytes = readFileSync(join(artifactDirectory, "gateway-runtime-tools.json"));
   assert.equal(
@@ -78,7 +92,11 @@ test("sealed image manifest binds expected source and runtime tool digests", {
   );
 });
 
-test("runtime provenance rejects an image that copied different launcher bytes", {
+for (const runtimePath of [
+  "apps/gateway/runtime/gateway_lock_exec.py",
+  "apps/gateway/runtime/rename_noreplace.py",
+  "apps/gateway/dist/recoverGatewayDatabase.js"
+]) test(`runtime provenance rejects copied byte drift: ${runtimePath}`, {
   skip: image === undefined,
   timeout: 60_000
 }, () => {
@@ -104,8 +122,8 @@ test("runtime provenance rejects an image that copied different launcher bytes",
     writeFileSync(join(fixture, "Dockerfile"), [
       `FROM ${baseTag ?? image}`,
       "USER root",
-      "COPY --chown=1000:1000 gateway_lock_exec.py /app/apps/gateway/runtime/gateway_lock_exec.py",
-      "RUN chmod 0755 /app/apps/gateway/runtime/gateway_lock_exec.py",
+      `COPY --chown=1000:1000 gateway_lock_exec.py /app/${runtimePath}`,
+      `RUN chmod ${runtimePath.endsWith(".py") ? "0755" : "0644"} /app/${runtimePath}`,
       "USER node",
       ""
     ].join("\n"));
@@ -123,7 +141,8 @@ test("runtime provenance rejects an image that copied different launcher bytes",
         "image", "inspect", "--format", "{{.Id}}", tag
       ], { encoding: "utf8" }).stdout.trim(),
       "--expected-launcher-sha256", expectedLauncherSha256,
-      "--expected-python-version", "3.11.2"
+      "--expected-python-version", "3.11.2",
+      "--expected-recovery-json", recoveryExpectation()
     ], { encoding: "utf8" });
     assert.equal(result.status, 1);
     assert.equal(result.stdout, "");
