@@ -1961,6 +1961,35 @@ describe("offline Gateway database recovery engine", () => {
     expect(existsSync(displaced)).toBe(true);
   }, 30_000);
 
+  it("preserves a same-content marker replacement injected after marker-remove-intent receipt", async () => {
+    const databasePath = prepareV15();
+    await crashWalWriter(databasePath);
+    const lease = claimedLease(databasePath);
+    const marker = join(directory, ".gateway.sqlite.wal-recovery", "marker.json");
+    const displaced = `${marker}.displaced`;
+    let replaced = false;
+    let replacement: Buffer | undefined;
+
+    expect(() => runGatewayRecoveryWithLease(
+      lease,
+      { action: "recover", databasePath },
+      {
+        ...dependencies,
+        fault: (boundary) => {
+          if (!replaced && boundary === "receipt:marker-remove-intent") {
+            replaced = true;
+            replacement = readFileSync(marker);
+            renameSync(marker, displaced);
+            writeFileSync(marker, replacement, { flag: "wx", mode: 0o600 });
+          }
+        }
+      }
+    )).toThrow("GATEWAY_RECOVERY_INVALID");
+    expect(replaced).toBe(true);
+    expect(readFileSync(marker)).toEqual(replacement);
+    expect(existsSync(displaced)).toBe(true);
+  }, 30_000);
+
   it("preserves a work directory replacement injected after archive intent", async () => {
     const databasePath = prepareV15();
     await crashWalWriter(databasePath);

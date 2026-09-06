@@ -498,6 +498,12 @@ const exactDatabasePath = (path: string): string => {
 const sameIdentity = (left: BigIntStats, right: BigIntStats): boolean =>
   left.dev === right.dev && left.ino === right.ino;
 
+const matchesExpectedIdentity = (
+  state: BigIntStats,
+  expectedDev: string,
+  expectedIno: string
+): boolean => state.dev === BigInt(expectedDev) && state.ino === BigInt(expectedIno);
+
 export function createClaimedRecoveryLockLeaseForTest(
   lease: GatewayDatabaseLockLease & { databasePath: string }
 ): ClaimedRecoveryLockLease {
@@ -1846,6 +1852,7 @@ const parseReceipt = (input: {
 interface RecoveryJournal {
   operationId: string;
   databaseBasename: string;
+  marker: RecoveryMarker;
   paths: RecoveryPaths;
   sequence: bigint;
   lastStage: RecoveryStage | undefined;
@@ -2525,6 +2532,7 @@ const journalFromMarker = (databasePath: string, marker: RecoveryMarker): Recove
   return {
     operationId: marker.operationId,
     databaseBasename: marker.databaseBasename,
+    marker,
     paths,
     sequence: 0n,
     lastStage: undefined,
@@ -2565,6 +2573,7 @@ const createRecoveryJournal = (
     constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
     0o600
   );
+  let authenticatedMarker: RecoveryMarker | undefined;
   try {
     dependencies.fault?.("marker-temp-open");
     const marker = markerBytes(
@@ -2573,6 +2582,7 @@ const createRecoveryJournal = (
       fstatSync(rootDescriptor, { bigint: true }),
       fstatSync(markerDescriptor, { bigint: true })
     );
+    authenticatedMarker = marker.marker;
     const data = Buffer.from(marker.bytes);
     const split = Math.max(1, Math.floor(data.length / 2));
     if (writeSync(markerDescriptor, data, 0, split, 0) !== split) return fail("FSYNC_FAILED");
@@ -2608,6 +2618,7 @@ const createRecoveryJournal = (
   return {
     operationId,
     databaseBasename: basename(databasePath),
+    marker: authenticatedMarker ?? fail("GATEWAY_RECOVERY_INVALID"),
     paths,
     sequence: 0n,
     lastStage: undefined,
@@ -2709,6 +2720,7 @@ const loadActiveJournal = (
   const journal: RecoveryJournal = {
       operationId: marker.operationId,
       databaseBasename: marker.databaseBasename,
+      marker,
       paths,
       sequence: expectedSequence - 1n,
       lastStage: lastReceipt.stage,
@@ -3727,19 +3739,40 @@ const continueArchiveCompleted = (
           constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
         );
         const rootPathState = assertPrivateDirectory(journal.paths.activeRoot);
-        if (!sameIdentity(fstatSync(rootDescriptor, { bigint: true }), rootPathState)) {
+        if (
+          !sameIdentity(fstatSync(rootDescriptor, { bigint: true }), rootPathState)
+          || (existsSync(markerPath) && !matchesExpectedIdentity(
+            rootPathState,
+            journal.marker.activeRootDev,
+            journal.marker.activeRootIno
+          ))
+        ) {
           return fail("GATEWAY_RECOVERY_INVALID");
         }
       }
       if (existsSync(markerPath)) {
         markerDescriptor = openSync(markerPath, constants.O_RDONLY | constants.O_NOFOLLOW);
         const markerPathState = assertProtectedFile(markerPath);
-        if (!sameIdentity(fstatSync(markerDescriptor, { bigint: true }), markerPathState)) {
+        if (
+          !sameIdentity(fstatSync(markerDescriptor, { bigint: true }), markerPathState)
+          || !matchesExpectedIdentity(
+            markerPathState,
+            journal.marker.markerDev,
+            journal.marker.markerIno
+          )
+        ) {
           return fail("GATEWAY_RECOVERY_INVALID");
         }
         dependencies.fault?.("marker-before-unlink");
         const markerCurrent = lstatSync(markerPath, { bigint: true });
-        if (!sameIdentity(fstatSync(markerDescriptor, { bigint: true }), markerCurrent)) {
+        if (
+          !sameIdentity(fstatSync(markerDescriptor, { bigint: true }), markerCurrent)
+          || !matchesExpectedIdentity(
+            markerCurrent,
+            journal.marker.markerDev,
+            journal.marker.markerIno
+          )
+        ) {
           return fail("GATEWAY_RECOVERY_INVALID");
         }
         unlinkSync(markerPath);
@@ -3750,7 +3783,14 @@ const continueArchiveCompleted = (
         if (rootDescriptor === undefined) return fail("GATEWAY_RECOVERY_INVALID");
         dependencies.fault?.("active-root-before-rmdir");
         const rootCurrent = lstatSync(journal.paths.activeRoot, { bigint: true });
-        if (!sameIdentity(fstatSync(rootDescriptor, { bigint: true }), rootCurrent)) {
+        if (
+          !sameIdentity(fstatSync(rootDescriptor, { bigint: true }), rootCurrent)
+          || (markerDescriptor !== undefined && !matchesExpectedIdentity(
+            rootCurrent,
+            journal.marker.activeRootDev,
+            journal.marker.activeRootIno
+          ))
+        ) {
           return fail("GATEWAY_RECOVERY_INVALID");
         }
         if (readdirSync(journal.paths.activeRoot).length !== 0) {
