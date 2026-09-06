@@ -219,6 +219,11 @@ describe("offline Gateway database recovery engine", () => {
     expect(existsSync(`${databasePath}-shm`)).toBe(true);
   };
 
+  const requireEngineChildOutcome = (child: ReturnType<typeof spawnLockedSource>) => {
+    expect(child.error, "Recovery harness failure is not an engine outcome").toBeUndefined();
+    return child;
+  };
+
   const runLockedRecoveryChild = (input: {
     databasePath: string;
     action: "recover" | "resume" | "retry" | "status";
@@ -229,7 +234,7 @@ describe("offline Gateway database recovery engine", () => {
     candidateFailureBeforeOpen?: boolean;
     publicInvalid?: boolean;
     snapshotFailure?: boolean;
-  }) => spawnLockedSource({
+  }) => requireEngineChildOutcome(spawnLockedSource({
     root: join(import.meta.dirname, "../../.."),
     role: "gateway",
     databasePath: input.databasePath,
@@ -245,8 +250,10 @@ describe("offline Gateway database recovery engine", () => {
       ...(input.publicInvalid === true ? ["--public-invalid=1"] : []),
       ...(input.snapshotFailure === true ? ["--snapshot-failure=1"] : [])
     ],
-    timeout: 30_000
-  });
+    // A valid fsync-heavy child crossed 30s before its chosen SIGKILL boundary
+    // in the image gate. Keep a bounded child budget below the 120s stage case.
+    timeout: 90_000
+  }));
 
   const cloneCompletedProof = (
     databasePath: string,
