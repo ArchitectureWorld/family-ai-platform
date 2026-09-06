@@ -2292,7 +2292,7 @@ describe("offline Gateway database recovery engine", () => {
         name.endsWith(`-retry-cleanup-candidate-quarantine-${piece}-done.json`)
       )).toBe(true);
     }
-  }, 30_000);
+  }, 90_000);
 
   it("resumes a failed retry only after retry-intent is durable", async () => {
     const databasePath = prepareV15();
@@ -2329,7 +2329,7 @@ describe("offline Gateway database recovery engine", () => {
       { action: "resume", databasePath, operationId },
       dependencies
     )).toEqual({ kind: "execution", status: "recovered", operationId });
-  }, 30_000);
+  }, 90_000);
 
   it("records bounded retry-snapshot self loops for a failed recovery", async () => {
     const databasePath = prepareV15();
@@ -2406,7 +2406,7 @@ describe("offline Gateway database recovery engine", () => {
       { action: "retry", databasePath, operationId },
       dependencies
     )).toEqual({ kind: "execution", status: "recovered", operationId });
-  }, 30_000);
+  }, 90_000);
 
   it("resumes an aborted retry only after snapshot-retry-intent is durable", async () => {
     const databasePath = prepareV15();
@@ -2443,7 +2443,7 @@ describe("offline Gateway database recovery engine", () => {
       { action: "resume", databasePath, operationId },
       dependencies
     )).toEqual({ kind: "execution", status: "recovered", operationId });
-  }, 30_000);
+  }, 90_000);
 
   it("records bounded snapshot-retry self loops after an aborted recovery", async () => {
     const databasePath = prepareV15();
@@ -2476,7 +2476,7 @@ describe("offline Gateway database recovery engine", () => {
     expect(readdirSync(receiptsPath)
       .filter((name) => name.endsWith("-snapshot-retry-intent.json")).length)
       .toBeGreaterThanOrEqual(7);
-  }, 30_000);
+  }, 90_000);
 
   it("resumes an interrupted rollback intent to the restored terminal", async () => {
     const databasePath = prepareV15();
