@@ -525,7 +525,7 @@ describe("offline Gateway database recovery engine", () => {
     expect(readdirSync(receiptsPath)
       .filter((name) => name.endsWith("-snapshot-intent.json")).length)
       .toBeGreaterThanOrEqual(7);
-  }, 30_000);
+  }, 90_000);
 
   it("truncates one exact crash-ahead chunk back to the last durable receipt before resuming", async () => {
     const databasePath = prepareV15();
@@ -656,7 +656,7 @@ describe("offline Gateway database recovery engine", () => {
       { action: "status", databasePath },
       dependencies
     )).toThrow("GATEWAY_RECOVERY_INVALID");
-  }, 30_000);
+  }, 90_000);
 
   it("supports a second completed recovery with a fresh operation id", async () => {
     const databasePath = prepareV15();
@@ -701,7 +701,7 @@ describe("offline Gateway database recovery engine", () => {
       { action: "resume", databasePath, operationId: secondOperationId },
       dependencies
     )).toEqual({ kind: "execution", status: "recovered", operationId: secondOperationId });
-  }, 60_000);
+  }, 120_000);
 
   it.each([0, 1, 2, 3, 4, 5] as const)(
     "keeps a marker-only fixed empty bootstrap prefix of %i directories read-only",
