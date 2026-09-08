@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import sys
+from uuid import uuid4
 from urllib.request import Request, urlopen
 from typing import Any
 
@@ -101,13 +102,13 @@ def _direct_config() -> tuple[str, str, str] | None:
 def _direct_chat(frame: dict[str, Any], config: tuple[str, str, str]) -> int:
     model, base_url, api_key = config
     profile = str(frame["profile"])
-    session_id = str(frame.get("resume") or f"direct-{profile}")
+    session_id = str(frame.get("resume") or f"direct-{profile}-{uuid4().hex[:16]}")
     if not SESSION_ID.fullmatch(session_id):
         return _fail()
     store = BROKER_HERMES_HOME / "broker-sessions"
     try:
         store.mkdir(mode=0o700, parents=True, exist_ok=True)
-        history_path = store / f"{profile}.json"
+        history_path = store / f"{session_id}.json"
         history: list[dict[str, str]] = []
         if frame.get("resume") and history_path.exists():
             loaded = json.loads(history_path.read_text(encoding="utf-8"))
