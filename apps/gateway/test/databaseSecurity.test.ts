@@ -52,7 +52,7 @@ describe("secure Gateway database intents", () => {
     return join(directory, "gateway.sqlite");
   };
 
-  const createFixture = (path: string, version: 13 | 14 | 15): void => {
+  const createFixture = (path: string, version: 10 | 13 | 14 | 15): void => {
     const opened = openWithIntent(path, {
       intent: "test-create-or-existing",
       simulate: "migrate-create-or-existing",
@@ -236,6 +236,17 @@ describe("secure Gateway database intents", () => {
       .toEqual(beforeLedger);
     verification.close();
   }, 20_000);
+
+  it("accepts the exact legacy V10 shape only for one controlled migration to V15", () => {
+    const path = prepareDirectory();
+    createFixture(path, 10);
+    const lease = openWithIntent(path, { intent: "migrate-create-or-existing" });
+    expect(lease.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
+      .toEqual({ version: 15 });
+    lease.close();
+    expect(readdirSync(directory).filter((name) => name.startsWith("gateway.sqlite-") || name.endsWith("-journal")))
+      .toEqual([]);
+  }, 90_000);
 
   it("rejects a V13 production migration without changing the legacy database", () => {
     const path = prepareDirectory();

@@ -472,6 +472,11 @@ export function canonicalGatewaySchema(
   );
 }
 
+const EXPECTED_V10_SCHEMA_SHAPES = new Set([
+  "119:cc8e64042ee601899651f85c42fbb54d1a5278ff585ac54b4c370e98be09dd9b",
+  // Existing candidate Family data includes the separately-installed domain-event tables.
+  "141:9406e95806a4d73703014fe9308cc402c86b7d84464f05de96ce8fe306acc928"
+]);
 const EXPECTED_V14_SCHEMA_OBJECT_COUNT = 144;
 const EXPECTED_V14_SCHEMA_SHA256 =
   "ded4e2c1800dac6e799fa2e42bb8876996ac40852161a0041b6ae41a048b6845";
@@ -512,23 +517,24 @@ function inspectSchema(
       || (effectiveIntent !== "migrate-create-or-existing" && latest !== 15)
       || (
         publicIntent === "migrate-create-or-existing"
-        && latest !== 14
-        && latest !== 15
+        && !(
+          latest === 10
+          || latest === 14
+          || latest === 15
+        )
       )
     ) {
       fail("GATEWAY_DATABASE_SCHEMA_INVALID");
     }
     if (publicIntent === "migrate-create-or-existing") {
       const objects = canonicalGatewaySchema(database);
-      const expectedCount = latest === 14
-        ? EXPECTED_V14_SCHEMA_OBJECT_COUNT
-        : EXPECTED_V15_SCHEMA_OBJECT_COUNT;
-      const expectedHash = latest === 14
-        ? EXPECTED_V14_SCHEMA_SHA256
-        : EXPECTED_V15_SCHEMA_SHA256;
+      const fingerprint = gatewaySchemaFingerprint(database);
+      const validLegacyV10 = latest === 10 && EXPECTED_V10_SCHEMA_SHAPES.has(`${objects.length}:${fingerprint}`);
+      const expectedCount = latest === 14 ? EXPECTED_V14_SCHEMA_OBJECT_COUNT : EXPECTED_V15_SCHEMA_OBJECT_COUNT;
+      const expectedHash = latest === 14 ? EXPECTED_V14_SCHEMA_SHA256 : EXPECTED_V15_SCHEMA_SHA256;
       if (
-        objects.length !== expectedCount
-        || gatewaySchemaFingerprint(database) !== expectedHash
+        (latest === 10 && !validLegacyV10)
+        || (latest !== 10 && (objects.length !== expectedCount || fingerprint !== expectedHash))
       ) {
         fail("GATEWAY_DATABASE_SCHEMA_INVALID");
       }
