@@ -483,6 +483,11 @@ const EXPECTED_V14_SCHEMA_SHA256 =
 const EXPECTED_V15_SCHEMA_OBJECT_COUNT = 148;
 const EXPECTED_V15_SCHEMA_SHA256 =
   "b69b648fef9e0790a6d3a588be2f2b8f603cb153af57cb253365425eb61b7c37";
+const EXPECTED_V15_SCHEMA_SHAPES = new Set([
+  `${EXPECTED_V15_SCHEMA_OBJECT_COUNT}:${EXPECTED_V15_SCHEMA_SHA256}`,
+  // Existing candidate data retains the separately-installed domain-event tables.
+  "170:68e191f479a563398c5139347697940900d6b675cb0dcf26e6e66815ab5114ab"
+]);
 
 export function gatewaySchemaFingerprint(database: SchemaInspectionDatabase): string {
   return createHash("sha256")
@@ -532,9 +537,11 @@ function inspectSchema(
       const validLegacyV10 = latest === 10 && EXPECTED_V10_SCHEMA_SHAPES.has(`${objects.length}:${fingerprint}`);
       const expectedCount = latest === 14 ? EXPECTED_V14_SCHEMA_OBJECT_COUNT : EXPECTED_V15_SCHEMA_OBJECT_COUNT;
       const expectedHash = latest === 14 ? EXPECTED_V14_SCHEMA_SHA256 : EXPECTED_V15_SCHEMA_SHA256;
+      const validV15 = latest === 15 && EXPECTED_V15_SCHEMA_SHAPES.has(`${objects.length}:${fingerprint}`);
       if (
         (latest === 10 && !validLegacyV10)
-        || (latest !== 10 && (objects.length !== expectedCount || fingerprint !== expectedHash))
+        || (latest === 15 && !validV15)
+        || (latest !== 10 && latest !== 15 && (objects.length !== expectedCount || fingerprint !== expectedHash))
       ) {
         fail("GATEWAY_DATABASE_SCHEMA_INVALID");
       }
