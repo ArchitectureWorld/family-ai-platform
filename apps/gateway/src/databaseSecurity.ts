@@ -548,10 +548,7 @@ function inspectSchema(
     }
     if (effectiveIntent === "provision-existing") {
       const objects = canonicalGatewaySchema(database);
-      if (
-        objects.length !== EXPECTED_V15_SCHEMA_OBJECT_COUNT
-        || gatewaySchemaFingerprint(database) !== EXPECTED_V15_SCHEMA_SHA256
-      ) {
+      if (!EXPECTED_V15_SCHEMA_SHAPES.has(`${objects.length}:${gatewaySchemaFingerprint(database)}`)) {
         fail("GATEWAY_DATABASE_SCHEMA_INVALID");
       }
     }
