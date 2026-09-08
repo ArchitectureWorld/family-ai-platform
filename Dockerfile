@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 FROM --platform=linux/amd64 node:22.16.0-bookworm-slim@sha256:1471ea646673136b8308550ac14b36d847ffb21c24bc31828279e443c924e488 AS build
 
 ARG DEBIAN_SNAPSHOT=http://snapshot.debian.org/archive/debian/20250611T000000Z
