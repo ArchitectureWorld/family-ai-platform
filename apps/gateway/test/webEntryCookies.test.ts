@@ -99,6 +99,29 @@ describe("Web Entry Cookie helpers", () => {
     expect(webAuthenticationSource(unrelated)).toBe("none");
   });
 
+  it("bridges Family entry cookies for admin API paths and keeps unsafe requests CSRF-protected", () => {
+    const cookie = [
+      `${WEB_COOKIE_NAMES.entrySessionRef}=entry-session%3Aweb-alice`,
+      `${WEB_COOKIE_NAMES.entryToken}=${"B".repeat(43)}`
+    ].join("; ");
+    const adminGet = request({
+      url: "/api/v1/admin/members",
+      headers: { cookie }
+    });
+    expect(applyWebEntryCookieHeaders(adminGet)).toBe(true);
+    expect(adminGet.headers.authorization).toBe(`Bearer ${"B".repeat(43)}`);
+    expect(adminGet.headers["x-entry-session-ref"]).toBe("entry-session:web-alice");
+
+    const unsafeAdminPost = request({
+      method: "POST",
+      url: "/api/v1/admin/members",
+      headers: { cookie }
+    });
+    expect(() => applyWebEntryCookieHeaders(unsafeAdminPost)).toThrowError(
+      expect.objectContaining({ code: "WEB_REQUEST_FORBIDDEN" })
+    );
+  });
+
   it("reads federation Entry cookies privately without replacing service Authorization", () => {
     const cookie = [
       `${WEB_COOKIE_NAMES.entrySessionRef}=entry-session%3Aweb-alice`,

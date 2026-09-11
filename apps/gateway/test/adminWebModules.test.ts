@@ -417,6 +417,29 @@ describe("Admin Web API client", () => {
       });
   });
 
+  it("supports cookie-backed production activation without serializing credentials", async () => {
+    const { createAdminApi } = await apiModule();
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      requests.push({ url: String(input), init });
+      return Response.json({ activated: true });
+    });
+    const api = createAdminApi({ fetchImpl, cookieSession: true });
+    await expect(api.activate("ABCDE-FGHJK")).resolves.toEqual({ activated: true });
+    expect(requests).toEqual([{
+      url: "/api/v1/admin/activate",
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Family-AI-Web-Request": "1"
+        },
+        body: JSON.stringify({ code: "ABCDE-FGHJK" })
+      }
+    }]);
+    expect(JSON.stringify(requests)).not.toContain(token);
+  });
+
   it("creates and revokes pairing material only through the selected member", async () => {
     const { createAdminApi } = await apiModule();
     const requests: Array<{ url: string; init: RequestInit }> = [];

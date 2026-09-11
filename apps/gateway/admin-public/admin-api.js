@@ -8,6 +8,7 @@ const AGENT_REF = /^agent:[a-z0-9][a-z0-9._:-]{1,126}$/u;
 const THREAD_REF = /^thread:[a-z0-9][a-z0-9._:-]{1,126}$/u;
 const WORK_REF = /^work:[a-z0-9][a-z0-9._:-]{1,126}$/u;
 const MESSAGE_REF = /^message:[a-z0-9][a-z0-9._:-]{1,126}$/u;
+const ACTIVATION_CODE = /^[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5}$/u;
 const WORK_STATUSES = new Set([
   "active",
   "paused",
@@ -87,8 +88,8 @@ async function responseJson(response) {
   }
 }
 
-function requireEntryCredential(credential) {
-  if (credential?.kind !== "entry") {
+function requireEntryCredential(credential, cookieSession) {
+  if (credential?.kind !== "entry" && !cookieSession) {
     throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
   }
 }
@@ -424,6 +425,7 @@ export function normalizeFamilyRole(value) {
 export function createAdminApi({
   fetchImpl = fetch,
   credential = null,
+  cookieSession = false,
   uuid = () => crypto.randomUUID(),
   now = () => new Date()
 } = {}) {
@@ -437,10 +439,16 @@ export function createAdminApi({
   ) {
     const headers = {};
     if (!publicRequest) {
-      if (validatedCredential === null) {
+      if (validatedCredential === null && !cookieSession) {
         throw new AdminApiError("ADMIN_CREDENTIAL_REQUIRED", 401);
       }
-      Object.assign(headers, adminHeaders(validatedCredential));
+      if (cookieSession) {
+        if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+          headers["X-Family-AI-Web-Request"] = "1";
+        }
+      } else {
+        Object.assign(headers, adminHeaders(validatedCredential));
+      }
     }
     let serializedBody;
     if (body !== undefined) {
@@ -458,6 +466,27 @@ export function createAdminApi({
   }
 
   return Object.freeze({
+    async activate(value) {
+      if (!cookieSession) {
+        throw new AdminApiError("ADMIN_COOKIE_SESSION_REQUIRED", 401);
+      }
+      const code = typeof value === "string" ? value.trim().toUpperCase() : "";
+      if (!ACTIVATION_CODE.test(code)) {
+        throw new AdminApiError("ADMIN_ACTIVATION_CODE_INVALID", 400);
+      }
+      const result = await request("/api/v1/admin/activate", {
+        method: "POST",
+        body: { code }
+      });
+      if (
+        !isRecord(result) ||
+        Object.keys(result).length !== 1 ||
+        result.activated !== true
+      ) {
+        throw new AdminApiError("ADMIN_ACTIVATION_RESPONSE_INVALID", 502);
+      }
+      return { activated: true };
+    },
     async adminAccessMode() {
       const value = await request("/api/v1/admin/access-mode", {
         publicRequest: true
@@ -616,12 +645,12 @@ export function createAdminApi({
     },
 
     async agents() {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       return validateAgentCatalog(await request("/api/v1/admin/agents"));
     },
 
     async memberAgentMounts(personRef) {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       const normalizedPersonRef = normalizePersonRef(personRef);
       const value = await request(
         `/api/v1/admin/members/${encodeURIComponent(normalizedPersonRef)}/agent-mounts`
@@ -630,7 +659,7 @@ export function createAdminApi({
     },
 
     async mountAgent(personRef, agentRef) {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       const normalizedPersonRef = normalizePersonRef(personRef);
       const normalizedAgentRef = normalizeAgentRef(agentRef);
       const value = await request(
@@ -645,7 +674,7 @@ export function createAdminApi({
     },
 
     async unmountAgent(personRef, agentRef) {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       const normalizedPersonRef = normalizePersonRef(personRef);
       const normalizedAgentRef = normalizeAgentRef(agentRef);
       const value = await request(
@@ -657,7 +686,7 @@ export function createAdminApi({
     },
 
     async setDefaultAgent(personRef, agentRefOrNull) {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       const normalizedPersonRef = normalizePersonRef(personRef);
       const normalizedAgentRef = agentRefOrNull === null
         ? null
@@ -673,14 +702,14 @@ export function createAdminApi({
     },
 
     async systemWorkspace() {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       return safeWorkspaceSummary(
         await request("/api/v1/admin/system-workspace")
       );
     },
 
     async systemAgentChat(agentRef) {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       const normalizedAgentRef = normalizeAgentRef(agentRef);
       const value = await request(
         `/api/v1/admin/system-workspace/agents/` +
@@ -690,7 +719,7 @@ export function createAdminApi({
     },
 
     async systemAgentWorkConversations(agentRef) {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       const normalizedAgentRef = normalizeAgentRef(agentRef);
       const value = await request(
         `/api/v1/admin/system-workspace/agents/` +
@@ -700,7 +729,7 @@ export function createAdminApi({
     },
 
     async createSystemAgentWork(agentRef, input) {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       const normalizedAgentRef = normalizeAgentRef(agentRef);
       const value = await request(
         `/api/v1/admin/system-workspace/agents/` +
@@ -735,7 +764,7 @@ export function createAdminApi({
     },
 
     async systemThreadMessages(threadRef) {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       const normalizedThreadRef = normalizeThreadRef(threadRef);
       const value = await request(
         `/api/v1/admin/system-workspace/threads/` +
@@ -745,7 +774,7 @@ export function createAdminApi({
     },
 
     async sendSystemThreadMessage(threadRef, text) {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       const normalizedThreadRef = normalizeThreadRef(threadRef);
       const normalizedContent = normalizedText(text, {
         code: "ADMIN_MESSAGE_INVALID",
@@ -779,7 +808,7 @@ export function createAdminApi({
     },
 
     async systemWorkProgress(workRef) {
-      requireEntryCredential(validatedCredential);
+      requireEntryCredential(validatedCredential, cookieSession);
       const normalizedWorkRef = normalizeWorkRef(workRef);
       const value = await request(
         `/api/v1/admin/system-workspace/work-conversations/` +
