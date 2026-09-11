@@ -86,6 +86,16 @@ export function setWebEntryCookieHeaders(
   ];
 }
 
+export function setWebEntrySessionCookieHeaders(
+  secrets: Pick<WebEntryCookieSecrets, "entrySessionRef" | "entryToken">,
+  mode: WebCookieMode
+): string[] {
+  return [
+    cookie(WEB_COOKIE_NAMES.entrySessionRef, secrets.entrySessionRef, mode),
+    cookie(WEB_COOKIE_NAMES.entryToken, secrets.entryToken, mode)
+  ];
+}
+
 export function clearWebSessionCookieHeaders(mode: WebCookieMode): string[] {
   return [
     expiredCookie(WEB_COOKIE_NAMES.entrySessionRef, mode),

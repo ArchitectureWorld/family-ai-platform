@@ -61,6 +61,7 @@ import { registerFederationRoutes } from "./federationRoutes.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
 import { registerAgentRoutes, type AgentStatusLookup } from "./agentRoutes.js";
 import { registerAdminWeb } from "./adminWeb.js";
+import { registerAdminProductionActivation } from "./adminProductionActivation.js";
 import { registerAdminPreviewAccess } from "./adminPreviewAccess.js";
 import { registerAdminPreviewPersistence } from "./adminPreviewPersistence.js";
 import { registerMemberWeb } from "./memberWeb.js";
@@ -425,6 +426,19 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   registerWebEntryCookieBridge(app);
   registerMemberWeb(app);
   registerAdminWeb(app, options.mode, options.adminWebEnabled ?? options.mode === "development");
+  registerAdminProductionActivation(app, {
+    mode: options.mode,
+    enabled: options.adminWebEnabled ?? options.mode === "development",
+    entryAuthenticator,
+    now,
+    ...(options.productionAdminEntryPath === undefined
+      ? {}
+      : {
+          adminEntryPath: options.productionAdminEntryPath,
+          activationPath: options.productionAdminActivationPath!,
+          adminWebOrigin: options.adminWebOrigin!
+        })
+  });
   registerFamilyRoutes(app, {
     familyRepository,
     gatewayRepository: repository,

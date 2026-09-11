@@ -27,7 +27,8 @@ const scripts = [
   "scripts/member-preview-revoke.mjs",
   "scripts/member-preview-secret-audit.mjs",
   "scripts/member-preview-down.sh",
-  "scripts/member-preview-claim-loss-proxy.mjs"
+  "scripts/member-preview-claim-loss-proxy.mjs",
+  "scripts/admin-production-activate.mjs"
 ];
 
 function read(relativePath: string): string {
@@ -252,6 +253,38 @@ afterEach(() => {
 describe("isolated Member Web Preview scripts", () => {
   it.each(scripts)("provides %s", relativePath => {
     expect(existsSync(join(root, relativePath))).toBe(true);
+  });
+
+  it("creates only a salted five-minute production admin activation record", () => {
+    const directory = temporaryDirectory();
+    const entryPath = join(directory, "admin-entry.json");
+    const activationPath = join(directory, "admin-activation.json");
+    const token = fixtureToken("A");
+    writeFileSync(entryPath, `${JSON.stringify({
+      version: 1,
+      origin: "https://admin.example:8793",
+      familyRef: "family:production-test",
+      personRef: "person:production-test",
+      deviceRef: "device:production-test",
+      entryBindingRef: "entry-binding:production-test",
+      entrySessionRef: "entry-session:production-test",
+      token
+    })}\n`, { mode: 0o600 });
+    const result = spawnSync(
+      process.execPath,
+      [join(root, "scripts/admin-production-activate.mjs"), "--entry", entryPath, "--output", activationPath],
+      { encoding: "utf8" }
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5} expiresAt=\d{4}-\d{2}-\d{2}T/u);
+    expect(statSync(activationPath).mode & 0o777).toBe(0o600);
+    const record = JSON.parse(readFileSync(activationPath, "utf8"));
+    expect(Object.keys(record).sort()).toEqual([
+      "codeHash", "createdAt", "expiresAt", "salt", "version"
+    ]);
+    expect(record.version).toBe(1);
+    expect(record.codeHash).not.toContain(token);
+    expect(record.expiresAt).not.toBe(record.createdAt);
   });
 
   it.each([".gitignore", ".dockerignore"])(
