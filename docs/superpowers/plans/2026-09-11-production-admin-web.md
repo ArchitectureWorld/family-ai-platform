@@ -217,7 +217,7 @@ git commit -m "feat(admin): add production activation form"
 - Modify: `/home/youran/.config/superpowers/worktrees/ai-ecosystem/canvas-family-trusted-ingress/deploy/lan/compose.yml`
 - Modify: `/home/youran/.config/superpowers/worktrees/ai-ecosystem/canvas-family-trusted-ingress/deploy/lan/deploy.sh`
 - Modify: `/home/youran/.local/share/three-product-candidates/candidate.env`
-- Create through the operator script: `/home/youran/.local/share/three-product-candidates/family/admin-entry.json`
+- Create through the operator script: `/home/youran/.local/share/three-product-candidates/family/admin-bootstrap/admin-entry.json`
 - Create through the operator script: `/home/youran/.local/share/three-product-candidates/family/admin-activation/record.json`
 - Test: deployment config and protected-file checks in `deploy/lan`
 
