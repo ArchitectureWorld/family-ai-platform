@@ -122,4 +122,23 @@ describe("development Admin Web product entry", () => {
       }
     }
   });
+
+  it("serves Admin Web in production only when explicitly enabled", async () => {
+    const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
+      databasePath: databasePathFor("production-enabled"),
+      deviceToken: token,
+      mode: "production",
+      providerAdapter: new FakeProviderAdapter(),
+      adminWebEnabled: true
+    });
+    try {
+      const admin = await app.inject({ method: "GET", url: "/admin/" });
+      expect(admin.statusCode).toBe(200);
+      expect(admin.body).toContain("Family AI 家庭管理");
+      expect(admin.headers["cache-control"]).toBe("no-store");
+    } finally {
+      await app.close();
+    }
+  });
 });

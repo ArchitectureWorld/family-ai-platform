@@ -34,6 +34,14 @@ try {
     attachmentQuotaBytes: config.attachmentQuotaBytes,
     deviceToken: config.deviceToken,
     mode: config.mode,
+    adminWebEnabled: config.adminWebEnabled,
+    ...(config.productionAdminEntryPath === undefined
+      ? {}
+      : {
+          productionAdminEntryPath: config.productionAdminEntryPath,
+          productionAdminActivationPath: config.productionAdminActivationPath!,
+          adminWebOrigin: config.adminWebOrigin!
+        }),
     providerRouter: runtime.router,
     configuredAgentRuntimes: runtime.agents,
     authoritativeAgentRuntimeCatalog: runtime.authoritative,

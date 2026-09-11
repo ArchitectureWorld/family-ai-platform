@@ -253,6 +253,48 @@ describe("Gateway configuration", () => {
     });
   });
 
+  it("requires an explicit protected production Admin Web configuration", () => {
+    const root = mkdtempSync(join(tmpdir(), "family-ai-production-admin-config-"));
+    temporaryDirectories.push(root);
+    const entryPath = join(root, "admin-entry.json");
+    const activationPath = join(root, "admin-activation.json");
+    writeFileSync(entryPath, "{}\n", { mode: 0o600 });
+    writeFileSync(activationPath, "{}\n", { mode: 0o600 });
+    const enabled = loadGatewayConfig({
+      ...realEnvironment(),
+      GATEWAY_MODE: "production",
+      GATEWAY_ADMIN_WEB_ENABLED: "1",
+      GATEWAY_ADMIN_WEB_ORIGIN: "https://admin.example:8793",
+      GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH: entryPath,
+      GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH: activationPath
+    });
+    expect(enabled).toMatchObject({
+      adminWebEnabled: true,
+      productionAdminEntryPath: entryPath,
+      productionAdminActivationPath: activationPath,
+      adminWebOrigin: "https://admin.example:8793"
+    });
+    expect(loadGatewayConfig({
+      ...realEnvironment(),
+      GATEWAY_MODE: "production"
+    }).adminWebEnabled).toBe(false);
+    expect(() => loadGatewayConfig({
+      ...realEnvironment(),
+      GATEWAY_MODE: "production",
+      GATEWAY_ADMIN_WEB_ENABLED: "1",
+      GATEWAY_ADMIN_WEB_ORIGIN: "https://admin.example:8793",
+      GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH: entryPath
+    })).toThrow("Production Admin Web");
+    expect(() => loadGatewayConfig({
+      ...realEnvironment(),
+      GATEWAY_MODE: "production",
+      GATEWAY_ADMIN_WEB_ENABLED: "1",
+      GATEWAY_ADMIN_WEB_ORIGIN: "http://admin.example:8793",
+      GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH: entryPath,
+      GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH: activationPath
+    })).toThrow("HTTPS origin");
+  });
+
   it("loads a real non-symlink UDS for production Broker mode and serializes only its mode", async () => {
     const environment = await brokerEnvironment();
     const config = loadGatewayConfig({

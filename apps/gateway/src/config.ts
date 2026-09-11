@@ -64,6 +64,10 @@ export interface GatewayConfig {
   providerRuntime: GatewayProviderRuntimeConfig;
   previewAdminEntryPath?: string;
   previewAdminOrigin?: string;
+  adminWebEnabled: boolean;
+  productionAdminEntryPath?: string;
+  productionAdminActivationPath?: string;
+  adminWebOrigin?: string;
   canvasBaseUrl?: string;
   canvasAllowContainerService?: boolean;
 }
@@ -74,6 +78,44 @@ function positiveInteger(raw: string | undefined, fallback: number, name: string
     throw new Error(`${name} must be a positive integer`);
   }
   return value;
+}
+
+function booleanFlag(raw: string | undefined, name: string): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "1") return true;
+  if (raw === "0") return false;
+  throw new Error(`${name} must be 0 or 1`);
+}
+
+function adminOrigin(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("GATEWAY_ADMIN_WEB_ORIGIN must be a valid HTTPS origin");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.hostname === "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error("GATEWAY_ADMIN_WEB_ORIGIN must be a valid HTTPS origin");
+  }
+  return url.origin;
+}
+
+function protectedPath(raw: string | undefined, name: string): string | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const path = resolve(raw);
+  if (path === parse(path).root || path.split(sep).includes(".git")) {
+    throw new Error(`${name} is unsafe`);
+  }
+  return path;
 }
 
 function attachmentDirectory(raw: string | undefined): string {
@@ -420,6 +462,38 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     throw new Error("Admin Preview persistence is development-only");
   }
 
+  const adminWebFlag = booleanFlag(env.GATEWAY_ADMIN_WEB_ENABLED, "GATEWAY_ADMIN_WEB_ENABLED");
+  const adminWebEnabled = adminWebFlag ?? mode === "development";
+  const adminWebOrigin = adminOrigin(env.GATEWAY_ADMIN_WEB_ORIGIN);
+  const productionAdminEntryPath = protectedPath(
+    env.GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH,
+    "GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH"
+  );
+  const productionAdminActivationPath = protectedPath(
+    env.GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH,
+    "GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH"
+  );
+  if (mode === "production" && adminWebEnabled) {
+    if (
+      productionAdminEntryPath === undefined ||
+      productionAdminActivationPath === undefined ||
+      adminWebOrigin === undefined
+    ) {
+      throw new Error(
+        "Production Admin Web requires GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH, " +
+        "GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH, and GATEWAY_ADMIN_WEB_ORIGIN"
+      );
+    }
+  }
+  if (
+    (productionAdminEntryPath === undefined) !==
+    (productionAdminActivationPath === undefined)
+  ) {
+    throw new Error(
+      "Production Admin Web paths must be configured together"
+    );
+  }
+
   const config = {
     host,
     port,
@@ -428,6 +502,14 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     attachmentQuotaBytes,
     deviceToken,
     mode,
+    adminWebEnabled,
+    ...(productionAdminEntryPath === undefined
+      ? {}
+      : {
+          productionAdminEntryPath,
+          productionAdminActivationPath: productionAdminActivationPath!
+        }),
+    ...(adminWebOrigin === undefined ? {} : { adminWebOrigin }),
     ...(configuredCanvasBaseUrl === undefined
       ? {}
       : {

@@ -99,6 +99,10 @@ export interface BuildGatewayAppOptions {
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
   previewAdminEntryPath?: string;
   previewAdminOrigin?: string;
+  adminWebEnabled?: boolean;
+  productionAdminEntryPath?: string;
+  productionAdminActivationPath?: string;
+  adminWebOrigin?: string;
   canvasBaseUrl?: string;
   canvasAllowContainerService?: boolean;
   canvasWorkflowClient?: CanvasWorkflowClient;
@@ -420,7 +424,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
 
   registerWebEntryCookieBridge(app);
   registerMemberWeb(app);
-  registerAdminWeb(app, options.mode);
+  registerAdminWeb(app, options.mode, options.adminWebEnabled ?? options.mode === "development");
   registerFamilyRoutes(app, {
     familyRepository,
     gatewayRepository: repository,

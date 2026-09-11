@@ -42,8 +42,12 @@ function registerTextAsset(
   );
 }
 
-export function registerAdminWeb(app: FastifyInstance, mode: AdminWebMode): void {
-  if (mode !== "development") return;
+export function registerAdminWeb(
+  app: FastifyInstance,
+  mode: AdminWebMode,
+  enabled = mode === "development"
+): void {
+  if (!enabled || mode === "test") return;
 
   app.get("/admin", async (_request, reply) => reply.redirect("/admin/"));
   registerTextAsset(app, "/admin/", "index.html", "text/html; charset=utf-8");
