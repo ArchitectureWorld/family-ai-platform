@@ -116,6 +116,7 @@ function parseAdminEntry(value: unknown): ProductionAdminEntry {
       "deviceRef\0entryBindingRef\0entrySessionRef\0familyRef\0origin\0personRef\0token\0version" ||
     candidate.version !== 1 ||
     typeof candidate.origin !== "string" ||
+    !/^https:\/\/[^/]+(?::\d+)?$/u.test(candidate.origin) ||
     !FAMILY_PATTERN.test(String(candidate.familyRef)) ||
     !PERSON_PATTERN.test(String(candidate.personRef)) ||
     !DEVICE_PATTERN.test(String(candidate.deviceRef)) ||
@@ -301,6 +302,7 @@ export function registerAdminProductionActivation(
       );
       if (
         authentication.status !== "authenticated" ||
+        entry.origin !== input.adminWebOrigin ||
         authentication.context.audience !== "family_admin" ||
         authentication.context.family.familyRef !== entry.familyRef ||
         authentication.context.person.personRef !== entry.personRef ||

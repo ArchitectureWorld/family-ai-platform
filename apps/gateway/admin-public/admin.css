@@ -90,11 +90,22 @@ h2 {
 }
 
 .form-grid,
-.member-form {
+.member-form,
+.activation-form {
   display: grid;
   gap: 18px;
   max-width: 620px;
   margin-top: 32px;
+}
+
+.activation-form {
+  max-width: 420px;
+}
+
+#admin-activation-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 .member-form {

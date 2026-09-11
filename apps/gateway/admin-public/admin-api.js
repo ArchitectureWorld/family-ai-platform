@@ -588,9 +588,7 @@ export function createAdminApi({
     },
 
     async context() {
-      if (validatedCredential?.kind !== "entry") {
-        throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
-      }
+      requireEntryCredential(validatedCredential, cookieSession);
       const value = await request("/api/v1/portal/context");
       if (
         !isRecord(value) ||
@@ -608,9 +606,7 @@ export function createAdminApi({
     },
 
     async persistPreviewCredential() {
-      if (validatedCredential?.kind !== "entry") {
-        throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
-      }
+      requireEntryCredential(validatedCredential, cookieSession);
       const value = await request("/api/v1/admin/preview-entry", {
         method: "POST"
       });
@@ -621,9 +617,7 @@ export function createAdminApi({
     },
 
     async members() {
-      if (validatedCredential?.kind !== "entry") {
-        throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
-      }
+      requireEntryCredential(validatedCredential, cookieSession);
       const value = await request("/api/v1/admin/members");
       if (!isRecord(value) || !Array.isArray(value.members)) {
         throw new AdminApiError("ADMIN_MEMBERS_INVALID", 502);
@@ -637,9 +631,7 @@ export function createAdminApi({
     },
 
     async addMember(input) {
-      if (validatedCredential?.kind !== "entry") {
-        throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
-      }
+      requireEntryCredential(validatedCredential, cookieSession);
       const value = await request("/api/v1/admin/members", {
         method: "POST",
         expectedStatus: 201,
@@ -832,9 +824,7 @@ export function createAdminApi({
     },
 
     async createPairing(personRef) {
-      if (validatedCredential?.kind !== "entry") {
-        throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
-      }
+      requireEntryCredential(validatedCredential, cookieSession);
       if (typeof personRef !== "string" || !PERSON_REF.test(personRef)) {
         throw new AdminApiError("ADMIN_PERSON_REF_INVALID", 400);
       }
@@ -857,9 +847,7 @@ export function createAdminApi({
     },
 
     async revokePairing(pairingRef) {
-      if (validatedCredential?.kind !== "entry") {
-        throw new AdminApiError("ADMIN_ENTRY_REQUIRED", 401);
-      }
+      requireEntryCredential(validatedCredential, cookieSession);
       if (typeof pairingRef !== "string" || !PAIRING_REF.test(pairingRef)) {
         throw new AdminApiError("ADMIN_PAIRING_INVALID", 400);
       }

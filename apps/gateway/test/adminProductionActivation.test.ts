@@ -192,4 +192,24 @@ describe("production Admin Web activation", () => {
     });
     expect(activation.outputPath).toBe(fixtureValue.activationPath);
   });
+
+  it("rejects a protected administrator entry bound to another origin", async () => {
+    const fixtureValue = await fixture("origin");
+    const entry = JSON.parse(readFileSync(fixtureValue.entryPath, "utf8"));
+    writeFileSync(fixtureValue.entryPath, `${JSON.stringify({
+      ...entry,
+      origin: "https://other.example:8793"
+    })}\n`, { mode: 0o600 });
+    const activation = await createProductionAdminActivation({
+      adminEntryPath: fixtureValue.entryPath,
+      activationPath: fixtureValue.activationPath
+    });
+    const response = await fixtureValue.app.inject({
+      method: "POST",
+      url: "/api/v1/admin/activate",
+      headers: activationHeaders(),
+      payload: { code: activation.code }
+    });
+    expect(response.statusCode).toBe(401);
+  });
 });

@@ -101,6 +101,7 @@ describe("development Admin Web product entry", () => {
       });
       try {
         for (const path of [
+          "/api/v1/admin/web-mode",
           "/admin",
           "/admin/",
           "/admin/assets/admin.css",
@@ -138,6 +139,9 @@ describe("development Admin Web product entry", () => {
       expect(admin.body).toContain("Family AI 家庭管理");
       expect(admin.body).toContain('id="admin-activation-form"');
       expect(admin.body).toContain("激活管理员设备");
+      const mode = await app.inject({ method: "GET", url: "/api/v1/admin/web-mode" });
+      expect(mode.statusCode).toBe(200);
+      expect(mode.json()).toEqual({ mode: "production" });
       expect(admin.headers["cache-control"]).toBe("no-store");
     } finally {
       await app.close();
