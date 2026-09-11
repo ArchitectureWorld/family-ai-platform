@@ -70,11 +70,15 @@ JavaScript 读取。服务端扩展 Web Cookie bridge，使 `/api/v1/admin/*` �
   文件内容；
 - 每次生成会原子替换旧的未使用激活记录。
 
-production Gateway 进程通过只读 bind mount 获得管理员 Entry 文件和激活记录，
+production Gateway 进程通过只读 bind mount 获得管理员 Entry 文件，并通过
+独立的最小可写 bind mount 获得激活记录目录，
 路径由显式环境变量 `GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH` 与
 `GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH` 配置；两者必须是 regular file、
-权限 0600、非 symlink，并且只读挂载到 `/run/admin-bootstrap/`；静态 Web
-资源和其他产品容器不挂载这两个文件。部署脚本
+管理员 Entry 必须权限 0600、非 symlink，并只读挂载到
+`/run/admin-bootstrap/admin-entry.json`。激活目录必须权限 0700，且只能包含
+权限 0600 的 `record.json`；它挂载到 `/run/admin-activation/`，使 Gateway
+只能原子消费短码记录而不能改管理员长期凭据。静态 Web 资源和其他产品容器
+不挂载这些文件。部署脚本
 不把文件内容写入日志或台账。
 
 新增 `POST /api/v1/admin/activate`，仅在 `GATEWAY_ADMIN_WEB_ENABLED=1` 的

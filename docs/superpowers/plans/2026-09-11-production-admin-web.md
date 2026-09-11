@@ -218,13 +218,13 @@ git commit -m "feat(admin): add production activation form"
 - Modify: `/home/youran/.config/superpowers/worktrees/ai-ecosystem/canvas-family-trusted-ingress/deploy/lan/deploy.sh`
 - Modify: `/home/youran/.local/share/three-product-candidates/candidate.env`
 - Create through the operator script: `/home/youran/.local/share/three-product-candidates/family/admin-entry.json`
-- Create through the operator script: `/home/youran/.local/share/three-product-candidates/family/admin-activation.json`
+- Create through the operator script: `/home/youran/.local/share/three-product-candidates/family/admin-activation/record.json`
 - Test: deployment config and protected-file checks in `deploy/lan`
 
 **Interfaces:**
 
 - Compose passes `GATEWAY_ADMIN_WEB_ENABLED=1`, `GATEWAY_ADMIN_WEB_ORIGIN=https://admin-yr.tailf7be7d.ts.net:8793`, and the two `/run/admin-bootstrap/*` paths.
-- Family receives read-only mounts of the two mode-0600 files; no other service receives them.
+- Family receives a read-only mode-0600 Admin Entry file and a dedicated mode-0700 activation directory containing only mode-0600 `record.json`; no other service receives them.
 - `deploy.sh` refuses dirty sources, missing files, symlinks, wrong owners/modes, or an active Family container before rebuild.
 
 - [ ] **Step 1: Add protected-file deployment checks**
