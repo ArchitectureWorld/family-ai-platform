@@ -23,6 +23,9 @@ const adminShell = document.querySelector(".admin-shell");
 const setupRoot = document.querySelector("#family-setup-root");
 const summaryRoot = document.querySelector("#family-summary");
 const membersRoot = document.querySelector("#member-management-root");
+const activationForm = document.querySelector("#admin-activation-form");
+const activationCodeInput = document.querySelector("#admin-activation-code");
+const activationFeedback = document.querySelector("#admin-activation-feedback");
 const adminPageButtons = [...document.querySelectorAll("[data-admin-page]")];
 const membersPage = document.querySelector("#admin-members-page");
 const workspacePage = document.querySelector("#admin-workspace-page");
@@ -118,6 +121,8 @@ function errorText(error) {
       return "管理员入口已失效，请重新生成入口后再试。";
     }
     if (error.code === "REQUEST_INVALID") return "请检查填写的名称和成员角色。";
+    if (error.code === "ADMIN_ACTIVATION_CODE_INVALID") return "激活码格式不正确。";
+    if (error.code === "ADMIN_ACTIVATION_INVALID") return "激活码无效或已过期，请重新生成。";
   }
   return "暂时无法完成操作，请稍后重试。";
 }
@@ -428,7 +433,9 @@ async function openPairing(api, member) {
 }
 
 async function renderManagement(credential, persistenceWarning = "") {
-  const api = createAdminApi({ credential });
+  const api = credential?.cookieSession === true
+    ? createAdminApi({ cookieSession: true })
+    : createAdminApi({ credential });
   destroyAdminWorkspace();
   activeManagementApi = api;
   const [context, memberResult] = await Promise.all([
@@ -520,6 +527,28 @@ async function openPreviewCredential() {
   return api.openPreviewAccess();
 }
 
+function showProductionActivation(message = "请输入本机 operator 刚生成的一次性激活码。") {
+  showAdminState("recovery-required");
+  if (activationForm) activationForm.hidden = false;
+  if (activationFeedback) activationFeedback.textContent = message;
+  activationCodeInput?.focus();
+}
+
+activationForm?.addEventListener("submit", async event => {
+  event.preventDefault();
+  const submit = activationForm.querySelector("button[type=submit]");
+  if (submit) submit.disabled = true;
+  if (activationFeedback) activationFeedback.textContent = "正在激活管理员设备…";
+  try {
+    await createAdminApi({ cookieSession: true }).activate(activationCodeInput?.value ?? "");
+    if (activationCodeInput) activationCodeInput.value = "";
+    await renderManagement({ cookieSession: true });
+  } catch (error) {
+    if (activationFeedback) activationFeedback.textContent = errorText(error);
+    if (submit) submit.disabled = false;
+  }
+});
+
 async function start() {
   showAdminState("initializing");
   clearLegacyStoredAdminCredential(window);
@@ -529,12 +558,27 @@ async function start() {
     window.history.replaceState(null, "", ADMIN_CLEAN_PATH);
   }
 
-  let credential;
   try {
-    credential = rawFragment !== ""
+    if (hasQuery) throw new Error("ADMIN_QUERY_FORBIDDEN");
+
+    const webMode = await createAdminApi().adminWebMode();
+    if (webMode.mode === "production") {
+      if (rawFragment !== "") {
+        showProductionActivation();
+        return;
+      }
+      try {
+        await renderManagement({ cookieSession: true });
+        return;
+      } catch (error) {
+        showProductionActivation(errorText(error));
+        return;
+      }
+    }
+
+    const credential = rawFragment !== ""
       ? captureAdminHandoff(rawFragment)
       : undefined;
-    if (hasQuery) throw new Error("ADMIN_QUERY_FORBIDDEN");
 
     const status = await createAdminApi({ credential }).onboardingStatus();
     if (!status.initialized) {

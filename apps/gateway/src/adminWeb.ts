@@ -49,6 +49,11 @@ export function registerAdminWeb(
 ): void {
   if (!enabled || mode === "test") return;
 
+  app.get("/api/v1/admin/web-mode", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return { mode };
+  });
+
   app.get("/admin", async (_request, reply) => reply.redirect("/admin/"));
   registerTextAsset(app, "/admin/", "index.html", "text/html; charset=utf-8");
   registerTextAsset(

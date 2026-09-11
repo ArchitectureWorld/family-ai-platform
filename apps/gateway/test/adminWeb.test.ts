@@ -52,9 +52,9 @@ describe("development Admin Web product entry", () => {
       expect(admin.body).toContain('data-state="management"');
       expect(admin.body).toContain('data-state="recovery-required"');
       expect(admin.body).toContain("管理员入口暂时不可用");
-      expect(admin.body).not.toContain('id="admin-activation-form"');
-      expect(admin.body).not.toContain('autocomplete="one-time-code"');
-      expect(admin.body).not.toContain("激活管理员设备");
+      expect(admin.body).toContain('id="admin-activation-form"');
+      expect(admin.body).toContain('autocomplete="one-time-code"');
+      expect(admin.body).toContain("激活管理员设备");
       expect(admin.body).not.toContain(token);
       expect(admin.body).toContain('data-admin-page="members"');
       expect(admin.body).toContain('data-admin-page="workspace"');
@@ -136,6 +136,8 @@ describe("development Admin Web product entry", () => {
       const admin = await app.inject({ method: "GET", url: "/admin/" });
       expect(admin.statusCode).toBe(200);
       expect(admin.body).toContain("Family AI 家庭管理");
+      expect(admin.body).toContain('id="admin-activation-form"');
+      expect(admin.body).toContain("激活管理员设备");
       expect(admin.headers["cache-control"]).toBe("no-store");
     } finally {
       await app.close();

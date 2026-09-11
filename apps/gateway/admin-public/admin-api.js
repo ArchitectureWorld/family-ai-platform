@@ -466,6 +466,20 @@ export function createAdminApi({
   }
 
   return Object.freeze({
+    async adminWebMode() {
+      const value = await request("/api/v1/admin/web-mode", {
+        publicRequest: true
+      });
+      if (
+        !isRecord(value) ||
+        Object.keys(value).length !== 1 ||
+        !["development", "production"].includes(value.mode)
+      ) {
+        throw new AdminApiError("ADMIN_WEB_MODE_RESPONSE_INVALID", 502);
+      }
+      return { mode: value.mode };
+    },
+
     async activate(value) {
       if (!cookieSession) {
         throw new AdminApiError("ADMIN_COOKIE_SESSION_REQUIRED", 401);

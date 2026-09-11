@@ -440,6 +440,21 @@ describe("Admin Web API client", () => {
     expect(JSON.stringify(requests)).not.toContain(token);
   });
 
+  it("validates the explicit Admin Web mode without using Preview access endpoints", async () => {
+    const { createAdminApi } = await apiModule();
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      requests.push({ url: String(input), init });
+      return Response.json({ mode: "production" });
+    });
+    const api = createAdminApi({ fetchImpl });
+    await expect(api.adminWebMode()).resolves.toEqual({ mode: "production" });
+    expect(requests).toEqual([{
+      url: "/api/v1/admin/web-mode",
+      init: { method: "GET" }
+    }]);
+  });
+
   it("creates and revokes pairing material only through the selected member", async () => {
     const { createAdminApi } = await apiModule();
     const requests: Array<{ url: string; init: RequestInit }> = [];
