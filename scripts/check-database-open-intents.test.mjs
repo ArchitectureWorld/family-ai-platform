@@ -17,7 +17,7 @@ test("reports exact Gateway caller and forbidden production/script counts", () =
   assert.equal(result.stderr, "");
   assert.equal(
     result.stdout,
-    "DATABASE_OPEN_INTENTS_OK callerFiles=46 callSites=119 "
+    "DATABASE_OPEN_INTENTS_OK callerFiles=47 callSites=120 "
       + "productionTestIntentCalls=0 scriptDirectCalls=0\n"
   );
 });
