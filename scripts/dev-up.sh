@@ -97,6 +97,26 @@ NODE
     mkdir -m 700 "$RUNTIME_DIR"
   fi
 fi
+# Initialization is limited to a new/empty disposable data directory. Existing
+# databases remain subject to gateway-existing; missing files never imply reset.
+INITIALIZE_DATABASE=false
+for path in "$RUNTIME_DIR" "$CONFIG_DIR" "$DATA_DIR" "$ATTACHMENT_DIR" "$RUN_DIR" "$DATABASE_FILE" "$TOKEN_FILE"; do
+  [[ ! -L "$path" ]] || fail "disposable runtime 不得包含符号链接。"
+done
+if [[ -e "$DATA_DIR" ]]; then
+  [[ -d "$DATA_DIR" && -r "$DATA_DIR" && -x "$DATA_DIR" ]] \
+    || fail "已有 data 目录不可安全检查；不会迁移或修改其所有权。"
+  if [[ -e "$DATABASE_FILE" ]]; then
+    [[ -f "$DATABASE_FILE" ]] || fail "已有数据库必须是普通文件。"
+  else
+    DATA_CONTENTS="$(find "$DATA_DIR" -mindepth 1 -maxdepth 1 -print -quit)" \
+      || fail "无法确认 data 目录为空。"
+    [[ -z "$DATA_CONTENTS" ]] || fail "数据库缺失但 data 非空；不会自动迁移或清除保留数据。"
+    INITIALIZE_DATABASE=true
+  fi
+else
+  INITIALIZE_DATABASE=true
+fi
 mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$ATTACHMENT_DIR" "$RUN_DIR"
 chmod 700 "$RUNTIME_DIR" "$CONFIG_DIR" "$DATA_DIR" "$ATTACHMENT_DIR" "$RUN_DIR"
 
@@ -124,6 +144,49 @@ LOCAL_GID=$(id -g)
 EOF
 chmod 600 "$COMPOSE_ENV"
 
+initialize_disposable_database() {
+  local image_id="$1"
+  [[ "$INITIALIZE_DATABASE" == true ]] || return 0
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "初始化必须使用已解析的不可变镜像。"
+  [[ -d "$DATA_DIR" && ! -L "$DATA_DIR" && -d "$ATTACHMENT_DIR" && ! -L "$ATTACHMENT_DIR" && ! -e "$DATABASE_FILE" && ! -L "$DATABASE_FILE" ]] \
+    || fail "初始化前 data 状态已变化；不会迁移已有数据库。"
+  local unexpected_entries
+  unexpected_entries="$(find "$DATA_DIR" -mindepth 1 ! -path "$ATTACHMENT_DIR" -print -quit)" \
+    || fail "无法复核 disposable data 为空。"
+  [[ -z "$unexpected_entries" ]] || fail "初始化前 data 出现保留内容；不会自动迁移。"
+  if [[ "$(stat -c '%u:%g' "$DATA_DIR")" != "1000:1000" || "$(stat -c '%u:%g' "$ATTACHMENT_DIR")" != "1000:1000" ]]; then
+    # Only these new empty directories may change owner. No recursive chown,
+    # retained data, credentials, host socket, network, or additional mount.
+    docker run --rm --network none --read-only --user 0:0 \
+      --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE \
+      --security-opt no-new-privileges:true --entrypoint python3 \
+      --mount "type=bind,src=$DATA_DIR,dst=/app/.runtime/data" \
+      "$image_id" -c '
+import os, stat
+from pathlib import Path
+root = Path("/app/.runtime/data")
+attachments = root / "attachments"
+for path in (root, attachments):
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700:
+        raise SystemExit("DISPOSABLE_DATA_INVALID")
+if {p.name for p in root.iterdir()} != {"attachments"} or any(attachments.iterdir()):
+    raise SystemExit("DISPOSABLE_DATA_NOT_EMPTY")
+for path in (attachments, root):
+    os.chown(path, 1000, 1000, follow_symlinks=False)
+'
+  fi
+  # Keep the image ENTRYPOINT: it claims the protected migration lock before
+  # executing this CLI. The Gateway itself still refuses missing databases.
+  docker run --rm --network none --read-only --user 1000:1000 \
+    --cap-drop ALL --security-opt no-new-privileges:true \
+    --tmpfs /tmp:size=64m,mode=1777 \
+    --env GATEWAY_DATABASE_PATH=/app/.runtime/data/gateway.sqlite \
+    --mount "type=bind,src=$DATA_DIR,dst=/app/.runtime/data" \
+    "$image_id" node apps/gateway/dist/migrate.js \
+    --database /app/.runtime/data/gateway.sqlite
+}
+
 cd "$ROOT_DIR"
 printf 'Building and starting Family AI Gateway Foundation...\n'
 if [[ "$ISOLATED_MODE" == true ]]; then
@@ -138,7 +201,7 @@ services:
     image: $FAMILY_AI_IMAGE_REF
     init: true
     restart: "no"
-    user: "$(id -u):$(id -g)"
+    user: "1000:1000"
     env_file:
       - $GATEWAY_ENV
     environment:
@@ -160,6 +223,7 @@ EOF
   isolated_compose config --format json > "$RUN_DIR/compose.rendered.json"
   chmod 600 "$RUN_DIR/compose.rendered.json"
   validate_isolated_compose_json "$RUN_DIR/compose.rendered.json" "$FAMILY_AI_IMAGE_REF" "$DATA_DIR"
+  initialize_disposable_database "$FAMILY_AI_IMAGE_REF"
   isolated_compose up -d --no-build
   ISOLATED_CREATED=true
   PORT_ROWS="$(isolated_compose port gateway 8790)"
@@ -170,7 +234,12 @@ EOF
   [[ "$ACTUAL_PORT" != "8790" ]] || fail "隔离 Gateway 不得占用正式 8790。"
   BASE_URL="http://127.0.0.1:$ACTUAL_PORT"
 else
-  docker compose --env-file "$COMPOSE_ENV" up -d --build
+  docker compose --env-file "$COMPOSE_ENV" build gateway
+  DISPOSABLE_IMAGE="$(docker compose --env-file "$COMPOSE_ENV" config --format json \
+    | node --input-type=module -e 'let text=""; for await (const chunk of process.stdin) text += chunk; const image=JSON.parse(text).services?.gateway?.image; if(typeof image !== "string" || !image) process.exit(1); process.stdout.write(image);')"
+  DISPOSABLE_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$DISPOSABLE_IMAGE")"
+  initialize_disposable_database "$DISPOSABLE_IMAGE_ID"
+  docker compose --env-file "$COMPOSE_ENV" up -d --no-build
 fi
 
 printf 'Waiting for the Foundation Gateway health identity'

@@ -35,4 +35,6 @@ grep -Eq '^    timeout-minutes: 15$' "$CI_FILE" \
 grep -Fq 'needs: docker-build' "$CI_FILE" \
   || fail 'container-smoke must depend on docker-build'
 
+node --test "$ROOT_DIR/scripts/dev-up.test.mjs"
+
 printf 'CI compose contract tests passed.\n'
