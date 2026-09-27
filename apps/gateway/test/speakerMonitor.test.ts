@@ -123,6 +123,21 @@ describe("speaker monitoring authority and bounded projection", () => {
       speakers: [{ serviceState: "unknown", linkState: "unknown", phase: "unknown", problemCode: "telemetry_stale" }] });
   });
 
+  it.each(["identity_mismatch", "telemetry_stale"])("preserves collector fault %s when its verified heartbeat is absent", async problemCode => {
+    const value = sample();
+    Object.assign(value.speakers[0]!, { runtimeUpdatedAt: null, problemCode, linkState: "unknown", phase: "unknown" });
+    writeFileSync(config.filePath, JSON.stringify(value));
+    expect((await read()).json()).toMatchObject({ sourceState: "ready", speakers: [{
+      serviceState: "unknown", linkState: "unknown", phase: "unknown", runtimeUpdatedAt: null, problemCode
+    }] });
+  });
+
+  it("reports missing telemetry when no collector fault or heartbeat is available", async () => {
+    const value = sample(); Object.assign(value.speakers[0]!, { runtimeUpdatedAt: null });
+    writeFileSync(config.filePath, JSON.stringify(value));
+    expect((await read()).json()).toMatchObject({ speakers: [{ linkState: "unknown", phase: "unknown", problemCode: "telemetry_unavailable" }] });
+  });
+
   it("expires an old runtime heartbeat even when the collector snapshot is fresh", async () => {
     const value = sample(); value.speakers[0]!.runtimeUpdatedAt = "2026-09-27T07:59:20.000Z";
     writeFileSync(config.filePath, JSON.stringify(value));

@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { readSpeakerMonitor } from "../src/speakerMonitor.js";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,7 +28,11 @@ class Element {
 }
 const documentRef = { createElement: (tag: string) => new Element(tag) };
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
-afterEach(() => vi.useRealTimers());
+const temporaryDirectories: string[] = [];
+afterEach(() => {
+  vi.useRealTimers();
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
 
 describe("speaker API and devices page", () => {
   it("uses the same-origin cookie API and removes unapproved response keys", async () => {
@@ -98,6 +105,29 @@ describe("speaker API and devices page", () => {
     expect(root.textContent).toContain("管理员授权已失效");
     expect(onAuthenticationError).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+    monitor.destroy();
+  });
+
+  it.each([
+    ["identity_mismatch", "设备身份不匹配"],
+    ["telemetry_stale", "运行状态已过期"]
+  ])("keeps the collector fault %s visible while suppressing active state without a heartbeat", async (problemCode, label) => {
+    const { createSpeakerMonitor } = await import(moduleUrl);
+    vi.useFakeTimers();
+    const root = new Element("section");
+    const value = snapshot();
+    Object.assign(value.speakers[0]!, { runtimeUpdatedAt: null, problemCode, linkState: "unknown", phase: "unknown" });
+    const directory = mkdtempSync(join(tmpdir(), "speaker-fault-projection-"));
+    temporaryDirectories.push(directory);
+    const config = { filePath: join(directory, "snapshot.json"), familyRef: "family:test" };
+    writeFileSync(config.filePath, JSON.stringify(value));
+    const monitor = createSpeakerMonitor({ root, documentRef, now: () => now,
+      api: { speakers: () => readSpeakerMonitor(config, now) } });
+    await monitor.ready;
+    expect(root.textContent).toContain(label);
+    expect(root.textContent).not.toContain("运行状态暂不可用");
+    expect(root.textContent).not.toContain("Wi-Fi 已连接");
+    expect(root.textContent).not.toContain("运行中");
     monitor.destroy();
   });
 

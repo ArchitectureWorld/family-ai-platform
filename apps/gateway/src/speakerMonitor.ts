@@ -14,7 +14,7 @@ function empty(sourceState: "unavailable" | "not_configured"): SpeakerMonitorRes
   return { protocolVersion: 1, sourceState, sampledAt: null, speakers: [] };
 }
 
-function expired(speaker: Speaker, problemCode: "telemetry_stale" | "telemetry_unavailable"): Speaker {
+function expired(speaker: Speaker, problemCode: NonNullable<Speaker["problemCode"]>): Speaker {
   return { ...speaker, serviceState: "unknown", linkState: "unknown", phase: "unknown", problemCode };
 }
 
@@ -51,7 +51,7 @@ export async function readSpeakerMonitor(
       if (speaker.runtimeUpdatedAt === null) {
         return speaker.serviceState === "running" || speaker.linkState === "connected" ||
           ["waiting_for_wake", "listening", "processing", "speaking"].includes(speaker.phase)
-          ? expired(speaker, "telemetry_unavailable") : speaker;
+          ? expired(speaker, speaker.problemCode ?? "telemetry_unavailable") : speaker;
       }
       if (current - Date.parse(speaker.runtimeUpdatedAt) > TTL_MS) return expired(speaker, "telemetry_stale");
       return speaker;
