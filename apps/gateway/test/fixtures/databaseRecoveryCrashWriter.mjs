@@ -13,4 +13,10 @@ insert.run("family:recovery-committed", "Recovery committed");
 database.exec("BEGIN IMMEDIATE");
 insert.run("family:recovery-uncommitted", "Recovery uncommitted");
 process.stdout.write("RECOVERY_WRITER_READY\n");
-setInterval(() => undefined, 60_000);
+// Keep the native connection and uncommitted transaction alive until SIGKILL.
+// A timer that does not capture the database lets GC close it and remove WAL.
+setInterval(() => {
+  if (!database.open || !database.inTransaction) {
+    throw new Error("RECOVERY_WRITER_TRANSACTION_LOST");
+  }
+}, 60_000);

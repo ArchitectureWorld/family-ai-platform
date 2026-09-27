@@ -219,6 +219,51 @@ describe("offline Gateway database recovery engine", () => {
     expect(existsSync(`${databasePath}-shm`)).toBe(true);
   };
 
+  it("keeps the crash writer transaction alive through forced GC until SIGKILL", async () => {
+    const databasePath = prepareV15();
+    const child = spawn(process.execPath, [
+      "--expose-gc",
+      "--import", join(import.meta.dirname, "fixtures/databaseRecoveryForceGc.mjs"),
+      join(import.meta.dirname, "fixtures/databaseRecoveryCrashWriter.mjs"),
+      databasePath
+    ], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
+    let stdout = "";
+    let stderr = "";
+    let requested = false;
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (stdout === "RECOVERY_WRITER_READY\n" && !requested) {
+        requested = true;
+        child.send("force-gc");
+      }
+    });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolveExit) => child.once("close", (code, signal) => resolveExit({ code, signal }))
+    );
+    let timeout: NodeJS.Timeout | undefined;
+    const afterGc = new Promise<unknown>((resolveGc, rejectGc) => {
+      timeout = setTimeout(() => rejectGc(new Error("GC fixture did not respond")), 3_000);
+      child.once("error", rejectGc);
+      child.once("message", resolveGc);
+      child.once("close", () => rejectGc(new Error("GC fixture exited before inspection")));
+    });
+    try {
+      expect(await afterGc).toEqual({ type: "after-gc", wal: true, shm: true });
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      child.kill("SIGKILL");
+      await exited;
+    }
+    expect(await exited).toEqual({ code: null, signal: "SIGKILL" });
+    expect(stdout).toBe("RECOVERY_WRITER_READY\n");
+    expect(stderr).toBe("");
+    expect(existsSync(`${databasePath}-wal`)).toBe(true);
+    expect(existsSync(`${databasePath}-shm`)).toBe(true);
+  });
+
   const requireEngineChildOutcome = (child: ReturnType<typeof spawnLockedSource>) => {
     expect(child.error, "Recovery harness failure is not an engine outcome").toBeUndefined();
     return child;
