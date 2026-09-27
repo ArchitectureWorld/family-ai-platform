@@ -26,10 +26,10 @@ def _fail() -> int:
 
 
 def _read_frame() -> dict[str, Any] | None:
-    # The Node runner writes one newline-delimited frame but keeps the pipe
-    # open while waiting for the child.  A full ``read(n)`` therefore waits
-    # forever for EOF; consume exactly one bounded frame instead.
-    raw = sys.stdin.buffer.readline(MAX_FRAME_BYTES + 1)
+    # runControlledProcess closes stdin after its one request.  Read through
+    # EOF within the byte bound so trailing frames cannot be ignored before
+    # any configuration, session, or provider access.
+    raw = sys.stdin.buffer.read(MAX_FRAME_BYTES + 1)
     if not raw or len(raw) > MAX_FRAME_BYTES:
         return None
     try:
