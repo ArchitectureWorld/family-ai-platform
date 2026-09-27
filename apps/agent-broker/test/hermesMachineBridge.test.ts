@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,20 +28,40 @@ afterEach(async () => {
   }
 });
 
-async function copyIsolatedBridge(source: string, entrypoint: string): Promise<void> {
+async function copyIsolatedBridge(
+  source: string,
+  entrypoint: string,
+  fakeDirectBackend = false
+): Promise<void> {
   await copyFile(source, join(dirname(entrypoint), "bridge_under_test.py"));
   await writeFile(entrypoint, `
 import os
+import json
 from pathlib import Path
 import sys
 import bridge_under_test as bridge
 
-# Keep the production fallback configuration and session directory unreachable.
-bridge.BROKER_HERMES_HOME = Path(os.environ["HERMES_HOME"])
+# Keep a reintroduced legacy global Home within the fixture during regressions.
+if hasattr(bridge, "BROKER_HERMES_HOME"):
+    bridge.BROKER_HERMES_HOME = Path(os.environ["HERMES_HOME"])
 def deny_network(*args, **kwargs):
     Path(__file__).with_name("unexpected-network").write_text("blocked", encoding="utf-8")
     raise RuntimeError("network disabled in bridge tests")
-bridge.urlopen = deny_network
+def fake_direct(request, timeout):
+    payload = json.loads(request.data.decode("utf-8"))
+    capture = Path(__file__).with_name("direct-requests.json")
+    requests = json.loads(capture.read_text(encoding="utf-8")) if capture.exists() else []
+    requests.append({"url": request.full_url, "model": payload["model"], "messages": payload["messages"]})
+    capture.write_text(json.dumps(requests), encoding="utf-8")
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, limit):
+            return b'{"choices":[{"message":{"content":"fake direct reply"}}]}'
+    return Response()
+bridge.urlopen = ${fakeDirectBackend ? "fake_direct" : "deny_network"}
 raise SystemExit(bridge.main())
 `, "utf8");
 }
@@ -210,6 +231,100 @@ def main(**kwargs):
     }))).toBeGreaterThan(64 * 1024);
     expect(result).toMatchObject({ exitCode: 0, stdout: "safe bridge reply\n" });
     expect(capture).toEqual({ query, quiet: true, resume: null, toolsets: ["hermes-cli"] });
+  });
+
+  it.each([
+    ["separate Homes", "home-a", "zzh", "home-b", "zzh"],
+    ["sibling profiles", "personal-home", "zzh", "personal-home", "nsy"],
+    ["default and named profiles", "shared-home", "default", "shared-home", "zzh"]
+  ])("isolates direct configuration and same-name sessions across %s", async (
+    _label, firstHomeName, firstProfile, secondHomeName, secondProfile
+  ) => {
+    const root = await mkdtemp(join(tmpdir(), "hermes-direct-isolation-"));
+    temporaryDirectories.push(root);
+    const bridge = join(root, "hermes_machine_bridge.py");
+    const sourceBridge = fileURLToPath(new URL("../runtime/hermes_machine_bridge.py", import.meta.url));
+    await copyIsolatedBridge(sourceBridge, bridge, true);
+    const firstHome = join(root, firstHomeName);
+    const secondHome = join(root, secondHomeName);
+    const firstScope = firstProfile === "default" ? firstHome : join(firstHome, "profiles", firstProfile);
+    const secondScope = secondProfile === "default" ? secondHome : join(secondHome, "profiles", secondProfile);
+    const sessionId = "same-session-name";
+    const config = (name: string) =>
+      `direct_openai_compat: true\nmodel:\n  default: model-${name}\n  base_url: https://${name}.invalid/v1\n  api_key: test-only-${name}\n`;
+    for (const home of new Set([firstHome, secondHome])) {
+      await mkdir(home, { recursive: true });
+      await writeFile(join(home, "config.yaml"), config("unscoped"), { mode: 0o600 });
+    }
+    for (const [scope, name] of [[firstScope, "first"], [secondScope, "second"]]) {
+      await mkdir(join(scope, "broker-sessions"), { recursive: true, mode: 0o700 });
+      await writeFile(join(scope, "config.yaml"), config(name), { mode: 0o600 });
+      await writeFile(join(scope, "broker-sessions", `${sessionId}.json`), JSON.stringify([
+        { role: "user", content: `history-${name}` },
+        { role: "assistant", content: `reply-${name}` }
+      ]), { mode: 0o600 });
+    }
+    const firstSession = join(firstScope, "broker-sessions", `${sessionId}.json`);
+    const secondSession = join(secondScope, "broker-sessions", `${sessionId}.json`);
+    const secondBefore = await readFile(secondSession, "utf8");
+    const firstResult = await runBridge(bridge, firstHome, {
+      protocolVersion: 1, profile: firstProfile, query: "turn-first", resume: sessionId
+    });
+    expect(firstResult).toEqual({ exitCode: 0, stdout: "fake direct reply\n", stderr: `session_id: ${sessionId}\n` });
+    expect(await readFile(secondSession, "utf8")).toBe(secondBefore);
+    const firstAfter = await readFile(firstSession, "utf8");
+    const secondResult = await runBridge(bridge, secondHome, {
+      protocolVersion: 1, profile: secondProfile, query: "turn-second", resume: sessionId
+    });
+    expect(secondResult).toEqual({ exitCode: 0, stdout: "fake direct reply\n", stderr: `session_id: ${sessionId}\n` });
+    expect(await readFile(firstSession, "utf8")).toBe(firstAfter);
+    expect(JSON.parse(await readFile(join(root, "direct-requests.json"), "utf8"))).toEqual([
+      { url: "https://first.invalid/v1/chat/completions", model: "model-first", messages: [
+        { role: "user", content: "history-first" },
+        { role: "assistant", content: "reply-first" },
+        { role: "user", content: "turn-first" }
+      ] },
+      { url: "https://second.invalid/v1/chat/completions", model: "model-second", messages: [
+        { role: "user", content: "history-second" },
+        { role: "assistant", content: "reply-second" },
+        { role: "user", content: "turn-second" }
+      ] }
+    ]);
+    for (const [scope, name] of [[firstScope, "first"], [secondScope, "second"]]) {
+      expect(await readFile(join(scope, "config.yaml"), "utf8")).toBe(config(name));
+      const session = join(scope, "broker-sessions", `${sessionId}.json`);
+      expect(JSON.parse(await readFile(session, "utf8"))).toEqual([
+        { role: "user", content: `history-${name}` },
+        { role: "assistant", content: `reply-${name}` },
+        { role: "user", content: `turn-${name}` },
+        { role: "assistant", content: "fake direct reply" }
+      ]);
+      expect((await stat(session)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("does not fall back to the parent Home direct configuration when a profile has none", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hermes-direct-no-fallback-"));
+    temporaryDirectories.push(root);
+    const bridge = join(root, "hermes_machine_bridge.py");
+    const home = join(root, "personal-home");
+    await mkdir(join(home, "profiles", "zzh"), { recursive: true });
+    await writeFile(join(home, "config.yaml"),
+      "direct_openai_compat: true\nmodel:\n  default: other-model\n  base_url: https://other.invalid/v1\n  api_key: test-only-other\n",
+      { mode: 0o600 });
+    await copyIsolatedBridge(fileURLToPath(new URL("../runtime/hermes_machine_bridge.py", import.meta.url)), bridge, true);
+    await writeFile(join(root, "cli.py"), `
+import sys
+def main(**kwargs):
+    print("profile-local cli reply")
+    print("session_id: profile-local-session", file=sys.stderr)
+`, "utf8");
+    const result = await runBridge(bridge, home, {
+      protocolVersion: 1, profile: "zzh", query: "use this profile"
+    });
+    expect(result).toEqual({ exitCode: 0, stdout: "profile-local cli reply\n", stderr: "session_id: profile-local-session\n" });
+    await expect(access(join(root, "direct-requests.json"))).rejects.toThrow();
+    await expect(access(join(home, "broker-sessions"))).rejects.toThrow();
   });
 
   it.each([

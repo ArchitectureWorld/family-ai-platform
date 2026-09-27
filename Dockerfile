@@ -78,7 +78,8 @@ COPY --chown=node:node apps apps
 
 ENV FAMILY_AI_CONTAINER_BUILD=1
 
-RUN npm run check \
+# Process-crash fixtures stay across child exits; disk recovery has a separate volume gate.
+RUN --mount=type=tmpfs,target=/tmp,size=2147483648 npm run check \
   && npm prune --omit=dev
 
 FROM --platform=linux/amd64 node:22.16.0-bookworm-slim@sha256:1471ea646673136b8308550ac14b36d847ffb21c24bc31828279e443c924e488 AS runtime

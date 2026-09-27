@@ -17,7 +17,6 @@ MAX_FRAME_BYTES = 128 * 1024
 MAX_QUERY_CHARS = 12_000
 ALLOWED_PROFILES = frozenset({"default", "zzh", "nsy"})
 SESSION_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,99}$")
-BROKER_HERMES_HOME = Path("/home/youran/.local/share/three-product-candidates/hermes")
 
 
 def _fail() -> int:
@@ -83,8 +82,7 @@ def _direct_config() -> tuple[str, str, str] | None:
     LAN Antigravity gateway intentionally implements only the OpenAI surface,
     so the Broker uses this narrow chat path when explicitly enabled.
     """
-    candidate = BROKER_HERMES_HOME / "config.yaml"
-    path = candidate if candidate.is_file() else Path(os.environ["HERMES_HOME"]) / "config.yaml"
+    path = Path(os.environ["HERMES_HOME"]) / "config.yaml"
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
@@ -105,7 +103,7 @@ def _direct_chat(frame: dict[str, Any], config: tuple[str, str, str]) -> int:
     session_id = str(frame.get("resume") or f"direct-{profile}-{uuid4().hex[:16]}")
     if not SESSION_ID.fullmatch(session_id):
         return _fail()
-    store = BROKER_HERMES_HOME / "broker-sessions"
+    store = Path(os.environ["HERMES_HOME"]) / "broker-sessions"
     try:
         store.mkdir(mode=0o700, parents=True, exist_ok=True)
         history_path = store / f"{session_id}.json"

@@ -135,6 +135,8 @@ jq empty current-runtime.json
 - 仅 development 模式开放的 Admin Web 家庭、成员与配对管理预览；
 - 同一局域网可访问的独立 HTTPS 体验入口（不改变 8790 正式服务）。
 
+2026-09-27 的现网基线归并补充了生产 Admin 激活入口与只读音箱设备监测；配置、权限和恢复边界见 [管理员音箱监测](docs/development/2026-09-27-speaker-monitoring.md)。下方按日期记录的旧运行矩阵不代表此次部署后的状态。
+
 发布基线 A1–A5 已合入；A6 只校正文档与现场事实。A5 已提供 retained runtime 的 sealed snapshot、无网络 migration-only candidate staging、原子目录交换与 previous restore 原语；它们不会自行发布或重启正式 `8790`。正式升级仍需后续 F1 的逐 Gate 审批编排，操作边界见 [`docs/operations/release-and-rollback.md`](docs/operations/release-and-rollback.md)。
 
 ### 事实矩阵（2026-08-16）

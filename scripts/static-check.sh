@@ -521,10 +521,11 @@ grep -Fq 'FROM --platform=linux/amd64 node:22.16.0-bookworm-slim@sha256:1471ea64
   exit 1
 }
 
-grep -Fq 'RUN npm run check' Dockerfile || {
+if ! grep -Fq 'RUN npm run check' Dockerfile && \
+   ! grep -Fq 'RUN --mount=type=tmpfs,target=/tmp,size=2147483648 npm run check' Dockerfile; then
   printf 'Docker image build must run the full npm quality gate.\n' >&2
   exit 1
-}
+fi
 
 bash scripts/test-verify-foundation-preflight.sh
 bash scripts/test-runtime-backup-restore.sh
