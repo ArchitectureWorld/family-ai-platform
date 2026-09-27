@@ -92,6 +92,7 @@ export function registerAdminWeb(
     "admin-agents.js",
     "text/javascript; charset=utf-8"
   );
+  registerTextAsset(app, "/admin/assets/admin-speakers.js", "admin-speakers.js", "text/javascript; charset=utf-8");
   registerTextAsset(
     app,
     "/admin/assets/admin-workspace.js",

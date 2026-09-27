@@ -34,6 +34,7 @@ try {
     attachmentQuotaBytes: config.attachmentQuotaBytes,
     deviceToken: config.deviceToken,
     mode: config.mode,
+    ...(config.speakerMonitor ? { speakerMonitor: config.speakerMonitor } : {}),
     adminWebEnabled: config.adminWebEnabled,
     ...(config.productionAdminEntryPath === undefined
       ? {}

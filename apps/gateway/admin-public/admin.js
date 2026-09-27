@@ -1,3 +1,4 @@
+import { createSpeakerMonitor } from "./admin-speakers.js";
 import {
   ADMIN_CLEAN_PATH,
   captureAdminHandoff,
@@ -33,6 +34,12 @@ let activePairingDialog = null;
 let activePairingTimer = null;
 let activePairingDismissal = null;
 let activeWorkspace = null;
+let activeSpeakers = null;
+const devicesPage = document.querySelector("#admin-devices-page");
+function destroySpeakerMonitor() {
+  activeSpeakers?.destroy();
+  activeSpeakers = null;
+}
 let activeManagementApi = null;
 
 function destroyAdminWorkspace() {
@@ -42,7 +49,11 @@ function destroyAdminWorkspace() {
 
 export function showAdminState(name) {
   if (!states.has(name)) throw new Error("ADMIN_STATE_INVALID");
-  if (name !== "management") destroyAdminWorkspace();
+  if (name !== "management") {
+    destroyAdminWorkspace();
+    destroySpeakerMonitor();
+    activeManagementApi = null;
+  }
   applyAdminShellState(adminShell, name);
   for (const [stateName, element] of states) {
     element.hidden = stateName !== name;
@@ -50,9 +61,18 @@ export function showAdminState(name) {
 }
 
 function showAdminPage(name) {
-  if (!["members", "workspace"].includes(name)) {
+  if (!["members", "workspace", "devices"].includes(name)) {
     throw new Error("ADMIN_PAGE_INVALID");
   }
+  devicesPage.hidden = name !== "devices";
+  if (name === "devices" && activeSpeakers === null && activeManagementApi) {
+    activeSpeakers = createSpeakerMonitor({
+      root: devicesPage,
+      api: activeManagementApi,
+      onAuthenticationError: () => showAdminState("recovery-required")
+    });
+    void activeSpeakers.ready;
+  } else if (name !== "devices") destroySpeakerMonitor();
   membersPage.hidden = name !== "members";
   workspacePage.hidden = name !== "workspace";
   if (name === "workspace" && activeWorkspace === null && activeManagementApi) {
@@ -437,6 +457,7 @@ async function renderManagement(credential, persistenceWarning = "") {
     ? createAdminApi({ cookieSession: true })
     : createAdminApi({ credential });
   destroyAdminWorkspace();
+  destroySpeakerMonitor();
   activeManagementApi = api;
   const [context, memberResult] = await Promise.all([
     api.context(),
@@ -598,5 +619,7 @@ async function start() {
     showAdminState("recovery-required");
   }
 }
+
+window.addEventListener("pagehide", () => { destroyAdminWorkspace(); destroySpeakerMonitor(); });
 
 start();

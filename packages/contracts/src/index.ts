@@ -158,3 +158,5 @@ export * from "./sync.js";
 export * from "./webEntry.js";
 export * from "./integrations.js";
 export * from "./federation.js";
+
+export * from "./speakerMonitoring.js";

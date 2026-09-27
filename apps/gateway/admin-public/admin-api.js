@@ -1,3 +1,4 @@
+import { normalizeSpeakerResponse } from "./admin-speakers.js";
 import { adminHeaders, validateAdminCredential } from "./admin-entry.js";
 
 const FAMILY_ROLES = new Set(["adult", "child", "elder"]);
@@ -435,7 +436,7 @@ export function createAdminApi({
 
   async function request(
     path,
-    { method = "GET", body, expectedStatus = 200, publicRequest = false } = {}
+    { method = "GET", body, expectedStatus = 200, publicRequest = false, signal } = {}
   ) {
     const headers = {};
     if (!publicRequest) {
@@ -457,6 +458,7 @@ export function createAdminApi({
     }
     const response = await fetchImpl(path, {
       method,
+      ...(signal === undefined ? {} : { signal }),
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
       ...(serializedBody === undefined ? {} : { body: serializedBody })
     });
@@ -466,6 +468,12 @@ export function createAdminApi({
   }
 
   return Object.freeze({
+    async speakers({ signal } = {}) {
+      const value = await request("/api/v1/admin/speakers", { signal });
+      try { return normalizeSpeakerResponse(value); }
+      catch { throw new AdminApiError("ADMIN_SPEAKER_RESPONSE_INVALID", 502); }
+    },
+
     async adminWebMode() {
       const value = await request("/api/v1/admin/web-mode", {
         publicRequest: true

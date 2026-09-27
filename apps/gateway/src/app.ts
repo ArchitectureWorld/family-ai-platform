@@ -1,3 +1,5 @@
+import { registerSpeakerMonitorRoutes } from "./speakerMonitorRoutes.js";
+import type { SpeakerMonitorConfig } from "./speakerMonitor.js";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -82,6 +84,7 @@ import {
 export type GatewayMode = "test" | "development" | "production";
 
 export interface BuildGatewayAppOptions {
+  speakerMonitor?: SpeakerMonitorConfig;
   databasePath: string;
   databaseOpenRequest: GatewayDatabaseOpenRequest;
   attachmentRoot?: string;
@@ -500,6 +503,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     ...(executionLinks === undefined ? {} : { executionLinks }),
     now
   });
+  registerSpeakerMonitorRoutes(app, { entryAuthenticator, now, ...(options.speakerMonitor ? { config: options.speakerMonitor } : {}) });
   registerAdminWorkspaceRoutes(app, {
     workspace: adminWorkspaceRepository,
     repository: chatWorkRepository,

@@ -1,3 +1,5 @@
+import { familyRefSchema } from "@family-ai/contracts";
+import type { SpeakerMonitorConfig } from "./speakerMonitor.js";
 import {
   accessSync,
   constants,
@@ -54,6 +56,7 @@ export interface GatewayProviderRuntime {
 }
 
 export interface GatewayConfig {
+  speakerMonitor?: SpeakerMonitorConfig;
   host: string;
   port: number;
   databasePath: string;
@@ -494,7 +497,20 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     );
   }
 
+  const speakerFile = env.FAMILY_AI_SPEAKER_MONITOR_FILE;
+  const speakerFamily = env.FAMILY_AI_SPEAKER_MONITOR_FAMILY_REF;
+  let speakerMonitor: SpeakerMonitorConfig | undefined;
+  if (speakerFile !== undefined || speakerFamily !== undefined) {
+    if (!speakerFile || !isAbsolute(speakerFile) || resolve(speakerFile) !== speakerFile ||
+        speakerFile === parse(speakerFile).root || speakerFile.split(sep).includes(".git") ||
+        !familyRefSchema.safeParse(speakerFamily).success) {
+      throw new Error("Speaker monitor configuration is invalid");
+    }
+    speakerMonitor = { filePath: speakerFile, familyRef: speakerFamily! };
+  }
+
   const config = {
+    ...(speakerMonitor === undefined ? {} : { speakerMonitor }),
     host,
     port,
     databasePath: resolve(env.GATEWAY_DATABASE_PATH ?? ".runtime/data/gateway.sqlite"),

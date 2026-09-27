@@ -913,3 +913,18 @@ button:disabled {
     flex-direction: column;
   }
 }
+
+/* Read-only speaker status uses the existing Admin palette and textual states. */
+.speaker-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px; }
+.speaker-card { min-width: 0; padding: 24px; border: 1px solid #cbd7cd; border-radius: 18px; background: #fff; }
+.speaker-card h3 { margin: 0 0 8px; font-size: 1.25rem; }
+.speaker-meta { color: #4b6052; overflow-wrap: anywhere; font-size: 0.9rem; line-height: 1.5; }
+.speaker-source { font-weight: 600; line-height: 1.5; }
+.speaker-link { font-weight: 700; }
+.speaker-link-connected { color: #245c42; }
+.speaker-link-disconnected, .speaker-problem { color: #8c3b19; }
+.speaker-link-unknown { color: #4b6052; }
+.speaker-details { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 10px 12px; line-height: 1.5; }
+.speaker-details dt { color: #4b6052; }
+.speaker-details dd { margin: 0; overflow-wrap: anywhere; }
+.admin-page-navigation { flex-wrap: wrap; }
