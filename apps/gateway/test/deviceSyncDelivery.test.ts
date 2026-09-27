@@ -96,7 +96,7 @@ describe("Device Sync revocation and delivery boundaries", () => {
     expect(ack.statusCode).toBe(403);
     expect(ack.json()).toMatchObject({ code: "DEVICE_REVOKED" });
 
-    const db = openGatewayDatabase(harness.databasePath);
+    const db = openGatewayDatabase(harness.databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       expect(db.prepare(
         `SELECT acknowledged_sequence FROM device_sync_cursors
@@ -126,7 +126,7 @@ describe("Device Sync revocation and delivery boundaries", () => {
     const fetched = await harness.syncEvents(harness.initialized.entries.personal);
     expect(fetched.events.map((item) => item.eventSequence)).toEqual([1]);
 
-    const db = openGatewayDatabase(harness.databasePath);
+    const db = openGatewayDatabase(harness.databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       expect(db.prepare("SELECT COUNT(*) AS count FROM device_sync_cursors").get())
         .toEqual({ count: 0 });

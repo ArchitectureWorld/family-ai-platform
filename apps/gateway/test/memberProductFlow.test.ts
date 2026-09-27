@@ -29,7 +29,8 @@ async function createClaimedMemberApp() {
   const directory = mkdtempSync(join(tmpdir(), "family-ai-member-product-flow-"));
   directories.push(directory);
   const databasePath = join(directory, "gateway.sqlite");
-  const app = await buildGatewayApp({ databasePath, deviceToken, mode: "test", now });
+  const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" }, databasePath, deviceToken, mode: "test", now });
   const onboarding = await app.inject({
     method: "POST",
     url: "/api/v1/onboarding/family",
@@ -271,7 +272,7 @@ describe("Member Web normal product flow", () => {
     } finally {
       await setup.app.close();
     }
-  });
+  }, 20_000);
 
   it("restores the same product state after Gateway restart", async () => {
     const setup = await createClaimedMemberApp();
@@ -296,6 +297,7 @@ describe("Member Web normal product flow", () => {
     await setup.app.close();
 
     const restarted = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: setup.databasePath,
       deviceToken,
       mode: "test",

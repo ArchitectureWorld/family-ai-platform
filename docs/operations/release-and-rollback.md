@@ -1,5 +1,18 @@
 # Gateway 可交付镜像与回滚边界
 
+## 发布前只读事实门
+
+任何 candidate 构建、停服或正式切换前，先生成当前 Runtime Truth：
+
+```bash
+bash scripts/report-current-runtime.sh > current-runtime.json
+jq empty current-runtime.json
+```
+
+只比较 allowlist 字段：listener owner、container/image、OCI source revision、Schema、RestartCount、health、route/capability 摘要、附件根状态和 systemd 状态。报告中的 `unknown/not-observed` 是停止条件，不能被解释为“未部署”或用源码事实补齐。命令不执行迁移、配对、消息、附件读取、容器重启或发布。
+
+将该报告与 sealed candidate manifest、preflight 和 stop evidence 分开保存。Runtime Truth 不是发布授权，也不能替代后续 retained-runtime preflight。
+
 ## 可交付构建
 
 唯一入口是：
@@ -33,7 +46,7 @@ CI 分为 `quality`、`production-audit`、`docker-build`、`container-smoke`、
 - `production-audit` 执行 `npm audit --omit=dev --audit-level=high`；
 - `docker-build` 只调用上述 wrapper，并上传以 exact SHA 命名的三文件 artifact；
 - `container-smoke` 在新的 runner 校验 archive hash、加载同一 image ID、重放 capability/build-input receipt，然后以临时 runtime 和唯一 Compose project 运行健康及两分片附件重启验收。
-- `retained-runtime-smoke` 消费同一 sealed artifact，在 stopped 临时容器下执行 V3/V9 snapshot、V9 migration-only candidate stage、附件破坏后的单 syscall restore，以及 rollback bundle 安全物化；它不接触正式 runtime 或端口。
+- `retained-runtime-smoke` 消费同一 sealed artifact，在 stopped 临时容器下执行 V3/V10 snapshot、V10 migration-only candidate stage、附件破坏后的单 syscall restore，以及 rollback bundle 安全物化；它不接触正式 runtime 或端口。
 
 smoke 使用 non-root、只读 root filesystem、`no-new-privileges` 和随机 loopback 端口；不调用 reset，不读取正式 runtime，也不发布正式端口。artifact 不包含环境变量、Token、Cookie、数据库、附件或原始响应。
 

@@ -31,6 +31,7 @@ function fakeFile(size: number, name = "report.pdf") {
 function fixture(options: {
   receivedChunkIndexes?: number[];
   failChunkIndex?: number;
+  cryptoImpl?: Crypto | Record<string, never>;
 } = {}) {
   const cache = createMemoryCache();
   const store = createStore({ attachmentDrafts: [] });
@@ -83,7 +84,7 @@ function fixture(options: {
     api,
     cache,
     store,
-    cryptoImpl: webcrypto,
+    cryptoImpl: options.cryptoImpl ?? webcrypto,
     now: () => new Date("2026-07-29T09:00:00.000Z")
   });
   return { api, cache, chunks, controller, store };
@@ -166,6 +167,25 @@ describe("Member attachment controller", () => {
     }))[0]).toMatchObject({ serverState: "ready" });
     expect(store.getState().attachmentDrafts).toHaveLength(1);
   }, 20_000);
+
+  it("uses the audited incremental SHA-256 fallback without SubtleCrypto", async () => {
+    const { api, chunks, controller } = fixture({ cryptoImpl: {} });
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const file = new File([bytes], "report.pdf", { type: "application/pdf" });
+
+    await controller.addFiles({
+      agentRef: "agent:a",
+      threadRef: "thread:chat-a",
+      files: [file]
+    });
+
+    expect(chunks[0]?.sha256).toBe(sha256(bytes));
+    expect(api.completeAttachmentUpload).toHaveBeenCalledWith(
+      "attachment:upload-001",
+      { sha256: sha256(bytes), chunkCount: 1 },
+      expect.anything()
+    );
+  });
 
   it("resumes a cached upload without creating a new server upload", async () => {
     const { api, cache, controller } = fixture();

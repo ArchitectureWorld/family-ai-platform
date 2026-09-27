@@ -1,0 +1,17 @@
+{
+  "name": "@family-ai/agent-broker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "test": "vitest run test --maxWorkers=1 --no-file-parallelism",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@family-ai/contracts": "0.1.0",
+    "@family-ai/provider-adapter-sdk": "0.1.0"
+  }
+}

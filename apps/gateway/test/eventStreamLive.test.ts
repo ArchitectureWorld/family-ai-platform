@@ -110,6 +110,7 @@ describe("Chat Work live SSE delivery", () => {
     origin = "";
     appClosed = false;
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -214,7 +215,7 @@ describe("Chat Work live SSE delivery", () => {
 
     const eventRefs = events.map((frame) => String(frame.data?.eventRef));
     const placeholders = eventRefs.map(() => "?").join(", ");
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       const outboxRows = db.prepare(
         `SELECT event_ref, status, published_at

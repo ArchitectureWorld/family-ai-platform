@@ -22,6 +22,7 @@ describe("Chat Work HTTP error envelopes", () => {
   it("uses common PublicError when Device authorization is misapplied to Chat", async () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-chat-work-envelope-"));
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "test",

@@ -27,6 +27,7 @@ expect_failure() {
 
 for required in \
   scripts/build-gateway-image.sh \
+  scripts/gateway-image-runtime-contract.mjs \
   scripts/gateway-schema-capabilities.mjs \
   scripts/gateway-schema-capabilities.json \
   scripts/gateway-release-capabilities.json \
@@ -41,16 +42,63 @@ grep -Fq 'manifestKind: "gateway-image-v1"' "$ROOT_DIR/scripts/build-gateway-ima
   || fail 'build wrapper does not write the gateway-image-v1 manifest'
 grep -Fq 'buildInputTreeHash' "$ROOT_DIR/scripts/build-gateway-image.sh" \
   || fail 'build wrapper does not bind the canonical build input tree'
+grep -Fq 'runtimeContract: JSON.parse(runtimeContractJson)' "$ROOT_DIR/scripts/build-gateway-image.sh" \
+  || fail 'build wrapper does not bind the inspected runtime contract'
+grep -Fq 'runtimeToolManifestSha256' "$ROOT_DIR/scripts/build-gateway-image.sh" \
+  || fail 'build wrapper does not bind the sealed runtime tool manifest'
+grep -Fq 'gateway-image-manifest.json.sha256' "$ROOT_DIR/scripts/build-gateway-image.sh" \
+  || fail 'build wrapper does not seal the image manifest'
 grep -Fq 'RUN rm /app/node_modules/@family-ai/contracts /app/node_modules/@family-ai/provider-adapter-sdk' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image still depends on npm workspace symlinks'
 grep -Fq '/app/node_modules/@family-ai/contracts/package.json' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image does not materialize the contracts workspace package'
 grep -Fq '/app/node_modules/@family-ai/provider-adapter-sdk/package.json' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image does not materialize the provider SDK workspace package'
+grep -Fq '/app/apps/gateway/public /app/apps/gateway/public' "$ROOT_DIR/Dockerfile" \
+  || fail 'runtime image does not materialize shared Admin QR assets'
+grep -Fq 'await access("./apps/gateway/public/qr.js")' "$ROOT_DIR/Dockerfile" \
+  || fail 'runtime image does not verify shared Admin QR assets'
 grep -Fq 'RUN chmod -R a+rX /app' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image does not normalize exact-worktree file modes'
 grep -Fq 'await import("@family-ai/contracts")' "$ROOT_DIR/Dockerfile" \
   || fail 'runtime image does not verify internal package resolution'
+
+BROKER_INPUT_REPO="$FIXTURE_ROOT/broker-input-repo"
+mkdir -p "$BROKER_INPUT_REPO/scripts" "$BROKER_INPUT_REPO/apps/agent-broker/src" \
+  "$BROKER_INPUT_REPO/apps/agent-broker/runtime" "$BROKER_INPUT_REPO/apps/agent-broker/test"
+chmod 700 "$BROKER_INPUT_REPO" "$BROKER_INPUT_REPO/scripts" "$BROKER_INPUT_REPO/apps" \
+  "$BROKER_INPUT_REPO/apps/agent-broker" "$BROKER_INPUT_REPO/apps/agent-broker/src" \
+  "$BROKER_INPUT_REPO/apps/agent-broker/runtime" "$BROKER_INPUT_REPO/apps/agent-broker/test"
+cp "$ROOT_DIR/scripts/release-build-inputs.mjs" "$BROKER_INPUT_REPO/validator.mjs"
+cp "$ROOT_DIR/scripts/release-build-inputs.json" "$BROKER_INPUT_REPO/scripts/release-build-inputs.json"
+printf '{"name":"@family-ai/agent-broker"}\n' > "$BROKER_INPUT_REPO/apps/agent-broker/package.json"
+printf '{}\n' > "$BROKER_INPUT_REPO/apps/agent-broker/tsconfig.json"
+printf 'export {};\n' > "$BROKER_INPUT_REPO/apps/agent-broker/src/index.ts"
+printf 'def main(): pass\n' > "$BROKER_INPUT_REPO/apps/agent-broker/runtime/hermes_machine_bridge.py"
+printf 'test fixture\n' > "$BROKER_INPUT_REPO/apps/agent-broker/test/server.test.ts"
+git -C "$BROKER_INPUT_REPO" init -q
+git -C "$BROKER_INPUT_REPO" config user.email fixture@family-ai.invalid
+git -C "$BROKER_INPUT_REPO" config user.name 'Family AI Fixture'
+git -C "$BROKER_INPUT_REPO" add scripts/release-build-inputs.json apps/agent-broker
+git -C "$BROKER_INPUT_REPO" commit -qm broker-inputs
+BROKER_INPUT_COMMIT="$(git -C "$BROKER_INPUT_REPO" rev-parse HEAD)"
+node "$BROKER_INPUT_REPO/validator.mjs" validate \
+  --repository "$BROKER_INPUT_REPO" --source-commit "$BROKER_INPUT_COMMIT" \
+  --manifest "$BROKER_INPUT_REPO/scripts/release-build-inputs.json" \
+  --output "$BROKER_INPUT_REPO/receipt.json" >/dev/null
+[[ "$(node -e 'const v=require(process.argv[1]);process.stdout.write(String(v.classificationCounts["runtime-build"]))' "$BROKER_INPUT_REPO/receipt.json")" == 5 ]] \
+  || fail 'Broker package, tsconfig, src, and runtime are not exact runtime-build inputs'
+[[ "$(node -e 'const v=require(process.argv[1]);process.stdout.write(String(v.classificationCounts["quality-tool"]))' "$BROKER_INPUT_REPO/receipt.json")" == 1 ]] \
+  || fail 'Broker tests are not isolated as quality-tool inputs'
+printf 'future input\n' > "$BROKER_INPUT_REPO/apps/agent-broker/future-unknown.txt"
+git -C "$BROKER_INPUT_REPO" add apps/agent-broker/future-unknown.txt
+git -C "$BROKER_INPUT_REPO" commit -qm broker-unknown-input
+expect_failure UNCLASSIFIED_PATH:apps/agent-broker/future-unknown.txt \
+  node "$BROKER_INPUT_REPO/validator.mjs" validate \
+    --repository "$BROKER_INPUT_REPO" --source-commit "$(git -C "$BROKER_INPUT_REPO" rev-parse HEAD)" \
+    --manifest "$BROKER_INPUT_REPO/scripts/release-build-inputs.json" \
+    --output "$BROKER_INPUT_REPO/receipt-unknown.json"
+
 UNPRIVILEGED_LINE="$(grep -n 'USER 65532:65532' "$ROOT_DIR/Dockerfile" | head -n1 | cut -d: -f1)"
 IMPORT_CHECK_LINE="$(grep -n 'await import("@family-ai/contracts")' "$ROOT_DIR/Dockerfile" | head -n1 | cut -d: -f1)"
 [[ -n "$UNPRIVILEGED_LINE" && "$UNPRIVILEGED_LINE" -lt "$IMPORT_CHECK_LINE" ]] \
@@ -69,7 +117,7 @@ mkdir -m 700 "$CAPABILITY_DIR"
 cp "$ROOT_DIR/scripts/gateway-schema-capabilities.mjs" "$CAPABILITY_DIR/validator.mjs"
 cp "$ROOT_DIR/scripts/gateway-schema-capabilities.json" "$CAPABILITY_DIR/schema.json"
 cp "$ROOT_DIR/scripts/gateway-release-capabilities.json" "$CAPABILITY_DIR/release.json"
-printf 'export const MIGRATION_V9 = `fixture`;\n' > "$CAPABILITY_DIR/database.ts"
+printf 'export const MIGRATION_V15 = `fixture`;\n' > "$CAPABILITY_DIR/database.ts"
 printf '%s\n' \
   'export const MEMBER_CACHE_DATABASE_VERSION = 2;' \
   'export function open(databaseName, indexedDBImpl) {' \
@@ -85,6 +133,19 @@ node "$CAPABILITY_DIR/validator.mjs" validate \
 [[ "$(sha256sum "$CAPABILITY_DIR/receipt.json" | awk '{print $1}')" == \
   "$(awk 'NR==1 {print $1}' "$CAPABILITY_DIR/receipt.json.sha256")" ]] || fail 'capability sidecar is not replayable'
 cp "$CAPABILITY_DIR/release.json" "$CAPABILITY_DIR/release-bad.json"
+node --input-type=module - "$CAPABILITY_DIR/release.json" "$CAPABILITY_DIR/release-no-recovery.json" <<'NODE'
+import { readFileSync, writeFileSync } from "node:fs";
+const value = JSON.parse(readFileSync(process.argv[2], "utf8"));
+delete value.protectedWalRecoveryV1;
+writeFileSync(process.argv[3], JSON.stringify(value));
+NODE
+expect_failure RELEASE_CAPABILITIES_INVALID \
+  node "$CAPABILITY_DIR/validator.mjs" validate \
+    --schema-registry "$CAPABILITY_DIR/schema.json" \
+    --release-capabilities "$CAPABILITY_DIR/release-no-recovery.json" \
+    --database-source "$CAPABILITY_DIR/database.ts" \
+    --client-cache-source "$CAPABILITY_DIR/cache.js" \
+    --output "$CAPABILITY_DIR/receipt-no-recovery.json"
 sed -i 's/"clientDatabaseVersion": 2/"clientDatabaseVersion": 3/' "$CAPABILITY_DIR/release-bad.json"
 expect_failure CLIENT_DATABASE_VERSION_MISMATCH \
   node "$CAPABILITY_DIR/validator.mjs" validate \
@@ -320,6 +381,9 @@ mkdir -m 700 "$TAMPER_DIR"
 printf 'tampered archive\n' > "$TAMPER_DIR/gateway-image.tar"
 printf '%064d  gateway-image.tar\n' 0 > "$TAMPER_DIR/gateway-image.tar.sha256"
 printf '{"manifestKind":"gateway-image-v1"}\n' > "$TAMPER_DIR/gateway-image-manifest.json"
+sha256sum "$TAMPER_DIR/gateway-image-manifest.json" | sed 's#  .*/#  #' > "$TAMPER_DIR/gateway-image-manifest.json.sha256"
+printf '{"manifestKind":"runtime-tool-manifest-v1"}\n' > "$TAMPER_DIR/gateway-runtime-tools.json"
+sha256sum "$TAMPER_DIR/gateway-runtime-tools.json" | sed 's#  .*/#  #' > "$TAMPER_DIR/gateway-runtime-tools.json.sha256"
 expect_failure ARCHIVE_HASH_MISMATCH \
   bash "$ROOT_DIR/scripts/ci-compose-smoke.sh" \
     --image-manifest "$TAMPER_DIR/gateway-image-manifest.json"

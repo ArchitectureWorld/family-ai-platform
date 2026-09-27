@@ -1,8 +1,12 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import type { MessageEnvelope } from "@family-ai/contracts";
+import {
+  openSecureDatabaseFile,
+  type DatabaseSecurityHooks,
+  type GatewayDatabaseIntent,
+  type GatewayDatabaseOpenRequest
+} from "./databaseSecurity.js";
 
 export type GatewayDatabase = Database.Database;
 
@@ -876,6 +880,372 @@ CREATE INDEX attachments_storage_key_idx
   ON attachments(storage_key) WHERE storage_key IS NOT NULL;
 `;
 
+const MIGRATION_V10 = `
+CREATE TABLE work_external_links (
+  link_ref TEXT PRIMARY KEY,
+  work_conversation_ref TEXT NOT NULL
+    REFERENCES work_conversations(work_conversation_ref) ON DELETE RESTRICT,
+  external_system TEXT NOT NULL CHECK (external_system = 'super-canvas'),
+  external_kind TEXT NOT NULL CHECK (external_kind = 'workflow'),
+  external_resource_ref TEXT NOT NULL,
+  root_session_ref TEXT NOT NULL,
+  deep_link TEXT,
+  source_sequence INTEGER NOT NULL CHECK (source_sequence >= 0),
+  idempotency_key TEXT NOT NULL UNIQUE,
+  payload_sha256 TEXT NOT NULL CHECK (
+    length(payload_sha256) = 64 AND payload_sha256 NOT GLOB '*[^0-9a-f]*'
+  ),
+  status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
+  created_by_person_ref TEXT NOT NULL REFERENCES persons(person_ref),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  revoked_at TEXT,
+  CHECK (
+    (status = 'active' AND deep_link IS NOT NULL AND revoked_at IS NULL) OR
+    (status = 'revoked' AND deep_link IS NULL AND revoked_at IS NOT NULL)
+  )
+);
+CREATE INDEX work_external_links_work_status_idx
+  ON work_external_links(work_conversation_ref, status, created_at);
+CREATE UNIQUE INDEX work_external_links_active_target_idx
+  ON work_external_links(
+    work_conversation_ref,
+    external_system,
+    external_kind,
+    external_resource_ref
+  )
+  WHERE status = 'active';
+`;
+
+const MIGRATION_V11 = `
+CREATE TABLE federation_services (
+  service_ref TEXT PRIMARY KEY,
+  product TEXT NOT NULL CHECK(product IN ('canvas', 'me')),
+  token_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK(status IN ('active', 'revoked')),
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+
+CREATE TABLE agent_discovery_observations (
+  agent_ref TEXT PRIMARY KEY REFERENCES agents(agent_ref),
+  kind TEXT NOT NULL CHECK(kind IN ('agent', 'harness', 'provider', 'tool-gateway', 'terminal')),
+  runtime TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('available', 'unavailable', 'disabled')),
+  capabilities_json TEXT NOT NULL,
+  observed_at TEXT NOT NULL
+);
+
+CREATE TABLE federation_actor_contexts (
+  context_ref TEXT PRIMARY KEY,
+  product TEXT NOT NULL,
+  family_ref TEXT NOT NULL,
+  person_ref TEXT NOT NULL,
+  device_ref TEXT NOT NULL,
+  entry_session_ref TEXT NOT NULL,
+  assignment_version INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE agent_invocation_audit (
+  invocation_ref TEXT PRIMARY KEY,
+  correlation_ref TEXT NOT NULL,
+  product TEXT NOT NULL,
+  person_ref TEXT NOT NULL,
+  agent_ref TEXT NOT NULL,
+  local_session_ref TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error_code TEXT,
+  started_at TEXT NOT NULL,
+  completed_at TEXT
+);
+`;
+
+const MIGRATION_V12 = `
+CREATE TABLE person_agent_assignment_versions (
+  person_ref TEXT PRIMARY KEY REFERENCES persons(person_ref) ON DELETE CASCADE,
+  assignment_version INTEGER NOT NULL CHECK(assignment_version > 0),
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE federation_session_bindings (
+  product TEXT NOT NULL CHECK(product IN ('canvas', 'me')),
+  family_ref TEXT NOT NULL REFERENCES families(family_ref),
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref),
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  local_session_ref TEXT NOT NULL,
+  external_session_ref TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(product, family_ref, person_ref, agent_ref, local_session_ref)
+);
+
+CREATE TABLE federation_session_invocation_claims (
+  product TEXT NOT NULL CHECK(product IN ('canvas', 'me')),
+  family_ref TEXT NOT NULL REFERENCES families(family_ref),
+  person_ref TEXT NOT NULL REFERENCES persons(person_ref),
+  agent_ref TEXT NOT NULL REFERENCES agents(agent_ref),
+  local_session_ref TEXT NOT NULL,
+  invocation_ref TEXT NOT NULL UNIQUE
+    REFERENCES agent_invocation_audit(invocation_ref) ON DELETE CASCADE,
+  service_ref TEXT NOT NULL REFERENCES federation_services(service_ref),
+  claimed_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  PRIMARY KEY(product, family_ref, person_ref, agent_ref, local_session_ref)
+);
+CREATE INDEX federation_session_claim_expiry_idx
+  ON federation_session_invocation_claims(lease_expires_at);
+`;
+
+const MIGRATION_V13 = `
+CREATE TABLE person_federation_context_versions (
+  person_ref TEXT PRIMARY KEY REFERENCES persons(person_ref) ON DELETE CASCADE,
+  context_version INTEGER NOT NULL CHECK(context_version > 0),
+  updated_at TEXT NOT NULL
+);
+
+INSERT INTO person_federation_context_versions(person_ref, context_version, updated_at)
+SELECT person_ref, 1, updated_at FROM persons;
+
+CREATE TRIGGER person_federation_context_insert
+AFTER INSERT ON persons
+BEGIN
+  INSERT INTO person_federation_context_versions(person_ref, context_version, updated_at)
+  VALUES(NEW.person_ref, 1, NEW.updated_at);
+END;
+
+CREATE TRIGGER person_federation_context_person_update
+AFTER UPDATE OF display_name, status ON persons
+WHEN NEW.display_name <> OLD.display_name OR NEW.status <> OLD.status
+BEGIN
+  UPDATE person_federation_context_versions
+  SET context_version = context_version + 1, updated_at = NEW.updated_at
+  WHERE person_ref = NEW.person_ref;
+END;
+
+CREATE TRIGGER person_federation_context_membership_update
+AFTER UPDATE OF family_role, status ON family_memberships
+WHEN NEW.family_role <> OLD.family_role OR NEW.status <> OLD.status
+BEGIN
+  UPDATE person_federation_context_versions
+  SET context_version = context_version + 1, updated_at = NEW.updated_at
+  WHERE person_ref = NEW.person_ref;
+END;
+
+CREATE TRIGGER person_federation_context_family_update
+AFTER UPDATE OF display_name, status ON families
+WHEN NEW.display_name <> OLD.display_name OR NEW.status <> OLD.status
+BEGIN
+  UPDATE person_federation_context_versions
+  SET context_version = context_version + 1, updated_at = NEW.updated_at
+  WHERE person_ref IN (
+    SELECT person_ref FROM family_memberships WHERE family_ref = NEW.family_ref
+  );
+END;
+
+CREATE TABLE federation_actor_contexts_v13 (
+  context_ref TEXT PRIMARY KEY,
+  product TEXT NOT NULL,
+  family_ref TEXT NOT NULL,
+  person_ref TEXT NOT NULL,
+  device_ref TEXT NOT NULL,
+  entry_session_ref TEXT NOT NULL,
+  person_display_name TEXT NOT NULL,
+  family_display_name TEXT NOT NULL,
+  assignment_version INTEGER NOT NULL,
+  context_version INTEGER NOT NULL CHECK(context_version > 0),
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+INSERT INTO federation_actor_contexts_v13(
+  context_ref, product, family_ref, person_ref, device_ref, entry_session_ref,
+  person_display_name, family_display_name, assignment_version, context_version,
+  expires_at, created_at
+)
+SELECT fac.context_ref, fac.product, fac.family_ref, fac.person_ref,
+       fac.device_ref, fac.entry_session_ref, p.display_name, f.display_name,
+       fac.assignment_version, pvc.context_version, fac.expires_at, fac.created_at
+FROM federation_actor_contexts fac
+JOIN persons p ON p.person_ref = fac.person_ref
+JOIN families f ON f.family_ref = fac.family_ref
+JOIN person_federation_context_versions pvc ON pvc.person_ref = fac.person_ref;
+
+DROP TABLE federation_actor_contexts;
+ALTER TABLE federation_actor_contexts_v13 RENAME TO federation_actor_contexts;
+`;
+
+const MIGRATION_V14 = `
+CREATE TABLE agent_invocation_audit_v14 (
+  invocation_ref TEXT PRIMARY KEY,
+  correlation_ref TEXT NOT NULL,
+  product TEXT NOT NULL,
+  person_ref TEXT NOT NULL,
+  agent_ref TEXT NOT NULL,
+  local_session_ref TEXT NOT NULL,
+  request_sha256 TEXT,
+  service_ref TEXT,
+  family_ref TEXT,
+  actor_context_ref TEXT,
+  requested_external_session_ref TEXT,
+  timeout_ms INTEGER,
+  status TEXT NOT NULL CHECK(status IN ('accepted', 'succeeded', 'failed')),
+  error_code TEXT,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  CHECK (
+    (
+      request_sha256 IS NULL
+      AND service_ref IS NULL
+      AND family_ref IS NULL
+      AND actor_context_ref IS NULL
+      AND requested_external_session_ref IS NULL
+      AND timeout_ms IS NULL
+    )
+    OR
+    (
+      request_sha256 IS NOT NULL
+      AND length(request_sha256) = 64
+      AND request_sha256 NOT GLOB '*[^0-9a-f]*'
+      AND service_ref IS NOT NULL
+      AND family_ref IS NOT NULL
+      AND actor_context_ref IS NOT NULL
+      AND timeout_ms BETWEEN 1000 AND 300000
+      AND (requested_external_session_ref IS NULL
+        OR requested_external_session_ref GLOB 'external-session:*')
+    )
+  ),
+  CHECK (
+    (status = 'accepted' AND error_code IS NULL AND completed_at IS NULL)
+    OR (status = 'succeeded' AND error_code IS NULL AND completed_at IS NOT NULL)
+    OR (status = 'failed' AND error_code IS NOT NULL AND completed_at IS NOT NULL)
+  )
+);
+
+INSERT INTO agent_invocation_audit_v14(
+  invocation_ref, correlation_ref, product, person_ref, agent_ref,
+  local_session_ref, request_sha256, service_ref, family_ref,
+  actor_context_ref, requested_external_session_ref, timeout_ms,
+  status, error_code, started_at, completed_at
+)
+SELECT invocation_ref, correlation_ref, product, person_ref, agent_ref,
+       local_session_ref, NULL, NULL, NULL, NULL, NULL, NULL,
+       status, error_code, started_at, completed_at
+FROM agent_invocation_audit;
+
+DROP TABLE agent_invocation_audit;
+ALTER TABLE agent_invocation_audit_v14 RENAME TO agent_invocation_audit;
+
+CREATE INDEX agent_invocation_audit_scope_idx ON agent_invocation_audit(
+  service_ref, product, family_ref, person_ref, agent_ref, local_session_ref,
+  invocation_ref
+);
+`;
+
+const MIGRATION_V15 = `
+CREATE TABLE federation_actor_contexts_v15 (
+  context_ref TEXT PRIMARY KEY,
+  product TEXT NOT NULL,
+  family_ref TEXT NOT NULL,
+  person_ref TEXT NOT NULL,
+  device_ref TEXT NOT NULL,
+  entry_session_ref TEXT NOT NULL,
+  person_display_name TEXT NOT NULL,
+  family_display_name TEXT NOT NULL,
+  assignment_version INTEGER NOT NULL,
+  context_version INTEGER NOT NULL CHECK(context_version > 0),
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  service_ref TEXT REFERENCES federation_services(service_ref),
+  roles_json TEXT,
+  CHECK (
+    (service_ref IS NULL AND roles_json IS NULL)
+    OR (
+      service_ref IS NOT NULL
+      AND roles_json IS NOT NULL
+      AND length(service_ref) BETWEEN 10 AND 135
+      AND substr(service_ref, 1, 8) = 'service:'
+      AND substr(service_ref, 9, 1) GLOB '[a-z0-9]'
+      AND substr(service_ref, 10) NOT GLOB '*[^a-z0-9._:-]*'
+      AND json_valid(roles_json)
+      AND json_type(roles_json) = 'array'
+      AND json_array_length(roles_json) BETWEEN 1 AND 2
+      AND roles_json IN (
+        '["owner"]', '["owner","family_admin"]',
+        '["adult"]', '["adult","family_admin"]',
+        '["child"]', '["child","family_admin"]',
+        '["elder"]', '["elder","family_admin"]'
+      )
+    )
+  )
+);
+
+INSERT INTO federation_actor_contexts_v15(
+  context_ref, product, family_ref, person_ref, device_ref,
+  entry_session_ref, person_display_name, family_display_name,
+  assignment_version, context_version, expires_at, created_at,
+  service_ref, roles_json
+)
+SELECT context_ref, product, family_ref, person_ref, device_ref,
+       entry_session_ref, person_display_name, family_display_name,
+       assignment_version, context_version, expires_at, created_at,
+       NULL, NULL
+FROM federation_actor_contexts;
+
+DROP TABLE federation_actor_contexts;
+ALTER TABLE federation_actor_contexts_v15 RENAME TO federation_actor_contexts;
+
+CREATE INDEX federation_actor_contexts_expiry_idx
+  ON federation_actor_contexts(expires_at, context_ref);
+
+CREATE INDEX federation_actor_contexts_reuse_idx
+  ON federation_actor_contexts(
+    service_ref, product, entry_session_ref,
+    assignment_version, context_version, expires_at DESC, context_ref
+  );
+
+CREATE TRIGGER federation_actor_context_roles_insert
+BEFORE INSERT ON federation_actor_contexts
+WHEN NEW.roles_json IS NOT NULL
+BEGIN
+  SELECT CASE WHEN (
+    json_valid(NEW.roles_json)
+    AND json_type(NEW.roles_json) = 'array'
+    AND json_array_length(NEW.roles_json) BETWEEN 1 AND 2
+    AND NOT EXISTS (
+      SELECT 1 FROM json_each(NEW.roles_json)
+      WHERE type <> 'text'
+         OR value NOT IN ('owner', 'adult', 'child', 'elder', 'family_admin')
+    )
+    AND (SELECT COUNT(*) FROM json_each(NEW.roles_json)) =
+        (SELECT COUNT(DISTINCT value) FROM json_each(NEW.roles_json))
+    AND (SELECT COUNT(*) FROM json_each(NEW.roles_json)
+         WHERE value IN ('owner', 'adult', 'child', 'elder')) = 1
+  ) THEN 1 ELSE RAISE(ABORT, 'FEDERATION_CONTEXT_ROLES_INVALID') END;
+END;
+
+CREATE TRIGGER federation_actor_context_roles_update
+BEFORE UPDATE OF roles_json ON federation_actor_contexts
+WHEN NEW.roles_json IS NOT NULL
+BEGIN
+  SELECT CASE WHEN (
+    json_valid(NEW.roles_json)
+    AND json_type(NEW.roles_json) = 'array'
+    AND json_array_length(NEW.roles_json) BETWEEN 1 AND 2
+    AND NOT EXISTS (
+      SELECT 1 FROM json_each(NEW.roles_json)
+      WHERE type <> 'text'
+         OR value NOT IN ('owner', 'adult', 'child', 'elder', 'family_admin')
+    )
+    AND (SELECT COUNT(*) FROM json_each(NEW.roles_json)) =
+        (SELECT COUNT(DISTINCT value) FROM json_each(NEW.roles_json))
+    AND (SELECT COUNT(*) FROM json_each(NEW.roles_json)
+         WHERE value IN ('owner', 'adult', 'child', 'elder')) = 1
+  ) THEN 1 ELSE RAISE(ABORT, 'FEDERATION_CONTEXT_ROLES_INVALID') END;
+END;
+`;
+
 function applyMigrationV8(db: GatewayDatabase): void {
   db.pragma("foreign_keys = OFF");
   try {
@@ -912,6 +1282,82 @@ function applyMigrationV9(db: GatewayDatabase): void {
   }
 }
 
+function applyMigrationV10(db: GatewayDatabase): void {
+  db.transaction(() => {
+    db.exec(MIGRATION_V10);
+    db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(10, ?)"
+    ).run(new Date().toISOString());
+  })();
+}
+
+function applyMigrationV11(db: GatewayDatabase): void {
+  db.transaction(() => {
+    db.exec(MIGRATION_V11);
+    db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(11, ?)"
+    ).run(new Date().toISOString());
+  })();
+}
+
+function applyMigrationV12(db: GatewayDatabase): void {
+  db.transaction(() => {
+    db.exec(MIGRATION_V12);
+    db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(12, ?)"
+    ).run(new Date().toISOString());
+  })();
+}
+
+function applyMigrationV13(db: GatewayDatabase): void {
+  db.transaction(() => {
+    db.exec(MIGRATION_V13);
+    db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(13, ?)"
+    ).run(new Date().toISOString());
+  })();
+}
+
+function applyMigrationV14(db: GatewayDatabase): void {
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(MIGRATION_V14);
+      db.prepare(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES(14, ?)"
+      ).run(new Date().toISOString());
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  const violations = db.pragma("foreign_key_check") as unknown[];
+  if (violations.length > 0) {
+    throw new Error("Gateway V14 migration produced foreign key violations");
+  }
+}
+
+function applyMigrationV15(db: GatewayDatabase): void {
+  const capturedNow = new Date().toISOString();
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(MIGRATION_V15);
+      db.prepare(
+        "DELETE FROM federation_actor_contexts WHERE expires_at <= ?"
+      ).run(capturedNow);
+      db.prepare(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES(15, ?)"
+      ).run(capturedNow);
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  const violations = db.pragma("foreign_key_check") as unknown[];
+  if (violations.length > 0) {
+    throw new Error("Gateway V15 migration produced foreign key violations");
+  }
+}
+
 function latestMigrationVersion(db: GatewayDatabase): number {
   const row = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
@@ -921,7 +1367,7 @@ function latestMigrationVersion(db: GatewayDatabase): number {
 
 function applyMigrations(
   db: GatewayDatabase,
-  migrationLimit: 6 | 7 | 8 | 9
+  migrationLimit: 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
 ): void {
   const ledgerExists = db
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'")
@@ -996,26 +1442,100 @@ function applyMigrations(
     applyMigrationV9(db);
     latest = 9;
   }
+  if (latest === 9 && migrationLimit >= 10) {
+    applyMigrationV10(db);
+    latest = 10;
+  }
+  if (latest === 10 && migrationLimit >= 11) {
+    applyMigrationV11(db);
+    latest = 11;
+  }
+  if (latest === 11 && migrationLimit >= 12) {
+    applyMigrationV12(db);
+    latest = 12;
+  }
+  if (latest === 12 && migrationLimit >= 13) {
+    applyMigrationV13(db);
+    latest = 13;
+  }
+  if (latest === 13 && migrationLimit >= 14) {
+    applyMigrationV14(db);
+    latest = 14;
+  }
+  if (latest === 14 && migrationLimit >= 15) {
+    applyMigrationV15(db);
+    latest = 15;
+  }
   if (latest !== migrationLimit) {
     throw new Error(`Unsupported Gateway schema version: ${latest}`);
   }
 }
 
-export interface GatewayDatabaseOpenOptions {
-  migrationLimit?: 6 | 7 | 8 | 9;
-}
+export type { GatewayDatabaseIntent, GatewayDatabaseOpenRequest };
+
+export type SecureGatewayDatabaseLease = GatewayDatabase & {
+  database: GatewayDatabase;
+  intent: GatewayDatabaseIntent;
+  assertBound: () => void;
+};
 
 export function openGatewayDatabase(
   databasePath: string,
-  options: GatewayDatabaseOpenOptions = {}
-): GatewayDatabase {
-  mkdirSync(dirname(databasePath), { recursive: true });
-  const db = new Database(databasePath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.pragma("busy_timeout = 5000");
-  applyMigrations(db, options.migrationLimit ?? 9);
-  return db;
+  request: GatewayDatabaseOpenRequest,
+  hooks: DatabaseSecurityHooks = {}
+): SecureGatewayDatabaseLease {
+  if (request === undefined || request === null) {
+    throw new Error("GATEWAY_DATABASE_INTENT_REQUIRED");
+  }
+  const secure = openSecureDatabaseFile(databasePath, request, hooks);
+  const db = secure.database;
+  try {
+    db.pragma("foreign_keys = ON");
+    db.pragma("busy_timeout = 5000");
+    if (secure.effectiveIntent === "migrate-create-or-existing") {
+      db.pragma("journal_mode = DELETE");
+      db.pragma("foreign_keys = OFF");
+      try {
+        db.exec("BEGIN EXCLUSIVE");
+        try {
+          applyMigrations(db, secure.migrationLimit);
+          if (
+            db.pragma("quick_check", { simple: true }) !== "ok"
+            || (db.pragma("foreign_key_check") as unknown[]).length !== 0
+          ) {
+            throw new Error("GATEWAY_DATABASE_SCHEMA_INVALID");
+          }
+          secure.assertBound();
+          hooks.checkpoint?.("beforeMigrationCommit");
+          secure.assertBound();
+          db.exec("COMMIT");
+        } catch (error) {
+          if (db.inTransaction) db.exec("ROLLBACK");
+          throw error;
+        }
+      } finally {
+        db.pragma("foreign_keys = ON");
+      }
+    } else if (secure.effectiveIntent === "gateway-existing") {
+      db.pragma("journal_mode = WAL");
+    } else {
+      db.pragma("journal_mode = DELETE");
+    }
+    secure.assertBound();
+    hooks.checkpoint?.("beforeReturn");
+    secure.assertBound();
+    const lease = db as SecureGatewayDatabaseLease;
+    Object.defineProperties(lease, {
+      database: { value: db, enumerable: false },
+      intent: { value: secure.intent, enumerable: false },
+      assertBound: { value: secure.assertBound, enumerable: false },
+      close: { value: secure.close, enumerable: false }
+    });
+    return lease;
+  } catch (error) {
+    secure.close();
+    throw error;
+  }
 }
 
 export function sha256(value: string): string {

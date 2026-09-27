@@ -89,6 +89,19 @@ node "$WORKTREE_DIR/scripts/release-build-inputs.mjs" validate \
   --manifest "$WORKTREE_DIR/scripts/release-build-inputs.json" \
   --output "$INPUT_RECEIPT" >/dev/null
 
+TOOL_RECEIPT="$RECEIPT_DIR/gateway-runtime-tools.json"
+TOOL_SHA="$(node "$WORKTREE_DIR/scripts/runtime-tool-manifest.mjs" create \
+  --repository "$WORKTREE_DIR" \
+  --source-commit "$SOURCE_COMMIT" \
+  --expected-source-commit "$SOURCE_COMMIT" \
+  --release-build-inputs "$WORKTREE_DIR/scripts/release-build-inputs.json" \
+  --output "$TOOL_RECEIPT")"
+[[ "$TOOL_SHA" =~ ^[0-9a-f]{64}$ ]] || fail TOOL_RECEIPT_HASH_INVALID
+EXPECTED_LAUNCHER_SHA="$(sha256sum "$WORKTREE_DIR/apps/gateway/runtime/gateway_lock_exec.py" | awk '{print $1}')"
+EXPECTED_RENAME_SHA="$(sha256sum "$WORKTREE_DIR/apps/gateway/runtime/rename_noreplace.py" | awk '{print $1}')"
+TOOL_LAUNCHER_SHA="$(node -e 'const v=require(process.argv[1]);const row=v.tools.find(x=>x.path==="apps/gateway/runtime/gateway_lock_exec.py");if(!row)process.exit(1);process.stdout.write(row.sha256)' "$TOOL_RECEIPT")"
+[[ "$EXPECTED_LAUNCHER_SHA" == "$TOOL_LAUNCHER_SHA" ]] || fail TOOL_LAUNCHER_HASH_MISMATCH
+
 json_field() {
   node --input-type=module - "$1" "$2" <<'NODE'
 import { readFileSync } from "node:fs";
@@ -100,6 +113,7 @@ NODE
 }
 
 CLIENT_VERSION="$(json_field "$CAPABILITY_RECEIPT" release.clientDatabaseVersion)"
+SCHEMA_HEAD="$(json_field "$CAPABILITY_RECEIPT" release.schemaHead)"
 [[ "$CLIENT_VERSION" =~ ^[1-9][0-9]*$ ]] || fail CLIENT_DATABASE_VERSION_INVALID
 RELEASE_INPUTS_SHA="$(json_field "$INPUT_RECEIPT" releaseBuildInputsSha256)"
 BUILD_INPUT_TREE_HASH="$(json_field "$INPUT_RECEIPT" buildInputTreeHash)"
@@ -109,11 +123,13 @@ BASE_DIGEST="$(json_field "$INPUT_RECEIPT" buildMaterials.baseImageDigest)"
 DEBIAN_SNAPSHOT="$(json_field "$INPUT_RECEIPT" buildMaterials.debianSnapshot)"
 DEBIAN_SECURITY_SNAPSHOT="$(json_field "$INPUT_RECEIPT" buildMaterials.debianSecuritySnapshot)"
 PYTHON3_VERSION="$(json_field "$INPUT_RECEIPT" buildMaterials.toolchainPackages.python3)"
+EXPECTED_PYTHON_VERSION="3.11.2"
 MAKE_VERSION="$(json_field "$INPUT_RECEIPT" buildMaterials.toolchainPackages.make)"
 GXX_VERSION="$(json_field "$INPUT_RECEIPT" buildMaterials.toolchainPackages.g++)"
 GIT_VERSION="$(json_field "$INPUT_RECEIPT" buildMaterials.toolchainPackages.git)"
 TOOLCHAIN_MATERIAL="python3=$PYTHON3_VERSION;make=$MAKE_VERSION;g++=$GXX_VERSION;git=$GIT_VERSION"
 [[ "$PLATFORM" == linux/amd64 && "$BASE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail BASE_MATERIAL_INVALID
+[[ "$PYTHON3_VERSION" == "$EXPECTED_PYTHON_VERSION-"* ]] || fail PYTHON_VERSION_INVALID
 
 docker pull --platform "$PLATFORM" "$BASE_REF@$BASE_DIGEST" >/dev/null
 RESOLVED_BASE="$(docker image inspect --format '{{.Id}}' "$BASE_REF@$BASE_DIGEST")"
@@ -123,6 +139,7 @@ IMAGE_TAG="family-ai-platform/gateway:$SOURCE_COMMIT"
 docker build --platform "$PLATFORM" --pull=false \
   --build-arg "SOURCE_COMMIT=$SOURCE_COMMIT" \
   --build-arg "CLIENT_DATABASE_VERSION=$CLIENT_VERSION" \
+  --build-arg "SCHEMA_HEAD=$SCHEMA_HEAD" \
   --build-arg "RELEASE_CAPABILITY_RECEIPT_SHA256=$CAPABILITY_SHA" \
   --build-arg "RELEASE_BUILD_INPUTS_SHA256=$RELEASE_INPUTS_SHA" \
   --build-arg "BUILD_INPUT_TREE_HASH=$BUILD_INPUT_TREE_HASH" \
@@ -138,12 +155,22 @@ docker build --platform "$PLATFORM" --pull=false \
   --tag "$IMAGE_TAG" "$WORKTREE_DIR"
 
 IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
+# Independently inspect the exact source build stage; runtime bytes must match this output.
+# This target reuses the completed quality/build layers and does not rerun unchanged tests.
+BUILD_IMAGE_ID="$(docker build --platform "$PLATFORM" --pull=false --target build --quiet "$WORKTREE_DIR")"
+EXPECTED_BUILT_SHA_JSON="$(docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --entrypoint node "$BUILD_IMAGE_ID" \
+  scripts/gateway-image-runtime-contract.mjs built-digests)"
+EXPECTED_RECOVERY_JSON="$(node -e 'process.stdout.write(JSON.stringify({renameHelperSha256:process.argv[1],builtSha256:JSON.parse(process.argv[2])}))' "$EXPECTED_RENAME_SHA" "$EXPECTED_BUILT_SHA_JSON")"
 [[ "$IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || fail IMAGE_ID_INVALID
 inspect_label() {
   docker image inspect --format "{{index .Config.Labels \"$1\"}}" "$IMAGE_ID"
 }
 [[ "$(inspect_label org.opencontainers.image.revision)" == "$SOURCE_COMMIT" ]] || fail REVISION_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.client-database-version)" == "$CLIENT_VERSION" ]] || fail CLIENT_VERSION_LABEL_MISMATCH
+[[ "$(inspect_label org.architectureworld.family-ai.schema-head)" == "$SCHEMA_HEAD" ]] || fail SCHEMA_HEAD_LABEL_MISMATCH
+[[ "$(inspect_label org.architectureworld.family-ai.gateway-database-flock-v1)" == true ]] || fail DATABASE_FLOCK_LABEL_MISMATCH
+[[ "$(inspect_label org.architectureworld.family-ai.protected-wal-recovery-v1)" == true ]] || fail RECOVERY_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.release-capability-receipt-sha256)" == "$CAPABILITY_SHA" ]] || fail CAPABILITY_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.release-build-inputs-sha256)" == "$RELEASE_INPUTS_SHA" ]] || fail BUILD_INPUT_MANIFEST_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.build-input-tree-hash)" == "$BUILD_INPUT_TREE_HASH" ]] || fail BUILD_INPUT_TREE_LABEL_MISMATCH
@@ -151,9 +178,18 @@ inspect_label() {
 [[ "$(inspect_label org.architectureworld.family-ai.target-platform)" == "$PLATFORM" ]] || fail PLATFORM_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.debian-snapshot)" == "$DEBIAN_SNAPSHOT" ]] || fail SNAPSHOT_LABEL_MISMATCH
 [[ "$(inspect_label org.architectureworld.family-ai.toolchain-material)" == "$TOOLCHAIN_MATERIAL" ]] || fail TOOLCHAIN_LABEL_MISMATCH
+RUNTIME_CONTRACT="$(node "$WORKTREE_DIR/scripts/gateway-image-runtime-contract.mjs" \
+  inspect --image-id "$IMAGE_ID" \
+  --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA" \
+  --expected-python-version "$EXPECTED_PYTHON_VERSION" \
+  --expected-recovery-json "$EXPECTED_RECOVERY_JSON")" || fail RUNTIME_CONTRACT_INVALID
+[[ -n "$RUNTIME_CONTRACT" ]] || fail RUNTIME_CONTRACT_INVALID
 
 mkdir -m 700 "$OUTPUT_DIR"
 OUTPUT_CREATED=true
+cp "$TOOL_RECEIPT" "$OUTPUT_DIR/gateway-runtime-tools.json"
+cp "$TOOL_RECEIPT.sha256" "$OUTPUT_DIR/gateway-runtime-tools.json.sha256"
+chmod 600 "$OUTPUT_DIR/gateway-runtime-tools.json" "$OUTPUT_DIR/gateway-runtime-tools.json.sha256"
 ARCHIVE="$OUTPUT_DIR/gateway-image.tar"
 docker save --output "$ARCHIVE" "$IMAGE_ID"
 ARCHIVE_SHA="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
@@ -163,18 +199,22 @@ REPO_DIGESTS="$(docker image inspect --format '{{json .RepoDigests}}' "$IMAGE_ID
 
 node --input-type=module - \
   "$OUTPUT_DIR/gateway-image-manifest.json" "$SOURCE_COMMIT" "$IMAGE_ID" "$ARCHIVE_SHA" \
-  "$CLIENT_VERSION" "$CAPABILITY_SHA" "$RELEASE_INPUTS_SHA" "$BUILD_INPUT_TREE_HASH" \
+  "$CLIENT_VERSION" "$SCHEMA_HEAD" "$CAPABILITY_SHA" "$RELEASE_INPUTS_SHA" "$BUILD_INPUT_TREE_HASH" \
   "$BASE_REF" "$BASE_DIGEST" "$PLATFORM" "$RESOLVED_BASE" "$DEBIAN_SNAPSHOT" \
-  "$DEBIAN_SECURITY_SNAPSHOT" "$TOOLCHAIN_MATERIAL" "$REPO_DIGESTS" <<'NODE'
+  "$DEBIAN_SECURITY_SNAPSHOT" "$TOOLCHAIN_MATERIAL" "$TOOL_SHA" "$RUNTIME_CONTRACT" "$REPO_DIGESTS" <<'NODE'
 import { chmodSync, writeFileSync } from "node:fs";
 const [
-  path, sourceCommit, imageId, archiveSha256, clientVersion, capabilitySha,
+  path, sourceCommit, imageId, archiveSha256, clientVersion, schemaHead, capabilitySha,
   releaseInputsSha, inputTreeHash, baseRef, baseDigest, platform, resolvedBase,
-  debianSnapshot, debianSecuritySnapshot, toolchainMaterial, repoDigestsJson
+  debianSnapshot, debianSecuritySnapshot, toolchainMaterial, runtimeToolManifestSha256, runtimeContractJson,
+  repoDigestsJson
 ] = process.argv.slice(2);
 const labels = {
   "org.opencontainers.image.revision": sourceCommit,
   "org.architectureworld.family-ai.client-database-version": clientVersion,
+  "org.architectureworld.family-ai.schema-head": schemaHead,
+  "org.architectureworld.family-ai.gateway-database-flock-v1": "true",
+  "org.architectureworld.family-ai.protected-wal-recovery-v1": "true",
   "org.architectureworld.family-ai.release-capability-receipt-sha256": capabilitySha,
   "org.architectureworld.family-ai.release-build-inputs-sha256": releaseInputsSha,
   "org.architectureworld.family-ai.build-input-tree-hash": inputTreeHash,
@@ -189,6 +229,9 @@ const manifest = {
   imageId,
   archiveSha256,
   clientDatabaseVersion: Number(clientVersion),
+  schemaHead: Number(schemaHead),
+  gatewayDatabaseFlockV1: true,
+  protectedWalRecoveryV1: true,
   releaseCapabilityReceiptSha256: capabilitySha,
   releaseBuildInputsSha256: releaseInputsSha,
   buildInputTreeHash: inputTreeHash,
@@ -200,15 +243,20 @@ const manifest = {
   debianSnapshot,
   debianSecuritySnapshot,
   toolchainMaterial,
+  runtimeToolManifestSha256,
+  runtimeContract: JSON.parse(runtimeContractJson),
   labels,
   repoDigests: JSON.parse(repoDigestsJson ?? "null")
 };
 writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 chmodSync(path, 0o600);
 NODE
+MANIFEST_SHA="$(sha256sum "$OUTPUT_DIR/gateway-image-manifest.json" | awk '{print $1}')"
+printf '%s  gateway-image-manifest.json\n' "$MANIFEST_SHA" > "$OUTPUT_DIR/gateway-image-manifest.json.sha256"
+chmod 600 "$OUTPUT_DIR/gateway-image-manifest.json.sha256"
 
 [[ "$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" == \
-  "gateway-image-manifest.json gateway-image.tar gateway-image.tar.sha256 " ]] || fail ARTIFACT_CONTRACT_INVALID
+  "gateway-image-manifest.json gateway-image-manifest.json.sha256 gateway-image.tar gateway-image.tar.sha256 gateway-runtime-tools.json gateway-runtime-tools.json.sha256 " ]] || fail ARTIFACT_CONTRACT_INVALID
 printf 'Gateway image artifact ready: source=%s image=%s archiveSha256=%s\n' "$SOURCE_COMMIT" "$IMAGE_ID" "$ARCHIVE_SHA"
 trap - EXIT
 git -C "$ROOT_DIR" worktree remove --force "$WORKTREE_DIR" >/dev/null

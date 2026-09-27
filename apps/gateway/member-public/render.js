@@ -553,6 +553,39 @@ export function createRenderer(input) {
   });
   $(documentRef, "createWorkButton").addEventListener("click", () => $(documentRef, "createWorkDialog").showModal(), listenerOptions);
   $(documentRef, "mobileCreateWorkButton").addEventListener("click", () => $(documentRef, "createWorkDialog").showModal(), listenerOptions);
+  const openCanvas = (link) => {
+    if (link?.deepLink) {
+      documentRef.defaultView?.open(link.deepLink, "_blank", "noopener,noreferrer");
+    }
+  };
+  $(documentRef, "createExecutionLinkButton").addEventListener("click", async () => {
+    try {
+      $(documentRef, "executionLinkStatus").textContent = "正在创建超级画板 Workflow…";
+      const link = await actions.expandInCanvas();
+      $(documentRef, "executionLinkStatus").textContent = "画板已关联。";
+      openCanvas(link);
+    } catch (error) {
+      showToast(error.message ?? "创建画板关联失败。", "error");
+    }
+  }, listenerOptions);
+  $(documentRef, "openExecutionLinkButton").addEventListener("click", async () => {
+    try {
+      const link = await actions.openExistingCanvas();
+      if (!link) throw new Error("当前 Work 还没有可用画板。");
+      openCanvas(link);
+    } catch (error) {
+      showToast(error.message ?? "打开画板失败。", "error");
+    }
+  }, listenerOptions);
+  $(documentRef, "revokeExecutionLinkButton").addEventListener("click", async () => {
+    try {
+      await actions.revokeCanvasLink();
+      $(documentRef, "executionLinkStatus").textContent = "画板关联已解除。";
+      showToast("已解除超级画板关联。");
+    } catch (error) {
+      showToast(error.message ?? "解除画板关联失败。", "error");
+    }
+  }, listenerOptions);
   $(documentRef, "workListToggle").addEventListener("click", () => {
     const select = $(documentRef, "mobileWorkSelect");
     if (select && select.options.length > 1) select.focus();
@@ -865,6 +898,12 @@ export function createRenderer(input) {
     $(documentRef, "workGoal").textContent = work?.goal ?? "每个 Work 都有独立的目标和对话上下文。";
     $(documentRef, "workDetailGoal").textContent = work?.goal ?? "选择 Work 后显示目标。";
     $(documentRef, "workSummary").textContent = work?.summary || "尚无阶段摘要。";
+    $(documentRef, "createExecutionLinkButton").disabled = !work;
+    $(documentRef, "openExecutionLinkButton").disabled = !work;
+    $(documentRef, "revokeExecutionLinkButton").disabled = !work;
+    if (!work) {
+      $(documentRef, "executionLinkStatus").textContent = "选择 Work 后可创建或打开执行画板。";
+    }
     renderProgress(documentRef, work ? state.progressByWork?.[work.workConversationRef] : null);
 
     const workThreadRef = work?.threadRef ?? null;

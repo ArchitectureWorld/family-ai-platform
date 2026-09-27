@@ -1,9 +1,8 @@
+import { createSpeakerMonitor } from "./admin-speakers.js";
 import {
   ADMIN_CLEAN_PATH,
   captureAdminHandoff,
-  clearStoredAdminCredential,
-  readStoredAdminCredential,
-  writeStoredAdminCredential
+  clearLegacyStoredAdminCredential
 } from "./admin-entry.js";
 import { AdminApiError, createAdminApi } from "./admin-api.js";
 import { applyAdminShellState } from "./admin-layout.js";
@@ -25,6 +24,9 @@ const adminShell = document.querySelector(".admin-shell");
 const setupRoot = document.querySelector("#family-setup-root");
 const summaryRoot = document.querySelector("#family-summary");
 const membersRoot = document.querySelector("#member-management-root");
+const activationForm = document.querySelector("#admin-activation-form");
+const activationCodeInput = document.querySelector("#admin-activation-code");
+const activationFeedback = document.querySelector("#admin-activation-feedback");
 const adminPageButtons = [...document.querySelectorAll("[data-admin-page]")];
 const membersPage = document.querySelector("#admin-members-page");
 const workspacePage = document.querySelector("#admin-workspace-page");
@@ -32,6 +34,12 @@ let activePairingDialog = null;
 let activePairingTimer = null;
 let activePairingDismissal = null;
 let activeWorkspace = null;
+let activeSpeakers = null;
+const devicesPage = document.querySelector("#admin-devices-page");
+function destroySpeakerMonitor() {
+  activeSpeakers?.destroy();
+  activeSpeakers = null;
+}
 let activeManagementApi = null;
 
 function destroyAdminWorkspace() {
@@ -41,7 +49,11 @@ function destroyAdminWorkspace() {
 
 export function showAdminState(name) {
   if (!states.has(name)) throw new Error("ADMIN_STATE_INVALID");
-  if (name !== "management") destroyAdminWorkspace();
+  if (name !== "management") {
+    destroyAdminWorkspace();
+    destroySpeakerMonitor();
+    activeManagementApi = null;
+  }
   applyAdminShellState(adminShell, name);
   for (const [stateName, element] of states) {
     element.hidden = stateName !== name;
@@ -49,9 +61,18 @@ export function showAdminState(name) {
 }
 
 function showAdminPage(name) {
-  if (!["members", "workspace"].includes(name)) {
+  if (!["members", "workspace", "devices"].includes(name)) {
     throw new Error("ADMIN_PAGE_INVALID");
   }
+  devicesPage.hidden = name !== "devices";
+  if (name === "devices" && activeSpeakers === null && activeManagementApi) {
+    activeSpeakers = createSpeakerMonitor({
+      root: devicesPage,
+      api: activeManagementApi,
+      onAuthenticationError: () => showAdminState("recovery-required")
+    });
+    void activeSpeakers.ready;
+  } else if (name !== "devices") destroySpeakerMonitor();
   membersPage.hidden = name !== "members";
   workspacePage.hidden = name !== "workspace";
   if (name === "workspace" && activeWorkspace === null && activeManagementApi) {
@@ -120,6 +141,8 @@ function errorText(error) {
       return "管理员入口已失效，请重新生成入口后再试。";
     }
     if (error.code === "REQUEST_INVALID") return "请检查填写的名称和成员角色。";
+    if (error.code === "ADMIN_ACTIVATION_CODE_INVALID") return "激活码格式不正确。";
+    if (error.code === "ADMIN_ACTIVATION_INVALID") return "激活码无效或已过期，请重新生成。";
   }
   return "暂时无法完成操作，请稍后重试。";
 }
@@ -153,7 +176,6 @@ function renderFamilySetup(bootstrapCredential) {
         ownerName: data.get("ownerName"),
         deviceName: data.get("deviceName")
       });
-      writeStoredAdminCredential(sessionStorage, result.adminCredential);
       let persistenceWarning = "";
       try {
         await createAdminApi({
@@ -431,8 +453,11 @@ async function openPairing(api, member) {
 }
 
 async function renderManagement(credential, persistenceWarning = "") {
-  const api = createAdminApi({ credential });
+  const api = credential?.cookieSession === true
+    ? createAdminApi({ cookieSession: true })
+    : createAdminApi({ credential });
   destroyAdminWorkspace();
+  destroySpeakerMonitor();
   activeManagementApi = api;
   const [context, memberResult] = await Promise.all([
     api.context(),
@@ -523,20 +548,58 @@ async function openPreviewCredential() {
   return api.openPreviewAccess();
 }
 
+function showProductionActivation(message = "请输入本机 operator 刚生成的一次性激活码。") {
+  showAdminState("recovery-required");
+  if (activationForm) activationForm.hidden = false;
+  if (activationFeedback) activationFeedback.textContent = message;
+  activationCodeInput?.focus();
+}
+
+activationForm?.addEventListener("submit", async event => {
+  event.preventDefault();
+  const submit = activationForm.querySelector("button[type=submit]");
+  if (submit) submit.disabled = true;
+  if (activationFeedback) activationFeedback.textContent = "正在激活管理员设备…";
+  try {
+    await createAdminApi({ cookieSession: true }).activate(activationCodeInput?.value ?? "");
+    if (activationCodeInput) activationCodeInput.value = "";
+    await renderManagement({ cookieSession: true });
+  } catch (error) {
+    if (activationFeedback) activationFeedback.textContent = errorText(error);
+    if (submit) submit.disabled = false;
+  }
+});
+
 async function start() {
   showAdminState("initializing");
+  clearLegacyStoredAdminCredential(window);
   const rawFragment = window.location.hash;
   const hasQuery = window.location.search !== "";
   if (rawFragment !== "" || hasQuery) {
     window.history.replaceState(null, "", ADMIN_CLEAN_PATH);
   }
 
-  let credential;
   try {
-    credential = rawFragment !== ""
-      ? captureAdminHandoff(rawFragment)
-      : readStoredAdminCredential(sessionStorage);
     if (hasQuery) throw new Error("ADMIN_QUERY_FORBIDDEN");
+
+    const webMode = await createAdminApi().adminWebMode();
+    if (webMode.mode === "production") {
+      if (rawFragment !== "") {
+        showProductionActivation();
+        return;
+      }
+      try {
+        await renderManagement({ cookieSession: true });
+        return;
+      } catch (error) {
+        showProductionActivation(errorText(error));
+        return;
+      }
+    }
+
+    const credential = rawFragment !== ""
+      ? captureAdminHandoff(rawFragment)
+      : undefined;
 
     const status = await createAdminApi({ credential }).onboardingStatus();
     if (!status.initialized) {
@@ -546,20 +609,17 @@ async function start() {
     }
     if (credential?.kind === "entry") {
       try {
-        writeStoredAdminCredential(sessionStorage, credential);
         await renderManagement(credential);
         return;
-      } catch {
-        clearStoredAdminCredential(sessionStorage);
-      }
+      } catch {}
     }
     credential = await openPreviewCredential();
-    writeStoredAdminCredential(sessionStorage, credential);
     await renderManagement(credential);
   } catch {
-    clearStoredAdminCredential(sessionStorage);
     showAdminState("recovery-required");
   }
 }
+
+window.addEventListener("pagehide", () => { destroyAdminWorkspace(); destroySpeakerMonitor(); });
 
 start();

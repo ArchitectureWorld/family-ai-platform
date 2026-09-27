@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   AgentManagementRepository,
+  isSystemAgentRef,
   type ConfiguredAgentRuntime
 } from "./agentManagement.js";
 import type { GatewayDatabase } from "./database.js";
@@ -14,10 +15,6 @@ const FAMILY_MANAGER_AGENT_REF = "agent:family-manager";
 const PERSONAL_ASSISTANT_AGENT_REF = "agent:personal-assistant";
 const DEVELOPMENT_PROVIDER_PROFILE_REF = "provider-profile:fake-local";
 const ENTRY_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
-const OWNER_ADMIN_AGENT_REFS = [
-  "agent:hermes-jarvis",
-  "agent:codex-cli"
-] as const;
 
 export interface EntryCredential {
   entryBindingRef: string;
@@ -222,14 +219,15 @@ export class FamilyDomainRepository {
          (family_ref, person_ref, family_role, status, joined_at, updated_at)
          VALUES(?, ?, 'owner', 'active', ?, ?)`
       ).run(familyRef, personRef, now, now);
-      const configuredAgentRefs = new Set(
-        this.agentManagement?.configuredRuntimes.map((runtime) => runtime.agentRef)
-      );
-      if (OWNER_ADMIN_AGENT_REFS.every((agentRef) => configuredAgentRefs.has(agentRef))) {
+      const configuredSystemAgentRefs =
+        this.agentManagement?.configuredRuntimes
+          .map((runtime) => runtime.agentRef)
+          .filter(isSystemAgentRef) ?? [];
+      if (configuredSystemAgentRefs.length > 0) {
         this.agentManagement!.repository.ensureOwnerAdminAssignments({
           familyRef,
           personRef,
-          agentRefs: OWNER_ADMIN_AGENT_REFS
+          agentRefs: configuredSystemAgentRefs
         });
       }
       this.db.prepare(
@@ -359,6 +357,9 @@ export class FamilyDomainRepository {
            WHERE eb.audience = 'personal'
              AND candidate.person_ref = p.person_ref
              AND candidate.status = 'active'
+             AND candidate.agent_ref NOT IN (
+               'agent:hermes-jarvis', 'agent:codex-cli'
+             )
            ORDER BY
              CASE
                WHEN candidate.status = 'active' AND candidate.is_default = 1 THEN 0
@@ -442,6 +443,9 @@ export class FamilyDomainRepository {
            FROM assistant_assignments candidate
            WHERE candidate.person_ref = p.person_ref
              AND candidate.status = 'active'
+             AND candidate.agent_ref NOT IN (
+               'agent:hermes-jarvis', 'agent:codex-cli'
+             )
            ORDER BY candidate.is_default DESC,
                     candidate.effective_from,
                     candidate.assignment_ref

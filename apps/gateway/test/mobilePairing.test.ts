@@ -75,7 +75,7 @@ describe("MobilePairingRepository", () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-mobile-pairing-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     familyRepository = new FamilyDomainRepository(db);
     onboarding = familyRepository.initializeFamily({
       familyName: "测试家庭",

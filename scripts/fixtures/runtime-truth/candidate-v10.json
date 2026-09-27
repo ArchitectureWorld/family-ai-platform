@@ -1,0 +1,45 @@
+{
+  "observedAt": "2026-08-27T00:00:00.000Z",
+  "listener": "127.0.0.1:43123",
+  "listenerState": "observed",
+  "owner": {
+    "kind": "docker-compose",
+    "project": "family-ai-candidate-fixture",
+    "service": "gateway",
+    "container": "family-ai-candidate-fixture-gateway-1"
+  },
+  "image": {
+    "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sourceCommit": "ebc2b2017036ddb04b0421d837e9c15eda94d963"
+  },
+  "runtime": {
+    "schemaVersion": 10,
+    "restartCount": 1,
+    "health": "healthy",
+    "createdAt": "2026-08-27T00:00:00.000Z",
+    "startedAt": "2026-08-27T00:01:00.000Z"
+  },
+  "attachments": {
+    "state": "present",
+    "permissions": "0700",
+    "fileCount": 4
+  },
+  "routes": {
+    "root": 200,
+    "member": 200,
+    "admin": 200,
+    "memberEntryContext": 200
+  },
+  "providers": ["fake", "hermes", "codex"],
+  "systemd": {
+    "system": "inactive",
+    "user": "inactive"
+  },
+  "capabilities": {
+    "memberWeb": true,
+    "adminWeb": true,
+    "attachments": true,
+    "hermesProvider": true,
+    "codexProvider": true
+  }
+}

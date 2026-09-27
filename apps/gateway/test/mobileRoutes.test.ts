@@ -63,6 +63,7 @@ describe("mobile pairing and device-authenticated routes", () => {
 
   async function openApp() {
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken: bootstrapToken,
       mode: "test"
@@ -340,7 +341,7 @@ describe("mobile pairing and device-authenticated routes", () => {
     expectMobileError(invalid, "ENTRY_SESSION_INVALID");
 
     await app.close();
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     db.prepare(
       "UPDATE entry_sessions SET expires_at = ? WHERE entry_session_ref = ?"
     ).run("2026-01-01T00:00:00.000Z", initialized.entries.personal.entrySessionRef);

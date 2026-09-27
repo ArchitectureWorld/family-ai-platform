@@ -1,0 +1,45 @@
+{
+  "observedAt": "2026-08-27T00:00:00.000Z",
+  "listener": "127.0.0.1:8790",
+  "listenerState": "observed",
+  "owner": {
+    "kind": "docker-compose",
+    "project": "family-ai-platform-foundation",
+    "service": "gateway",
+    "container": "family-ai-platform-foundation-gateway-1"
+  },
+  "image": {
+    "id": "sha256:00d6a37fd5ec8e35e85eeb0e70eb5d856647e1452afff01f9ba98b94d6ae7ce7",
+    "sourceCommit": "unknown"
+  },
+  "runtime": {
+    "schemaVersion": 3,
+    "restartCount": 0,
+    "health": "healthy",
+    "createdAt": "2026-07-22T00:00:00.000Z",
+    "startedAt": "2026-07-22T00:00:00.000Z"
+  },
+  "attachments": {
+    "state": "absent",
+    "permissions": "not-observed",
+    "fileCount": 0
+  },
+  "routes": {
+    "root": 200,
+    "member": 404,
+    "admin": 404,
+    "memberEntryContext": 404
+  },
+  "providers": ["fake"],
+  "systemd": {
+    "system": "inactive",
+    "user": "inactive"
+  },
+  "capabilities": {
+    "memberWeb": false,
+    "adminWeb": false,
+    "attachments": false,
+    "hermesProvider": false,
+    "codexProvider": false
+  }
+}

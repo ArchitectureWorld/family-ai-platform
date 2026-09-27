@@ -5,6 +5,7 @@ import {
   saveDraft as persistDraft,
   saveOutgoing
 } from "./cache.js";
+import { secureRandomUuid } from "./pairing.js";
 
 function threadSequence(value) {
   const sequence = Number(value?.threadSequence);
@@ -121,7 +122,7 @@ export function createThreadController(input) {
   const store = input.store;
   const isOnline = input.isOnline ?? (() => typeof navigator === "undefined" || navigator.onLine);
   const now = input.now ?? (() => new Date());
-  const uuid = input.uuid ?? (() => crypto.randomUUID());
+  const uuid = input.uuid ?? (() => secureRandomUuid());
 
   function selectedAgentRef() {
     const state = store.getState();

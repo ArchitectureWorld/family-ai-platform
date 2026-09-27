@@ -1,0 +1,288 @@
+import {
+  agentInvocationRequestV1Schema,
+  federationAgentListV1Schema,
+  federationInvocationPostResponseV1Schema,
+  federationInvocationStatusV1Schema,
+  federationServiceStatusV1Schema
+} from "@family-ai/contracts";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import {
+  EntrySessionAuthenticator,
+  type EntrySessionAuthentication
+} from "./entrySessionAuth.js";
+import { FederationService } from "./federationService.js";
+import { GatewayDomainError } from "./service.js";
+import { useFederationEntryCookies } from "./webEntryCookies.js";
+
+function rawHeaderValues(request: FastifyRequest, name: string): string[] {
+  const values: string[] = [];
+  const raw = request.raw.rawHeaders;
+  if (raw.length % 2 !== 0) return values;
+  for (let index = 0; index < raw.length; index += 2) {
+    if (raw[index]?.toLowerCase() === name) {
+      values.push(raw[index + 1] ?? "");
+    }
+  }
+  return values;
+}
+
+function strictBearerToken(request: FastifyRequest): string | null {
+  const values = rawHeaderValues(request, "authorization");
+  if (values.length !== 1) return null;
+  const authorization = values[0]!;
+  if (!authorization.startsWith("Bearer ")) return null;
+  const token = authorization.slice("Bearer ".length);
+  if (token.length < 16 || token.length > 4096) return null;
+  for (const character of token) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint < 0x21 || codePoint > 0x7e) return null;
+  }
+  return token;
+}
+
+function invalidProbeRequest(): never {
+  throw new GatewayDomainError(
+    "FEDERATION_REQUEST_INVALID",
+    400,
+    "validation",
+    false,
+    "联邦服务探测请求格式不正确。"
+  );
+}
+
+function assertStrictProbeRequest(request: FastifyRequest): void {
+  const raw = request.raw.rawHeaders;
+  for (let index = 0; index < raw.length; index += 2) {
+    const name = raw[index]?.toLowerCase() ?? "";
+    if (
+      name === "cookie"
+      || name === "content-length"
+      || name === "transfer-encoding"
+      || name.startsWith("x-entry-")
+      || name.startsWith("x-actor-")
+      || name.startsWith("x-device-")
+      || name.startsWith("x-family-ai-")
+    ) {
+      invalidProbeRequest();
+    }
+  }
+  if (request.body !== undefined) invalidProbeRequest();
+}
+
+function scopedRefHeader(
+  request: FastifyRequest,
+  name: string,
+  prefix: string
+): string {
+  const value = request.headers[name];
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value !== value.trim() ||
+    value.includes(",") ||
+    !new RegExp(`^${prefix}:[a-z0-9][a-z0-9._:-]{1,126}$`).test(value)
+  ) {
+    throw new GatewayDomainError(
+      "FEDERATION_REQUEST_INVALID",
+      400,
+      "validation",
+      false,
+      "Agent 请求格式不正确。"
+    );
+  }
+  return value;
+}
+
+function displayNameHeader(value: string): string {
+  const bytes = Buffer.from(value, "utf8");
+  const encoded = bytes.toString("base64url");
+  if (
+    bytes.length < 1 ||
+    bytes.length > 320 ||
+    bytes.toString("utf8") !== value ||
+    !/^[A-Za-z0-9_-]+$/.test(encoded) ||
+    Buffer.from(encoded, "base64url").toString("base64url") !== encoded
+  ) {
+    throw new GatewayDomainError(
+      "FEDERATION_IDENTITY_PROJECTION_INVALID",
+      500,
+      "internal",
+      false,
+      "Family 身份投影无效。"
+    );
+  }
+  return encoded;
+}
+
+function entryError(result: EntrySessionAuthentication): GatewayDomainError {
+  if (result.status === "expired") {
+    return new GatewayDomainError(
+      "ENTRY_SESSION_EXPIRED",
+      401,
+      "permission",
+      false,
+      "入口会话已经过期。"
+    );
+  }
+  if (result.status === "device_revoked") {
+    return new GatewayDomainError(
+      "DEVICE_REVOKED",
+      403,
+      "permission",
+      false,
+      "设备授权已经撤销。"
+    );
+  }
+  return new GatewayDomainError(
+    "ENTRY_SESSION_INVALID",
+    401,
+    "permission",
+    false,
+    "入口会话无效。"
+  );
+}
+
+export function registerFederationRoutes(
+  app: FastifyInstance,
+  input: {
+    service: FederationService;
+    entryAuthenticator: EntrySessionAuthenticator;
+  }
+): void {
+  const authenticateService = (request: FastifyRequest) => {
+    const token = strictBearerToken(request);
+    if (!token) {
+      throw new GatewayDomainError(
+        "FEDERATION_SERVICE_UNAUTHORIZED",
+        401,
+        "permission",
+        false,
+        "产品服务身份无效。"
+      );
+    }
+    return input.service.authenticateService(token);
+  };
+
+  const issueBrowserActor = (request: FastifyRequest) => {
+    const service = authenticateService(request);
+    const credentials = useFederationEntryCookies(request);
+    if (!credentials) throw entryError({ status: "invalid" });
+    const authentication = input.entryAuthenticator.authenticate(
+      credentials.entrySessionRef,
+      credentials.entryToken
+    );
+    if (authentication.status !== "authenticated") {
+      throw entryError(authentication);
+    }
+    return {
+      service,
+      actor: input.service.issueActorContext(
+        service,
+        credentials.entrySessionRef
+      )
+    };
+  };
+
+  app.get("/api/v1/federation/session", async (request, reply) => {
+    const { service, actor } = issueBrowserActor(request);
+    reply.headers({
+      "X-Family-AI-Context-Ref": actor.contextRef,
+      "X-Family-AI-Family-Ref": actor.familyRef,
+      "X-Family-AI-Person-Ref": actor.personRef,
+      "X-Family-AI-Device-Ref": actor.deviceRef,
+      "X-Family-AI-Person-Display-Name-B64": displayNameHeader(
+        actor.personDisplayName
+      ),
+      "X-Family-AI-Family-Display-Name-B64": displayNameHeader(
+        actor.familyDisplayName
+      ),
+      "X-Family-AI-Roles": actor.roles.join(","),
+      "X-Family-AI-Assignment-Version": String(actor.assignmentVersion),
+      "X-Family-AI-Context-Version": String(actor.contextVersion),
+      "X-Family-AI-Context-Expires-At": actor.expiresAt,
+      "X-Family-AI-Service-Ref": service.serviceRef
+    });
+    return reply.code(204).send();
+  });
+
+  app.get("/api/v1/federation/service", async (request, reply) => {
+    assertStrictProbeRequest(request);
+    const service = authenticateService(request);
+    reply.header("Cache-Control", "no-store");
+    return federationServiceStatusV1Schema.parse(
+      input.service.inspectService(service)
+    );
+  });
+
+  app.get("/api/v1/federation/agents", async (request) => {
+    const service = authenticateService(request);
+    const contextRef = scopedRefHeader(
+      request,
+      "x-family-ai-context-ref",
+      "actor-context"
+    );
+    return federationAgentListV1Schema.parse(
+      await input.service.listAgents(service, contextRef)
+    );
+  });
+
+  app.post("/api/v1/federation/invocations", async (request) => {
+    const service = authenticateService(request);
+    const parsed = agentInvocationRequestV1Schema.safeParse(request.body);
+    if (!parsed.success || parsed.data.product === "family") {
+      throw new GatewayDomainError(
+        "FEDERATION_REQUEST_INVALID",
+        400,
+        "validation",
+        false,
+        "Agent 请求格式不正确。"
+      );
+    }
+    const { externalSessionRef, ...requiredRequest } = parsed.data;
+    return federationInvocationPostResponseV1Schema.parse(
+      await input.service.invoke(
+        service,
+        externalSessionRef === undefined
+          ? requiredRequest
+          : { ...requiredRequest, externalSessionRef }
+      )
+    );
+  });
+
+  app.get<{ Params: { invocationRef: string } }>(
+    "/api/v1/federation/invocations/:invocationRef",
+    async (request) => {
+      const service = authenticateService(request);
+      const invocationRef = request.params.invocationRef;
+      if (!/^invocation:[a-z0-9][a-z0-9._:-]{1,126}$/.test(invocationRef)) {
+        throw new GatewayDomainError(
+          "FEDERATION_REQUEST_INVALID",
+          400,
+          "validation",
+          false,
+          "Agent 请求格式不正确。"
+        );
+      }
+      return federationInvocationStatusV1Schema.parse(
+        input.service.getInvocationStatus(service, {
+          invocationRef,
+          contextRef: scopedRefHeader(
+            request,
+            "x-family-ai-context-ref",
+            "actor-context"
+          ),
+          agentRef: scopedRefHeader(
+            request,
+            "x-family-ai-agent-ref",
+            "agent"
+          ),
+          localSessionRef: scopedRefHeader(
+            request,
+            "x-family-ai-local-session-ref",
+            "local-session"
+          )
+        })
+      );
+    }
+  );
+}

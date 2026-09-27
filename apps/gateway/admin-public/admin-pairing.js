@@ -1,5 +1,6 @@
 const PAIRING_REF = /^pairing:[a-z0-9][a-z0-9._:-]{1,126}$/u;
 const PAIRING_CODE = /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/u;
+const TAILSCALE_HOSTNAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.ts\.net$/u;
 
 function isPrivateIpv4(value) {
   const octets = value.split(".");
@@ -38,10 +39,13 @@ export function memberHandoffUrl(origin, pairing) {
   } catch {
     throw new Error("ADMIN_PAIRING_ORIGIN_INVALID");
   }
+  const trustedLanPreview = parsed.port === "9443" &&
+    isPrivateIpv4(parsed.hostname);
+  const trustedTailnetEntry = parsed.port === "8793" &&
+    TAILSCALE_HOSTNAME.test(parsed.hostname);
   if (
     parsed.protocol !== "https:" ||
-    parsed.port !== "9443" ||
-    !isPrivateIpv4(parsed.hostname) ||
+    (!trustedLanPreview && !trustedTailnetEntry) ||
     parsed.username !== "" ||
     parsed.password !== "" ||
     parsed.pathname !== "/" ||

@@ -42,8 +42,17 @@ function registerTextAsset(
   );
 }
 
-export function registerAdminWeb(app: FastifyInstance, mode: AdminWebMode): void {
-  if (mode !== "development") return;
+export function registerAdminWeb(
+  app: FastifyInstance,
+  mode: AdminWebMode,
+  enabled = mode === "development"
+): void {
+  if (!enabled || mode === "test") return;
+
+  app.get("/api/v1/admin/web-mode", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return { mode };
+  });
 
   app.get("/admin", async (_request, reply) => reply.redirect("/admin/"));
   registerTextAsset(app, "/admin/", "index.html", "text/html; charset=utf-8");
@@ -83,6 +92,7 @@ export function registerAdminWeb(app: FastifyInstance, mode: AdminWebMode): void
     "admin-agents.js",
     "text/javascript; charset=utf-8"
   );
+  registerTextAsset(app, "/admin/assets/admin-speakers.js", "admin-speakers.js", "text/javascript; charset=utf-8");
   registerTextAsset(
     app,
     "/admin/assets/admin-workspace.js",

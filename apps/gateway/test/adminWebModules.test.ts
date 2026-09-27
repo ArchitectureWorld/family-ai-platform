@@ -26,8 +26,8 @@ async function layoutModule() {
   return import(`${layoutModuleUrl}?test=${Date.now()}-${Math.random()}`);
 }
 
-function memoryStorage() {
-  const values = new Map<string, string>();
+function memoryStorage(initial: Record<string, string> = {}) {
+  const values = new Map<string, string>(Object.entries(initial));
   return {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => values.set(key, value),
@@ -71,21 +71,69 @@ describe("Admin Web entry boundary", () => {
     }
   });
 
-  it("stores only validated credentials and emits the formal authentication headers", async () => {
-    const {
-      adminHeaders,
-      readStoredAdminCredential,
-      writeStoredAdminCredential
-    } = await entryModule();
-    const storage = memoryStorage();
+  it("keeps current-page credentials usable without exposing storage read or write APIs", async () => {
+    const entry = await entryModule();
+    expect(entry).not.toHaveProperty("readStoredAdminCredential");
+    expect(entry).not.toHaveProperty("writeStoredAdminCredential");
+    const credential = entry.captureAdminHandoff(
+      `#entrySessionRef=entry-session%3Apreview-admin&token=${token}`
+    );
+
+    expect(entry.adminHeaders(credential)).toEqual({
+      Authorization: `Bearer ${token}`,
+      "X-Entry-Session-Ref": "entry-session:preview-admin"
+    });
+    expect(entry.adminHeaders({
+      kind: "bootstrap",
+      deviceRef: "device:test",
+      token
+    })).toEqual({
+      Authorization: `Bearer ${token}`,
+      "X-Device-Ref": "device:test"
+    });
+  });
+
+  it("clears only the exact legacy sessionStorage key without reading credential material", async () => {
+    const { clearLegacyStoredAdminCredential } = await entryModule();
+    const storage = memoryStorage({
+      "family-ai.admin.credential": `legacy-${token}`,
+      "family-ai.admin.unrelated": "preserve-me"
+    });
+    const getItem = vi.spyOn(storage, "getItem");
+    const setItem = vi.spyOn(storage, "setItem");
+
+    expect(clearLegacyStoredAdminCredential({ sessionStorage: storage })).toBe(true);
+    expect(storage.getItem("family-ai.admin.credential")).toBeNull();
+    expect(storage.getItem("family-ai.admin.unrelated")).toBe("preserve-me");
+    expect(getItem).toHaveBeenCalledTimes(2);
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when legacy storage cannot be accessed or cleared", async () => {
+    const { clearLegacyStoredAdminCredential } = await entryModule();
+    const leakingWindow = {
+      get sessionStorage(): never {
+        throw new Error(`storage-private-${token}`);
+      }
+    };
+    const leakingStorage = {
+      removeItem(): never {
+        throw new Error(`remove-private-${token}`);
+      }
+    };
+
+    expect(clearLegacyStoredAdminCredential(leakingWindow)).toBe(false);
+    expect(clearLegacyStoredAdminCredential({ sessionStorage: leakingStorage })).toBe(false);
+  });
+
+  it("emits the formal authentication headers for current-page bootstrap flow", async () => {
+    const { adminHeaders } = await entryModule();
     const credential = {
       kind: "entry",
       entrySessionRef: "entry-session:preview-admin",
       token
     };
 
-    writeStoredAdminCredential(storage, credential);
-    expect(readStoredAdminCredential(storage)).toEqual(credential);
     expect(adminHeaders(credential)).toEqual({
       Authorization: `Bearer ${token}`,
       "X-Entry-Session-Ref": "entry-session:preview-admin"
@@ -98,10 +146,6 @@ describe("Admin Web entry boundary", () => {
       Authorization: `Bearer ${token}`,
       "X-Device-Ref": "device:test"
     });
-
-    storage.setItem("family-ai.admin.credential", '{"kind":"entry","token":"bad"}');
-    expect(readStoredAdminCredential(storage)).toBeNull();
-    expect(storage.getItem("family-ai.admin.credential")).toBeNull();
   });
 });
 
@@ -135,6 +179,59 @@ describe("Admin Web responsive state", () => {
 });
 
 describe("Admin Web API client", () => {
+  it("normalizes only the exact approved Agent catalog and strips private fields", async () => {
+    const { createAdminApi } = await apiModule();
+    const approved = [
+      ["agent:hermes-jarvis", "Jarvis", "idle", "空闲"],
+      ["agent:hermes-zzh", "于途", "working", "工作中"],
+      ["agent:hermes-nsy", "乔晶晶", "problem", "有问题"]
+    ].map(([agentRef, displayName, status, statusLabel]) => ({
+      agentRef,
+      displayName,
+      status,
+      statusLabel,
+      activeTurnCount: 0,
+      lastCheckedAt: "2026-08-28T12:00:00.000Z",
+      publicProblem: status === "problem" ? "Agent 当前无法连接。" : null,
+      providerProfileRef: "provider-profile:private",
+      home: "/srv/private/runtime",
+      profile: "nsy",
+      serviceToken: "secret"
+    }));
+    const api = createAdminApi({
+      credential: { kind: "entry", entrySessionRef: "entry-session:preview-admin", token },
+      fetchImpl: async () => Response.json({ protocolVersion: 1, agents: approved })
+    });
+
+    expect(await api.agents()).toEqual({
+      protocolVersion: 1,
+      agents: [
+        { agentRef: "agent:hermes-jarvis", displayName: "Jarvis", system: true, runtime: "available", runtimeLabel: "可用" },
+        { agentRef: "agent:hermes-zzh", displayName: "于途", system: false, runtime: "available", runtimeLabel: "可用" },
+        { agentRef: "agent:hermes-nsy", displayName: "乔晶晶", system: false, runtime: "unavailable", runtimeLabel: "不可用" }
+      ]
+    });
+    expect(JSON.stringify(await api.agents())).not.toMatch(
+      /providerProfileRef|home|profile|serviceToken|private/u
+    );
+
+    for (const agents of [
+      approved.slice(0, 2),
+      [...approved, approved[2]],
+      approved.map((agent) => agent.agentRef === "agent:hermes-nsy" ? { ...agent, displayName: "新名字" } : agent),
+      [...approved, { ...approved[2], agentRef: "agent:unexpected" }]
+    ]) {
+      const driftedApi = createAdminApi({
+        credential: { kind: "entry", entrySessionRef: "entry-session:preview-admin", token },
+        fetchImpl: async () => Response.json({ protocolVersion: 1, agents })
+      });
+      await expect(driftedApi.agents()).rejects.toMatchObject({
+        code: "ADMIN_AGENTS_INVALID",
+        status: 502
+      });
+    }
+  });
+
   it("uses public status plus strict bootstrap and family-admin requests", async () => {
     const { createAdminApi, normalizeDisplayName, normalizeFamilyRole } = await apiModule();
     const requests: Array<{ url: string; init: RequestInit }> = [];
@@ -320,6 +417,44 @@ describe("Admin Web API client", () => {
       });
   });
 
+  it("supports cookie-backed production activation without serializing credentials", async () => {
+    const { createAdminApi } = await apiModule();
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      requests.push({ url: String(input), init });
+      return Response.json({ activated: true });
+    });
+    const api = createAdminApi({ fetchImpl, cookieSession: true });
+    await expect(api.activate("ABCDE-FGHJK")).resolves.toEqual({ activated: true });
+    expect(requests).toEqual([{
+      url: "/api/v1/admin/activate",
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Family-AI-Web-Request": "1"
+        },
+        body: JSON.stringify({ code: "ABCDE-FGHJK" })
+      }
+    }]);
+    expect(JSON.stringify(requests)).not.toContain(token);
+  });
+
+  it("validates the explicit Admin Web mode without using Preview access endpoints", async () => {
+    const { createAdminApi } = await apiModule();
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      requests.push({ url: String(input), init });
+      return Response.json({ mode: "production" });
+    });
+    const api = createAdminApi({ fetchImpl });
+    await expect(api.adminWebMode()).resolves.toEqual({ mode: "production" });
+    expect(requests).toEqual([{
+      url: "/api/v1/admin/web-mode",
+      init: { method: "GET" }
+    }]);
+  });
+
   it("creates and revokes pairing material only through the selected member", async () => {
     const { createAdminApi } = await apiModule();
     const requests: Array<{ url: string; init: RequestInit }> = [];
@@ -480,5 +615,33 @@ describe("Admin Web pairing presentation", () => {
     expect(svg).toContain("<svg");
     expect(svg).toContain("Family AI Member Web pairing");
     expect(svg).not.toContain("ABCD-EFGH");
+  });
+
+  it("builds a same-origin member handoff for the unified Tailscale entry", async () => {
+    const { memberHandoffUrl } = await pairingModule();
+    const pairing = {
+      pairingRef: "pairing:preview",
+      code: "ABCD-EFGH",
+      expiresAt: "2030-01-01T00:05:00.000Z"
+    };
+
+    expect(memberHandoffUrl(
+      "https://admin-yr.tailf7be7d.ts.net:8793",
+      pairing
+    )).toBe(
+      "https://admin-yr.tailf7be7d.ts.net:8793/member/#pairingRef=pairing%3Apreview&code=ABCD-EFGH"
+    );
+    expect(() => memberHandoffUrl(
+      "http://admin-yr.tailf7be7d.ts.net:8793",
+      pairing
+    )).toThrow("ADMIN_PAIRING_ORIGIN_INVALID");
+    expect(() => memberHandoffUrl(
+      "https://admin-yr.tailf7be7d.ts.net.evil.example:8793",
+      pairing
+    )).toThrow("ADMIN_PAIRING_ORIGIN_INVALID");
+    expect(() => memberHandoffUrl(
+      "https://admin-yr.tailf7be7d.ts.net:9443",
+      pairing
+    )).toThrow("ADMIN_PAIRING_ORIGIN_INVALID");
   });
 });

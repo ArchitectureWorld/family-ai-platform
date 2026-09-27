@@ -25,6 +25,16 @@ export interface ActiveAgentMount {
   providerProfileRef: string;
 }
 
+export const SYSTEM_AGENT_REFS = [
+  "agent:hermes-jarvis",
+  "agent:codex-cli"
+] as const;
+export type SystemAgentRef = (typeof SYSTEM_AGENT_REFS)[number];
+
+export function isSystemAgentRef(agentRef: string): agentRef is SystemAgentRef {
+  return (SYSTEM_AGENT_REFS as readonly string[]).includes(agentRef);
+}
+
 type MemberMounts = {
   personRef: string;
   defaultAgentRef: string | null;
@@ -101,6 +111,29 @@ export class AgentManagementRepository {
       }
 
       if (options.authoritative) {
+        this.db.prepare(
+          `UPDATE admin_agent_assignments
+           SET status = 'ended', effective_to = ?
+           WHERE status = 'active'
+             AND agent_ref NOT IN ('agent:hermes-jarvis', 'agent:codex-cli')`
+        ).run(now);
+        const systemMountPersons = this.db.prepare(
+          `SELECT DISTINCT person_ref FROM assistant_assignments
+           WHERE status = 'active'
+             AND agent_ref IN ('agent:hermes-jarvis', 'agent:codex-cli')
+           ORDER BY person_ref`
+        ).all() as Array<{ person_ref: string }>;
+        if (systemMountPersons.length > 0) {
+          this.db.prepare(
+            `UPDATE assistant_assignments
+             SET status = 'ended', effective_to = ?, is_default = 0
+             WHERE status = 'active'
+               AND agent_ref IN ('agent:hermes-jarvis', 'agent:codex-cli')`
+          ).run(now);
+          for (const row of systemMountPersons) {
+            this.advanceAssignmentVersion(row.person_ref);
+          }
+        }
         const configured = new Map(
           definitions.map(definition => [
             definition.agentRef,
@@ -243,6 +276,7 @@ export class AgentManagementRepository {
         AND rb.provider_profile_ref = aa.provider_profile_ref
         AND rb.status = ?
        WHERE aa.person_ref = ? AND aa.status = ?
+         AND aa.agent_ref NOT IN ('agent:hermes-jarvis', 'agent:codex-cli')
        ORDER BY aa.effective_from, aa.assignment_ref`
     ).all(active, personRef, active) as Array<Record<string, unknown>>;
     const mountedAgents = rows.map((row) => ({
@@ -262,6 +296,7 @@ export class AgentManagementRepository {
   }
 
   requireActiveMount(personRef: string, agentRef: string): ActiveAgentMount {
+    this.requirePersonalAgent(agentRef);
     const row = this.db.prepare(
       `SELECT aa.assignment_ref, aa.agent_ref, a.display_name, aa.provider_profile_ref
        FROM assistant_assignments aa
@@ -294,6 +329,7 @@ export class AgentManagementRepository {
     options: MemberAgentMutationOptions = {}
   ): MountedAgent {
     const mount = this.db.transaction(() => {
+      this.requirePersonalAgent(input.agentRef);
       this.requireMutationMember(input.familyRef, input.personRef, options);
       const runtime = this.runtimeForAgent(input.agentRef);
       const existing = this.db.prepare(
@@ -318,6 +354,7 @@ export class AgentManagementRepository {
         active,
         this.now().toISOString()
       );
+      this.advanceAssignmentVersion(input.personRef);
       return {
         assignmentRef,
         agentRef: input.agentRef,
@@ -335,6 +372,7 @@ export class AgentManagementRepository {
     options: MemberAgentMutationOptions = {}
   ): void {
     this.db.transaction(() => {
+      this.requirePersonalAgent(input.agentRef);
       this.requireMutationMember(input.familyRef, input.personRef, options);
       const runtime = this.runtimeForAgent(input.agentRef);
       this.requireActiveRuntimeMount(
@@ -354,6 +392,7 @@ export class AgentManagementRepository {
         runtime.providerProfileRef,
         active
       );
+      this.advanceAssignmentVersion(input.personRef);
     })();
   }
 
@@ -362,6 +401,7 @@ export class AgentManagementRepository {
     options: MemberAgentMutationOptions = {}
   ): void {
     this.db.transaction(() => {
+      if (input.agentRef !== null) this.requirePersonalAgent(input.agentRef);
       this.requireMutationMember(input.familyRef, input.personRef, options);
       if (input.agentRef !== null) {
         const runtime = this.runtimeForAgent(input.agentRef);
@@ -371,6 +411,11 @@ export class AgentManagementRepository {
           runtime.providerProfileRef
         );
       }
+      const current = this.db.prepare(
+        `SELECT agent_ref FROM assistant_assignments
+         WHERE person_ref = ? AND status = ? AND is_default = 1`
+      ).get(input.personRef, active) as { agent_ref: string } | undefined;
+      if ((current?.agent_ref ?? null) === input.agentRef) return;
       this.db.prepare(
         "UPDATE assistant_assignments SET is_default = 0 WHERE person_ref = ? AND status = ?"
       ).run(input.personRef, active);
@@ -380,13 +425,14 @@ export class AgentManagementRepository {
            WHERE person_ref = ? AND agent_ref = ? AND status = ?`
         ).run(input.personRef, input.agentRef, active);
       }
+      this.advanceAssignmentVersion(input.personRef);
     })();
   }
 
   ensureOwnerAdminAssignments(input: {
     familyRef: string;
     personRef: string;
-    agentRefs: readonly ["agent:hermes-jarvis", "agent:codex-cli"];
+    agentRefs: readonly SystemAgentRef[];
   }): void {
     this.db.transaction(() => {
       const owner = this.db.prepare(
@@ -403,6 +449,15 @@ export class AgentManagementRepository {
          VALUES(?, ?, ?, ?, ?, ?, ?, NULL)`
       );
       for (const agentRef of input.agentRefs) {
+        if (!isSystemAgentRef(agentRef)) {
+          throw new GatewayDomainError(
+            "ADMIN_AGENT_NOT_SYSTEM",
+            403,
+            "permission",
+            false,
+            "只有固定系统 Agent 可以进入家庭管理工作台。"
+          );
+        }
         const runtime = this.runtimeForAgent(agentRef);
         insert.run(
           `assignment:${randomUUID()}`,
@@ -427,12 +482,24 @@ export class AgentManagementRepository {
     if (!member) throw this.memberNotFound();
   }
 
+  private advanceAssignmentVersion(personRef: string): void {
+    this.db.prepare(
+      `INSERT INTO person_agent_assignment_versions(
+         person_ref, assignment_version, updated_at
+       )
+       VALUES(?, 1, ?)
+       ON CONFLICT(person_ref) DO UPDATE SET
+         assignment_version =
+           person_agent_assignment_versions.assignment_version + 1,
+         updated_at = excluded.updated_at`
+    ).run(personRef, this.now().toISOString());
+  }
+
   private requireConfigurableMember(familyRef: string, personRef: string): void {
     const member = this.db.prepare(
       `SELECT 1 FROM family_memberships fm
        JOIN persons p ON p.person_ref = fm.person_ref
        WHERE fm.family_ref = ? AND fm.person_ref = ?
-         AND fm.family_role <> 'owner'
          AND fm.status = ? AND p.status = ?`
     ).get(familyRef, personRef, active, active);
     if (!member) throw this.memberNotFound();
@@ -475,6 +542,18 @@ export class AgentManagementRepository {
        WHERE person_ref = ? AND agent_ref = ? AND provider_profile_ref = ? AND status = ?`
     ).get(personRef, agentRef, providerProfileRef, active);
     if (!mounted) throw this.agentNotMounted();
+  }
+
+  private requirePersonalAgent(agentRef: string): void {
+    if (isSystemAgentRef(agentRef)) {
+      throw new GatewayDomainError(
+        "SYSTEM_AGENT_PERSONAL_FORBIDDEN",
+        403,
+        "permission",
+        false,
+        "系统 Agent 只能在家庭管理工作台中使用。"
+      );
+    }
   }
 
   private mapMount(row: Record<string, unknown>): MountedAgent {

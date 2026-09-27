@@ -26,7 +26,7 @@ import { FamilyDomainRepository } from "../src/familyDomain.js";
 const initialNow = "2026-07-23T16:00:00.000Z";
 
 function createFoundation(databasePath: string, now: () => Date) {
-  const db = openGatewayDatabase(databasePath);
+  const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
   const familyRepository = new FamilyDomainRepository(db);
   const onboarding = familyRepository.initializeFamily({
     familyName: "测试家庭",

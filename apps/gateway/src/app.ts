@@ -1,3 +1,5 @@
+import { registerSpeakerMonitorRoutes } from "./speakerMonitorRoutes.js";
+import type { SpeakerMonitorConfig } from "./speakerMonitor.js";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -14,6 +16,7 @@ import {
 } from "@family-ai/contracts";
 import {
   AgentManagementRepository,
+  isSystemAgentRef,
   type ConfiguredAgentRuntime
 } from "./agentManagement.js";
 import {
@@ -33,11 +36,17 @@ import { ChatWorkMessageService } from "./chatWorkMessageService.js";
 import { ChatWorkProviderRepository } from "./chatWorkProvider.js";
 import { registerChatWorkRoutes } from "./chatWorkRoutes.js";
 import {
+  HttpCanvasWorkflowClient,
+  WorkExecutionLinkService,
+  type CanvasWorkflowClient
+} from "./workExecutionLinks.js";
+import {
   GatewayRepository,
   openGatewayDatabase,
   runDevelopmentBootstrap,
   type AuthenticatedDevice,
-  type DevelopmentBootstrapInput
+  type DevelopmentBootstrapInput,
+  type GatewayDatabaseOpenRequest
 } from "./database.js";
 import { DeviceSyncRepository } from "./deviceSync.js";
 import { registerDeviceSyncRoutes } from "./deviceSyncRoutes.js";
@@ -48,9 +57,13 @@ import {
   registerEventStreamRoutes
 } from "./eventStream.js";
 import { FamilyDomainRepository } from "./familyDomain.js";
+import { FederationRepository, type FederationServiceProduct } from "./federationRepository.js";
+import { FederationService } from "./federationService.js";
+import { registerFederationRoutes } from "./federationRoutes.js";
 import { registerFamilyRoutes } from "./familyRoutes.js";
 import { registerAgentRoutes, type AgentStatusLookup } from "./agentRoutes.js";
 import { registerAdminWeb } from "./adminWeb.js";
+import { registerAdminProductionActivation } from "./adminProductionActivation.js";
 import { registerAdminPreviewAccess } from "./adminPreviewAccess.js";
 import { registerAdminPreviewPersistence } from "./adminPreviewPersistence.js";
 import { registerMemberWeb } from "./memberWeb.js";
@@ -71,7 +84,9 @@ import {
 export type GatewayMode = "test" | "development" | "production";
 
 export interface BuildGatewayAppOptions {
+  speakerMonitor?: SpeakerMonitorConfig;
   databasePath: string;
+  databaseOpenRequest: GatewayDatabaseOpenRequest;
   attachmentRoot?: string;
   attachmentQuotaBytes?: number;
   deviceToken: string;
@@ -79,10 +94,22 @@ export interface BuildGatewayAppOptions {
   configuredAgentRuntimes?: readonly ConfiguredAgentRuntime[];
   providerAdapter?: ProviderAdapter;
   providerRouter?: ProviderAdapterResolver;
+  federationServices?: readonly {
+    serviceRef: string;
+    product: FederationServiceProduct;
+    token: string;
+  }[];
   authoritativeAgentRuntimeCatalog?: boolean;
   bootstrap?: Partial<Omit<DevelopmentBootstrapInput, "deviceToken">>;
   previewAdminEntryPath?: string;
   previewAdminOrigin?: string;
+  adminWebEnabled?: boolean;
+  productionAdminEntryPath?: string;
+  productionAdminActivationPath?: string;
+  adminWebOrigin?: string;
+  canvasBaseUrl?: string;
+  canvasAllowContainerService?: boolean;
+  canvasWorkflowClient?: CanvasWorkflowClient;
   now?: () => Date;
 }
 
@@ -238,11 +265,12 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   }
 
   const app = Fastify({ logger: false });
+  app.get("/favicon.ico", async (_request, reply) => reply.code(204).send());
   const attachmentStorage = new AttachmentStorage(
     options.attachmentRoot ??
       join(dirname(options.databasePath), "attachments")
   );
-  const db = openGatewayDatabase(options.databasePath);
+  const db = openGatewayDatabase(options.databasePath, options.databaseOpenRequest);
   const now = options.now ?? (() => new Date());
   const domainEventStore = new DomainEventStore(db, now);
   if (options.mode !== "production") {
@@ -260,13 +288,10 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
   agentManagementRepository.reconcileRuntimeCatalog(configuredAgentRuntimes, {
     authoritative: options.authoritativeAgentRuntimeCatalog ?? false
   });
-  const configuredAgentRefs = new Set(
-    configuredAgentRuntimes.map(runtime => runtime.agentRef)
-  );
-  if (
-    configuredAgentRefs.has("agent:hermes-jarvis") &&
-    configuredAgentRefs.has("agent:codex-cli")
-  ) {
+  const configuredSystemAgentRefs = configuredAgentRuntimes
+    .map((runtime) => runtime.agentRef)
+    .filter(isSystemAgentRef);
+  if (configuredSystemAgentRefs.length > 0) {
     const owners = db.prepare(
       `SELECT fm.family_ref, fm.person_ref
        FROM family_memberships fm
@@ -279,7 +304,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
       agentManagementRepository.ensureOwnerAdminAssignments({
         familyRef: owner.family_ref,
         personRef: owner.person_ref,
-        agentRefs: ["agent:hermes-jarvis", "agent:codex-cli"]
+        agentRefs: configuredSystemAgentRefs
       });
     }
   }
@@ -322,6 +347,21 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     now,
     agentManagementRepository
   );
+  const canvasWorkflowClient = options.canvasWorkflowClient ?? (
+    options.canvasBaseUrl
+      ? new HttpCanvasWorkflowClient(options.canvasBaseUrl, {
+        allowContainerService: options.canvasAllowContainerService === true
+      })
+      : undefined
+  );
+  const executionLinks = canvasWorkflowClient
+    ? new WorkExecutionLinkService(
+      chatWorkRepository,
+      attachmentRepository,
+      canvasWorkflowClient,
+      now
+    )
+    : undefined;
   const mobileDeviceSummaryRepository = new MobileDeviceSummaryRepository(db);
   const mobileRepository = new MobilePairingRepository(db, { now });
   const webEntryRepository = new WebEntryRepository(db, now);
@@ -329,6 +369,15 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     (options.mode === "production" ? null : new FakeProviderAdapter());
   const providerRouter = options.providerRouter ??
     ProviderAdapterRouter.single("provider-profile:fake-local", providerAdapter!);
+  const federationRepository = new FederationRepository(db, { now });
+  for (const service of options.federationServices ?? []) {
+    federationRepository.provisionService(service);
+  }
+  const federationService = new FederationService(
+    federationRepository,
+    providerRouter,
+    now
+  );
   const agentStatus: AgentStatusLookup = new AgentStatusService(
     db,
     providerRouter,
@@ -379,7 +428,20 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
 
   registerWebEntryCookieBridge(app);
   registerMemberWeb(app);
-  registerAdminWeb(app, options.mode);
+  registerAdminWeb(app, options.mode, options.adminWebEnabled ?? options.mode === "development");
+  registerAdminProductionActivation(app, {
+    mode: options.mode,
+    enabled: options.adminWebEnabled ?? options.mode === "development",
+    entryAuthenticator,
+    now,
+    ...(options.productionAdminEntryPath === undefined
+      ? {}
+      : {
+          adminEntryPath: options.productionAdminEntryPath,
+          activationPath: options.productionAdminActivationPath!,
+          adminWebOrigin: options.adminWebOrigin!
+        })
+  });
   registerFamilyRoutes(app, {
     familyRepository,
     gatewayRepository: repository,
@@ -392,6 +454,10 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     repository: agentManagementRepository,
     entryAuthenticator,
     agentStatus
+  });
+  registerFederationRoutes(app, {
+    service: federationService,
+    entryAuthenticator
   });
   registerAdminPreviewPersistence(app, {
     mode: options.mode,
@@ -434,8 +500,10 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     repository: chatWorkRepository,
     messageService: chatWorkMessageService,
     entryAuthenticator,
+    ...(executionLinks === undefined ? {} : { executionLinks }),
     now
   });
+  registerSpeakerMonitorRoutes(app, { entryAuthenticator, now, ...(options.speakerMonitor ? { config: options.speakerMonitor } : {}) });
   registerAdminWorkspaceRoutes(app, {
     workspace: adminWorkspaceRepository,
     repository: chatWorkRepository,

@@ -18,7 +18,7 @@ describe("Device Sync event schema foundation", () => {
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-device-sync-"));
     databasePath = join(directory, "gateway.sqlite");
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const family = new FamilyDomainRepository(db);
     const onboarding = family.initializeFamily({
       familyName: "测试家庭",
@@ -106,7 +106,7 @@ describe("Device Sync event schema foundation", () => {
     db.prepare("DELETE FROM domain_event_schema_migrations WHERE version = 2").run();
     db.close();
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     events = new DomainEventStore(
       db,
       () => new Date("2026-07-24T16:05:00.000Z")

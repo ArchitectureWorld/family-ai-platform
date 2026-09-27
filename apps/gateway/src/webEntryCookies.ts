@@ -25,6 +25,10 @@ export interface WebEntryCookieSecrets {
 
 const authenticationSources =
   new WeakMap<FastifyRequest, WebAuthenticationSource>();
+const federationEntryCredentials = new WeakMap<
+  FastifyRequest,
+  { entrySessionRef: string; entryToken: string }
+>();
 
 export function webAuthenticationSource(
   request: FastifyRequest
@@ -77,6 +81,16 @@ export function setWebEntryCookieHeaders(
       mode,
       { maxAge: 365 * 24 * 60 * 60 }
     ),
+    cookie(WEB_COOKIE_NAMES.entrySessionRef, secrets.entrySessionRef, mode),
+    cookie(WEB_COOKIE_NAMES.entryToken, secrets.entryToken, mode)
+  ];
+}
+
+export function setWebEntrySessionCookieHeaders(
+  secrets: Pick<WebEntryCookieSecrets, "entrySessionRef" | "entryToken">,
+  mode: WebCookieMode
+): string[] {
+  return [
     cookie(WEB_COOKIE_NAMES.entrySessionRef, secrets.entrySessionRef, mode),
     cookie(WEB_COOKIE_NAMES.entryToken, secrets.entryToken, mode)
   ];
@@ -152,6 +166,7 @@ function bridgePath(url: string): boolean {
     path.startsWith("/api/v1/work-conversations/") ||
     path.startsWith("/api/v1/threads/") ||
     path.startsWith("/api/v1/attachments/") ||
+    path.startsWith("/api/v1/admin/") ||
     path === "/api/v1/events/stream" ||
     path.startsWith("/api/v1/sync/");
 }
@@ -211,6 +226,22 @@ export function applyWebEntryCookieHeaders(request: FastifyRequest): boolean {
   request.headers.authorization = `Bearer ${entryToken}`;
   request.headers["x-entry-session-ref"] = entrySessionRef;
   return true;
+}
+
+export function useFederationEntryCookies(request: FastifyRequest): {
+  entrySessionRef: string;
+  entryToken: string;
+} | null {
+  const existing = federationEntryCredentials.get(request);
+  if (existing) return existing;
+  const cookies = parseCookieHeader(request.headers.cookie);
+  const entrySessionRef = cookies[WEB_COOKIE_NAMES.entrySessionRef];
+  const entryToken = cookies[WEB_COOKIE_NAMES.entryToken];
+  if (!entrySessionRef || !entryToken) return null;
+  const credentials = { entrySessionRef, entryToken };
+  federationEntryCredentials.set(request, credentials);
+  authenticationSources.set(request, "entry_cookie");
+  return credentials;
 }
 
 function readWebDeviceCookies(request: FastifyRequest): {

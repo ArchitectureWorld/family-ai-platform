@@ -49,6 +49,7 @@
           >
             系统工作台
           </button>
+          <button class="admin-page-button" data-admin-page="devices" type="button" aria-selected="false">设备管理</button>
         </nav>
         <div id="admin-members-page">
           <p class="eyebrow">家庭控制台</p>
@@ -56,6 +57,7 @@
           <div id="family-summary"></div>
           <div id="member-management-root"></div>
         </div>
+        <section id="admin-devices-page" aria-label="家庭音箱状态" hidden></section>
         <div id="admin-workspace-page" hidden>
           <section
             class="agent-monitor compact"
@@ -75,7 +77,23 @@
       <section class="state-card recovery" data-state="recovery-required" hidden>
         <p class="eyebrow">需要管理员入口</p>
         <h2>管理员入口暂时不可用</h2>
-        <p>请确认 Family AI 预览服务正在运行，然后刷新本页面。</p>
+        <p>请输入本机 operator 刚生成的一次性激活码。激活码五分钟内有效且只能使用一次。</p>
+        <form id="admin-activation-form" class="activation-form" hidden>
+          <label class="field">
+            <span>一次性激活码</span>
+            <input
+              id="admin-activation-code"
+              name="code"
+              autocomplete="one-time-code"
+              inputmode="text"
+              maxlength="11"
+              pattern="[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5}"
+              required
+            >
+          </label>
+          <button class="primary-button" type="submit">激活管理员设备</button>
+          <p class="form-message" id="admin-activation-feedback" role="status" aria-live="polite"></p>
+        </form>
       </section>
     </main>
     <script type="module" src="/admin/assets/admin.js"></script>

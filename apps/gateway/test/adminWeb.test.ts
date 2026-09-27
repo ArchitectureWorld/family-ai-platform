@@ -23,6 +23,7 @@ afterEach(() => {
 describe("development Admin Web product entry", () => {
   it("serves an explicit protected admin state machine without taking over the member root", async () => {
     const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: databasePathFor("development"),
       deviceToken: token,
       mode: "development"
@@ -51,9 +52,9 @@ describe("development Admin Web product entry", () => {
       expect(admin.body).toContain('data-state="management"');
       expect(admin.body).toContain('data-state="recovery-required"');
       expect(admin.body).toContain("管理员入口暂时不可用");
-      expect(admin.body).not.toContain('id="admin-activation-form"');
-      expect(admin.body).not.toContain('autocomplete="one-time-code"');
-      expect(admin.body).not.toContain("激活管理员设备");
+      expect(admin.body).toContain('id="admin-activation-form"');
+      expect(admin.body).toContain('autocomplete="one-time-code"');
+      expect(admin.body).toContain("激活管理员设备");
       expect(admin.body).not.toContain(token);
       expect(admin.body).toContain('data-admin-page="members"');
       expect(admin.body).toContain('data-admin-page="workspace"');
@@ -92,6 +93,7 @@ describe("development Admin Web product entry", () => {
   it("does not expose Admin Web routes outside development mode", async () => {
     for (const mode of ["test", "production"] as const) {
       const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
         databasePath: databasePathFor(mode),
         deviceToken: token,
         mode,
@@ -99,6 +101,7 @@ describe("development Admin Web product entry", () => {
       });
       try {
         for (const path of [
+          "/api/v1/admin/web-mode",
           "/admin",
           "/admin/",
           "/admin/assets/admin.css",
@@ -118,6 +121,30 @@ describe("development Admin Web product entry", () => {
       } finally {
         await app.close();
       }
+    }
+  });
+
+  it("serves Admin Web in production only when explicitly enabled", async () => {
+    const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
+      databasePath: databasePathFor("production-enabled"),
+      deviceToken: token,
+      mode: "production",
+      providerAdapter: new FakeProviderAdapter(),
+      adminWebEnabled: true
+    });
+    try {
+      const admin = await app.inject({ method: "GET", url: "/admin/" });
+      expect(admin.statusCode).toBe(200);
+      expect(admin.body).toContain("Family AI 家庭管理");
+      expect(admin.body).toContain('id="admin-activation-form"');
+      expect(admin.body).toContain("激活管理员设备");
+      const mode = await app.inject({ method: "GET", url: "/api/v1/admin/web-mode" });
+      expect(mode.statusCode).toBe(200);
+      expect(mode.json()).toEqual({ mode: "production" });
+      expect(admin.headers["cache-control"]).toBe("no-store");
+    } finally {
+      await app.close();
     }
   });
 });

@@ -101,6 +101,18 @@ Web Device + HttpOnly Personal Entry
 
 以下能力存在于当前 `main` 源码，并由自动化测试覆盖；不能据此推断正式 `8790` 已部署：
 
+- Family Work 可通过 ResourceRef/AssetRef 幂等创建、打开和撤销 Canvas Workflow 执行链接；实现边界见 [`docs/development/2026-08-27-family-work-canvas-links.md`](docs/development/2026-08-27-family-work-canvas-links.md)。
+
+正式 Runtime Truth 可重复生成：
+
+```bash
+bash scripts/report-current-runtime.sh > current-runtime.json
+jq empty current-runtime.json
+```
+
+当前四层矩阵与 2026-08-27 只读现场摘要见
+[`docs/development/2026-08-25-current-platform-truth.md`](docs/development/2026-08-25-current-platform-truth.md)。
+
 - Family、Person、Device、EntryBinding 和双 Entry Session；
 - Chat / Work Contracts v1；
 - Home Chat、DailyEpisode、WorkConversation 和 ThreadMessage 持久化；
@@ -123,6 +135,8 @@ Web Device + HttpOnly Personal Entry
 - 仅 development 模式开放的 Admin Web 家庭、成员与配对管理预览；
 - 同一局域网可访问的独立 HTTPS 体验入口（不改变 8790 正式服务）。
 
+2026-09-27 的现网基线归并补充了生产 Admin 激活入口与只读音箱设备监测；配置、权限和恢复边界见 [管理员音箱监测](docs/development/2026-09-27-speaker-monitoring.md)。下方按日期记录的旧运行矩阵不代表此次部署后的状态。
+
 发布基线 A1–A5 已合入；A6 只校正文档与现场事实。A5 已提供 retained runtime 的 sealed snapshot、无网络 migration-only candidate staging、原子目录交换与 previous restore 原语；它们不会自行发布或重启正式 `8790`。正式升级仍需后续 F1 的逐 Gate 审批编排，操作边界见 [`docs/operations/release-and-rollback.md`](docs/operations/release-and-rollback.md)。
 
 ### 事实矩阵（2026-08-16）
@@ -141,7 +155,7 @@ Web Device + HttpOnly Personal Entry
 | development LAN Preview | 是，非正式信任模型 | 是 | 当前监听 `8791/9080/9443`，本轮 HTTPS 旅程未复验 | 不适用；不属于正式 `8790` |
 | 正式 `8790` | 候选发布工具存在 | CI 六项检查通过 | 不等于正式发布 | 旧 Compose 容器、Schema V3、Fake-only；A2–A5 候选未部署 |
 
-正式容器当前为 `family-ai-platform-foundation-gateway-1`，image ID `sha256:00d6a37f…7ce7`，创建于 2026-07-22，loopback health 正常；system/user `family-ai-gateway.service` 均 inactive。完整现场证据见 [`docs/development/2026-08-16-current-platform-truth.md`](docs/development/2026-08-16-current-platform-truth.md)。
+正式容器当前为 `family-ai-platform-foundation-gateway-1`，image ID `sha256:00d6a37f…7ce7`，创建于 2026-07-22，loopback health 正常；system/user `family-ai-gateway.service` 均 inactive。最新可重复现场证据见 [`docs/development/2026-08-25-current-platform-truth.md`](docs/development/2026-08-25-current-platform-truth.md)。
 
 在后续安全与正式发布 Gate 完成前，不继续 Push Notification、iOS/HarmonyOS、语音或正式 Admin Web 等产品扩展。
 

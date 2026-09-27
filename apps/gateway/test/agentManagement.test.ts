@@ -1,8 +1,8 @@
+import { fork, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AgentManagementRepository,
@@ -10,6 +10,7 @@ import {
 } from "../src/agentManagement.js";
 import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
 import { FamilyDomainRepository } from "../src/familyDomain.js";
+import { DomainEventStore } from "../src/domainEvents.js";
 
 const configuredAgents: readonly ConfiguredAgentRuntime[] = [
   { agentRef: "agent:shared", displayName: "共享助理", providerProfileRef: "provider-profile:shared", providerKind: "fake" },
@@ -18,13 +19,13 @@ const configuredAgents: readonly ConfiguredAgentRuntime[] = [
 ];
 
 type MountWorkerMessage =
-  | { type: "ready" }
+  | { type: "ready"; pid: number }
   | { type: "mounting" }
   | { type: "result"; mount: ReturnType<AgentManagementRepository["mountMemberAgent"]> }
   | { type: "error"; code: string; message: string };
 
 function waitForWorkerMessage(
-  worker: Worker,
+  worker: ChildProcess,
   expectedType: MountWorkerMessage["type"]
 ): Promise<MountWorkerMessage> {
   return new Promise((resolve, reject) => {
@@ -53,7 +54,7 @@ function waitForWorkerMessage(
   });
 }
 
-function startWorkerMount(worker: Worker) {
+function startWorkerMount(worker: ChildProcess) {
   const mounting = waitForWorkerMessage(worker, "mounting");
   const result = new Promise<ReturnType<AgentManagementRepository["mountMemberAgent"]>>(
     (resolve, reject) => {
@@ -66,8 +67,16 @@ function startWorkerMount(worker: Worker) {
       worker.once("error", reject);
     }
   );
-  worker.postMessage({ type: "mount" });
+  worker.send({ type: "mount" });
   return { mounting, result };
+}
+
+async function stopWorker(worker: ChildProcess): Promise<void> {
+  if (worker.exitCode !== null || worker.signalCode !== null) return;
+  await new Promise<void>((resolve) => {
+    worker.once("exit", () => resolve());
+    worker.kill("SIGTERM");
+  });
 }
 
 describe("Agent management repository", () => {
@@ -82,12 +91,13 @@ describe("Agent management repository", () => {
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-agent-management-"));
     databasePath = join(directory, "gateway.sqlite");
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const family = new FamilyDomainRepository(db);
     const onboarding = family.initializeFamily({ familyName: "测试家庭", ownerName: "Alice", deviceName: "测试设备", deviceCredential: "agent-management-device-credential" });
     familyRef = onboarding.family.familyRef;
     alice = onboarding.owner.personRef;
     bob = family.createMember({ familyRef, displayName: "Bob", familyRole: "adult" }).personRef;
+    new DomainEventStore(db, () => new Date("2026-07-28T10:00:00.000Z"));
     repository = new AgentManagementRepository(db, () => new Date("2026-07-28T10:00:00.000Z"));
     repository.reconcileRuntimeCatalog(configuredAgents);
   });
@@ -179,17 +189,30 @@ describe("Agent management repository", () => {
       now: "2026-07-28T10:00:00.000Z"
     };
     const workers = [
-      new Worker(new URL("./fixtures/agentManagementMountWorker.mjs", import.meta.url), {
-        workerData: workerInput
+      fork(new URL("./fixtures/agentManagementMountWorker.mjs", import.meta.url), [], {
+        env: {
+          ...process.env,
+          AGENT_MANAGEMENT_MOUNT_INPUT: JSON.stringify(workerInput)
+        },
+        stdio: ["ignore", "ignore", "inherit", "ipc"]
       }),
-      new Worker(new URL("./fixtures/agentManagementMountWorker.mjs", import.meta.url), {
-        workerData: workerInput
+      fork(new URL("./fixtures/agentManagementMountWorker.mjs", import.meta.url), [], {
+        env: {
+          ...process.env,
+          AGENT_MANAGEMENT_MOUNT_INPUT: JSON.stringify(workerInput)
+        },
+        stdio: ["ignore", "ignore", "inherit", "ipc"]
       })
     ];
     let lockHeld = false;
 
     try {
-      await Promise.all(workers.map((worker) => waitForWorkerMessage(worker, "ready")));
+      const ready = await Promise.all(
+        workers.map((worker) => waitForWorkerMessage(worker, "ready"))
+      );
+      expect(new Set(ready.map((message) => (
+        message.type === "ready" ? message.pid : undefined
+      ))).size).toBe(2);
       db.exec("BEGIN IMMEDIATE");
       lockHeld = true;
 
@@ -203,7 +226,7 @@ describe("Agent management repository", () => {
       expect(second!.assignmentRef).toBe(first!.assignmentRef);
     } finally {
       if (lockHeld) db.exec("ROLLBACK");
-      await Promise.all(workers.map((worker) => worker.terminate()));
+      await Promise.all(workers.map(stopWorker));
     }
 
     expect(db.prepare(
@@ -221,12 +244,129 @@ describe("Agent management repository", () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM assistant_assignments WHERE person_ref = ? AND agent_ref = ? AND status = ?`).get(alice, "agent:shared", "ended")).toEqual({ count: 1 });
   });
 
+  it("advances the Person assignment version only for actual mount default and unmount changes", () => {
+    const version = () => (db.prepare(
+      `SELECT assignment_version
+       FROM person_agent_assignment_versions WHERE person_ref = ?`
+    ).get(bob) as { assignment_version: number } | undefined)?.assignment_version ?? 0;
+    const syncFacts = () => ({
+      sequence: db.prepare(
+        "SELECT last_sequence FROM person_event_sequences WHERE person_ref = ?"
+      ).get(bob) ?? null,
+      events: db.prepare(
+        "SELECT event_sequence FROM domain_events WHERE person_ref = ? ORDER BY event_sequence"
+      ).all(bob)
+    });
+
+    expect(version()).toBe(0);
+    const beforeSync = syncFacts();
+    repository.mountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    expect(version()).toBe(1);
+    repository.mountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    expect(version()).toBe(1);
+    repository.setDefaultAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    expect(version()).toBe(2);
+    repository.setDefaultAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    expect(version()).toBe(2);
+    repository.setDefaultAgent({ familyRef, personRef: bob, agentRef: null });
+    expect(version()).toBe(3);
+    repository.unmountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    expect(version()).toBe(4);
+    expect(syncFacts()).toEqual(beforeSync);
+  });
+
   it("creates missing owner Admin assignments without overwriting them", () => {
     repository.ensureOwnerAdminAssignments({ familyRef, personRef: alice, agentRefs: ["agent:hermes-jarvis", "agent:codex-cli"] });
     const first = db.prepare(`SELECT assignment_ref, agent_ref, provider_profile_ref, status FROM admin_agent_assignments WHERE family_ref = ? AND person_ref = ? ORDER BY agent_ref`).all(familyRef, alice);
     repository.ensureOwnerAdminAssignments({ familyRef, personRef: alice, agentRefs: ["agent:hermes-jarvis", "agent:codex-cli"] });
     expect(db.prepare(`SELECT assignment_ref, agent_ref, provider_profile_ref, status FROM admin_agent_assignments WHERE family_ref = ? AND person_ref = ? ORDER BY agent_ref`).all(familyRef, alice)).toEqual(first);
     expect(first).toHaveLength(2);
+  });
+
+  it("allows an active owner to receive a non-system personal Agent", () => {
+    const mounted = repository.mountMemberAgent(
+      { familyRef, personRef: alice, agentRef: "agent:shared" },
+      { configurableOnly: true }
+    );
+    expect(mounted.agentRef).toBe("agent:shared");
+    expect(repository.listConfigurableMemberMounts(familyRef, alice).mountedAgents)
+      .toContainEqual(expect.objectContaining({ agentRef: "agent:shared" }));
+  });
+
+  it("rejects every personal mutation for fixed system Agents without changing version", () => {
+    repository.mountMemberAgent({ familyRef, personRef: bob, agentRef: "agent:shared" });
+    const beforeVersion = db.prepare(
+      `SELECT assignment_version FROM person_agent_assignment_versions
+       WHERE person_ref = ?`
+    ).get(bob);
+    for (const agentRef of ["agent:hermes-jarvis", "agent:codex-cli"]) {
+      expect(() => repository.mountMemberAgent({ familyRef, personRef: bob, agentRef }))
+        .toThrow(expect.objectContaining({ code: "SYSTEM_AGENT_PERSONAL_FORBIDDEN" }));
+      expect(() => repository.unmountMemberAgent({ familyRef, personRef: bob, agentRef }))
+        .toThrow(expect.objectContaining({ code: "SYSTEM_AGENT_PERSONAL_FORBIDDEN" }));
+      expect(() => repository.setDefaultAgent({ familyRef, personRef: bob, agentRef }))
+        .toThrow(expect.objectContaining({ code: "SYSTEM_AGENT_PERSONAL_FORBIDDEN" }));
+    }
+    expect(db.prepare(
+      `SELECT assignment_version FROM person_agent_assignment_versions
+       WHERE person_ref = ?`
+    ).get(bob)).toEqual(beforeVersion);
+    expect(db.prepare(
+      `SELECT COUNT(*) AS count FROM assistant_assignments
+       WHERE person_ref = ? AND agent_ref IN ('agent:hermes-jarvis', 'agent:codex-cli')`
+    ).get(bob)).toEqual({ count: 0 });
+  });
+
+  it("cleans historical system personal mounts once and advances only affected Persons", () => {
+    const now = "2026-07-28T10:00:00.000Z";
+    db.prepare(
+      `INSERT INTO person_agent_assignment_versions(person_ref, assignment_version, updated_at)
+       VALUES(?, 7, ?), (?, 4, ?)`
+    ).run(alice, now, bob, now);
+    db.prepare(
+      `UPDATE assistant_assignments SET is_default = 0
+       WHERE person_ref = ? AND status = 'active'`
+    ).run(alice);
+    for (const [agentRef, profileRef, isDefault] of [
+      ["agent:hermes-jarvis", "provider-profile:hermes-jarvis", 1],
+      ["agent:codex-cli", "provider-profile:codex-cli", 0]
+    ] as const) {
+      db.prepare(
+        `INSERT INTO assistant_assignments(
+           assignment_ref, person_ref, agent_ref, provider_profile_ref,
+           status, effective_from, effective_to, is_default
+         ) VALUES(?, ?, ?, ?, 'active', ?, NULL, ?)`
+      ).run(`assignment:historical-${agentRef.split(":")[1]}`, alice, agentRef, profileRef, now, isDefault);
+    }
+
+    repository.reconcileRuntimeCatalog(configuredAgents, { authoritative: true });
+    repository.reconcileRuntimeCatalog(configuredAgents, { authoritative: true });
+
+    expect(db.prepare(
+      `SELECT agent_ref, status, is_default FROM assistant_assignments
+       WHERE person_ref = ? AND agent_ref IN ('agent:hermes-jarvis', 'agent:codex-cli')
+       ORDER BY agent_ref`
+    ).all(alice)).toEqual([
+      { agent_ref: "agent:codex-cli", status: "ended", is_default: 0 },
+      { agent_ref: "agent:hermes-jarvis", status: "ended", is_default: 0 }
+    ]);
+    expect(db.prepare(
+      `SELECT person_ref, assignment_version FROM person_agent_assignment_versions
+       WHERE person_ref IN (?, ?) ORDER BY person_ref`
+    ).all(alice, bob)).toEqual([
+      { person_ref: alice, assignment_version: 8 },
+      { person_ref: bob, assignment_version: 4 }
+    ].sort((left, right) => left.person_ref.localeCompare(right.person_ref)));
+    expect(repository.listMemberMounts(familyRef, alice).mountedAgents)
+      .not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ agentRef: "agent:hermes-jarvis" }),
+        expect.objectContaining({ agentRef: "agent:codex-cli" })
+      ]));
+    for (const agentRef of ["agent:hermes-jarvis", "agent:codex-cli"]) {
+      expect(() => repository.requireActiveMount(alice, agentRef)).toThrow(
+        expect.objectContaining({ code: "SYSTEM_AGENT_PERSONAL_FORBIDDEN" })
+      );
+    }
   });
 
   it("rejects a runtime remap without hiding an existing mount", () => {

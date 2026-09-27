@@ -70,6 +70,7 @@ describe("Chat Work SSE Person isolation", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-event-stream-isolation-"));
     databasePath = join(directory, "gateway.sqlite");
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -96,7 +97,7 @@ describe("Chat Work SSE Person isolation", () => {
     owner = body.entries.personal;
 
     await app.close();
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       const familyRepository = new FamilyDomainRepository(db);
       secondPersonRef = familyRepository.createMember({
@@ -143,6 +144,7 @@ describe("Chat Work SSE Person isolation", () => {
     }
 
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",

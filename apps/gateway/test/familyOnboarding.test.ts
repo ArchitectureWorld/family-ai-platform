@@ -26,6 +26,20 @@ const ownerAdminRuntimes: readonly ConfiguredAgentRuntime[] = [
     providerKind: "codex"
   }
 ];
+const personalRuntimes: readonly ConfiguredAgentRuntime[] = [
+  {
+    agentRef: "agent:hermes-zzh",
+    displayName: "于途",
+    providerProfileRef: "provider-profile:hermes-zzh",
+    providerKind: "hermes"
+  },
+  {
+    agentRef: "agent:hermes-nsy",
+    displayName: "乔晶晶",
+    providerProfileRef: "provider-profile:hermes-nsy",
+    providerKind: "hermes"
+  }
+];
 const bootstrapHeaders = {
   authorization: `Bearer ${deviceToken}`,
   "x-device-ref": "device:test"
@@ -73,6 +87,7 @@ describe("Family onboarding and dual-entry sessions", () => {
 
   async function openApp(configuredAgentRuntimes?: readonly ConfiguredAgentRuntime[]) {
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -214,18 +229,20 @@ describe("Family onboarding and dual-entry sessions", () => {
 
   it("keeps fresh real-mode onboarding free of visible Fake defaults and mounts", async () => {
     await app.close();
+    const realRuntimes = [...ownerAdminRuntimes, ...personalRuntimes];
     const router = new ProviderAdapterRouter(
-      ownerAdminRuntimes.map(runtime => [
+      realRuntimes.map(runtime => [
         runtime.providerProfileRef,
         new FakeProviderAdapter()
       ] as const)
     );
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
       providerRouter: router,
-      configuredAgentRuntimes: ownerAdminRuntimes,
+      configuredAgentRuntimes: realRuntimes,
       authoritativeAgentRuntimeCatalog: true
     });
     const result = await initialize();
@@ -272,7 +289,7 @@ describe("Family onboarding and dual-entry sessions", () => {
     });
     expect(configuredMember.statusCode).toBe(201);
     const configuredPersonRef = configuredMember.json().member.personRef as string;
-    for (const agentRef of ["agent:hermes-jarvis", "agent:codex-cli"]) {
+    for (const agentRef of ["agent:hermes-zzh", "agent:hermes-nsy"]) {
       const mounted = await app.inject({
         method: "POST",
         url: `/api/v1/admin/members/${configuredPersonRef}/agent-mounts`,
@@ -285,7 +302,7 @@ describe("Family onboarding and dual-entry sessions", () => {
       method: "PUT",
       url: `/api/v1/admin/members/${configuredPersonRef}/default-agent`,
       headers: entryHeaders(result.entries.admin),
-      payload: { agentRef: "agent:codex-cli" }
+      payload: { agentRef: "agent:hermes-zzh" }
     });
     expect(selectedDefault.statusCode).toBe(200);
     const projectedMembers = await app.inject({
@@ -298,8 +315,8 @@ describe("Family onboarding and dual-entry sessions", () => {
     expect(projectedMembers.json().members[0]).toMatchObject({
       personRef: configuredPersonRef,
       personalAssistant: {
-        agentRef: "agent:codex-cli",
-        providerProfileRef: "provider-profile:codex-cli"
+        agentRef: "agent:hermes-zzh",
+        providerProfileRef: "provider-profile:hermes-zzh"
       }
     });
 
@@ -322,7 +339,7 @@ describe("Family onboarding and dual-entry sessions", () => {
       defaultAgentRef: null
     });
 
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(db.prepare(
       `SELECT status FROM agent_runtime_bindings
        WHERE provider_profile_ref = 'provider-profile:fake-local'
@@ -338,7 +355,7 @@ describe("Family onboarding and dual-entry sessions", () => {
   it("creates one active default Personal assignment during onboarding", async () => {
     const result = await initialize();
     await app.close();
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       expect(db.prepare(
         `SELECT COUNT(*) AS count
@@ -366,7 +383,7 @@ describe("Family onboarding and dual-entry sessions", () => {
     const otherPersonRef = member.json().member.personRef as string;
 
     await app.close();
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     let otherThreadRef = "";
     try {
       expect(db.prepare(

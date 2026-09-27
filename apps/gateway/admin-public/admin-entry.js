@@ -95,22 +95,13 @@ export function adminHeaders(credential) {
   };
 }
 
-export function writeStoredAdminCredential(storage, credential) {
-  const validated = validateAdminCredential(credential);
-  storage.setItem(ADMIN_CREDENTIAL_STORAGE_KEY, JSON.stringify(validated));
-}
-
-export function readStoredAdminCredential(storage) {
-  const serialized = storage.getItem(ADMIN_CREDENTIAL_STORAGE_KEY);
-  if (serialized === null) return null;
+export function clearLegacyStoredAdminCredential(windowRef) {
   try {
-    return validateAdminCredential(JSON.parse(serialized));
-  } catch {
+    const storage = windowRef?.sessionStorage;
+    if (typeof storage?.removeItem !== "function") return false;
     storage.removeItem(ADMIN_CREDENTIAL_STORAGE_KEY);
-    return null;
+    return true;
+  } catch {
+    return false;
   }
-}
-
-export function clearStoredAdminCredential(storage) {
-  storage.removeItem(ADMIN_CREDENTIAL_STORAGE_KEY);
 }

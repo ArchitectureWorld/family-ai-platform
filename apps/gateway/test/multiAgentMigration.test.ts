@@ -8,10 +8,14 @@ import { openGatewayDatabase, type GatewayDatabase } from "../src/database.js";
 import { DomainEventStore } from "../src/domainEvents.js";
 
 const appliedAt = "2026-07-28T00:00:00.000Z";
-const openAtVersion = openGatewayDatabase as unknown as (
+const openAtVersion = (
   databasePath: string,
   options: { migrationLimit: number }
-) => GatewayDatabase;
+): GatewayDatabase => openGatewayDatabase(databasePath, {
+  intent: "test-create-or-existing",
+  simulate: "migrate-create-or-existing",
+  migrationLimit: options.migrationLimit as 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
+});
 
 type MigrationSnapshot = {
   messages: unknown[];
@@ -198,7 +202,7 @@ describe("Gateway V7 multi-Agent migration", () => {
     const databasePath = join(directory, "gateway.sqlite");
     const { family, snapshot } = createRealV6Database(databasePath);
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     new AgentManagementRepository(db, () => new Date(appliedAt))
       .reconcileRuntimeCatalog([{
         agentRef: "agent:personal-assistant",
@@ -235,7 +239,7 @@ describe("Gateway V7 multi-Agent migration", () => {
     };
     expect(db.pragma("foreign_key_check")).toEqual([]);
     db.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect({
       migration: db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get(),
       snapshot: snapshotMigrationState(db),
@@ -280,7 +284,7 @@ describe("Gateway V7 multi-Agent migration", () => {
     ).run(family.owner.personRef, appliedAt, family.owner.personRef);
     legacy.close();
 
-    expect(() => openGatewayDatabase(databasePath)).toThrow(/Cannot backfill Agent/);
+    expect(() => openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" })).toThrow(/Cannot backfill Agent/);
     const rolledBack = openAtVersion(databasePath, { migrationLimit: 6 });
     expect(rolledBack.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
       .toEqual({ version: 6 });

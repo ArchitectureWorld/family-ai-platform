@@ -21,7 +21,7 @@ describe("DeviceSyncRepository", () => {
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-device-sync-repository-"));
     databasePath = join(directory, "gateway.sqlite");
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const family = new FamilyDomainRepository(db);
     const onboarding = family.initializeFamily({
       familyName: "测试家庭",
@@ -165,7 +165,7 @@ describe("DeviceSyncRepository", () => {
     });
     db.close();
 
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     events = new DomainEventStore(db, () => new Date("2026-07-24T16:35:00.000Z"));
     sync = new DeviceSyncRepository(db, events, () => new Date("2026-07-24T16:35:00.000Z"));
     expect(sync.readCursor({

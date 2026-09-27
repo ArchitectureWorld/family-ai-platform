@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -9,6 +9,7 @@ import {
   type GatewayDatabase
 } from "../src/database.js";
 import { DomainEventStore } from "../src/domainEvents.js";
+import { FamilyDomainRepository } from "../src/familyDomain.js";
 
 const bootstrap = {
   memberRef: "member:test",
@@ -30,8 +31,23 @@ const migrationVersions = [
   { version: 6 },
   { version: 7 },
   { version: 8 },
-  { version: 9 }
+  { version: 9 },
+  { version: 10 },
+  { version: 11 },
+  { version: 12 },
+  { version: 13 },
+  { version: 14 },
+  { version: 15 }
 ];
+
+const openAtVersion = (
+  databasePath: string,
+  options: { migrationLimit: number }
+): GatewayDatabase => openGatewayDatabase(databasePath, {
+  intent: "test-create-or-existing",
+  simulate: "migrate-create-or-existing",
+  migrationLimit: options.migrationLimit as 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
+});
 
 const mobilePairingColumnNames = [
   "pairing_ref",
@@ -64,14 +80,14 @@ describe("gateway database", () => {
   it("applies numbered migrations once and starts the formal Family domain empty", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-db-"));
     const databasePath = join(directory, "gateway.sqlite");
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
     ).toEqual(migrationVersions);
     expect(db.prepare("SELECT COUNT(*) AS count FROM families").get()).toEqual({ count: 0 });
     expect(db.pragma("foreign_key_check")).toEqual([]);
     db.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
     ).toEqual(migrationVersions);
@@ -80,7 +96,7 @@ describe("gateway database", () => {
 
   it("creates the mobile pairing schema without weakening the V2 identity model", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-mobile-schema-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
 
     const pairingTable = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
@@ -112,7 +128,7 @@ describe("gateway database", () => {
 
   it("adds bounded Web Claim replay metadata", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-web-replay-schema-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const columns = db
       .prepare("PRAGMA table_info(mobile_pairing_codes)")
       .all()
@@ -240,8 +256,9 @@ describe("gateway database", () => {
          '2026-07-25T01:00:00.000Z', 'device:one', NULL);
     `);
     legacy.close();
+    chmodSync(databasePath, 0o600);
 
-    db = openGatewayDatabase(databasePath, { migrationLimit: 7 });
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing", migrationLimit: 7 });
     expect(
       db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()
     ).toEqual(migrationVersions.slice(0, 7));
@@ -306,18 +323,465 @@ describe("gateway database", () => {
         applied_at TEXT NOT NULL
       );
       INSERT INTO schema_migrations(version, applied_at)
-      VALUES(10, '2026-07-25T00:00:00.000Z');
+      VALUES(16, '2026-07-25T00:00:00.000Z');
     `);
     legacy.close();
+    chmodSync(databasePath, 0o600);
 
-    expect(() => openGatewayDatabase(databasePath)).toThrow(
-      "Unsupported Gateway schema version: 10"
+    expect(() => openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" })).toThrow(
+      "GATEWAY_DATABASE_SCHEMA_INVALID"
     );
   });
 
+  it("keeps federation authority tables limited to bounded metadata columns", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-schema-"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+
+    const expectedColumns = {
+      federation_services: [
+        "service_ref",
+        "product",
+        "token_hash",
+        "status",
+        "created_at",
+        "revoked_at"
+      ],
+      agent_discovery_observations: [
+        "agent_ref",
+        "kind",
+        "runtime",
+        "status",
+        "capabilities_json",
+        "observed_at"
+      ],
+      federation_actor_contexts: [
+        "context_ref",
+        "product",
+        "family_ref",
+        "person_ref",
+        "device_ref",
+        "entry_session_ref",
+        "person_display_name",
+        "family_display_name",
+        "assignment_version",
+        "context_version",
+        "expires_at",
+        "created_at",
+        "service_ref",
+        "roles_json"
+      ],
+      agent_invocation_audit: [
+        "invocation_ref",
+        "correlation_ref",
+        "product",
+        "person_ref",
+        "agent_ref",
+        "local_session_ref",
+        "request_sha256",
+        "service_ref",
+        "family_ref",
+        "actor_context_ref",
+        "requested_external_session_ref",
+        "timeout_ms",
+        "status",
+        "error_code",
+        "started_at",
+        "completed_at"
+      ]
+    } as const;
+
+    expect(db.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table'
+         AND name IN (
+           'federation_services',
+           'agent_discovery_observations',
+           'federation_actor_contexts',
+           'agent_invocation_audit'
+         )
+       ORDER BY name`
+    ).all()).toEqual([
+      { name: "agent_discovery_observations" },
+      { name: "agent_invocation_audit" },
+      { name: "federation_actor_contexts" },
+      { name: "federation_services" }
+    ]);
+    for (const [table, columns] of Object.entries(expectedColumns)) {
+      expect(db.prepare(`PRAGMA table_info(${table})`).all().map(
+        (column) => String((column as { name: unknown }).name)
+      )).toEqual(columns);
+    }
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("upgrades V10 to V11 once and reopens V11 idempotently", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-v10-upgrade-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 10 });
+    expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
+      .toEqual({ version: 10 });
+    db.close();
+
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version").all())
+      .toEqual(migrationVersions);
+    const first = db.prepare(
+      `SELECT name, sql FROM sqlite_master
+       WHERE type = 'table' AND name LIKE 'federation_%'
+       ORDER BY name`
+    ).all();
+    db.close();
+
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    expect(db.prepare(
+      `SELECT name, sql FROM sqlite_master
+       WHERE type = 'table' AND name LIKE 'federation_%'
+       ORDER BY name`
+    ).all()).toEqual(first);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 11").get())
+      .toEqual({ count: 1 });
+  });
+
+  it("adds only opaque durable external-session bindings in V12", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-session-schema-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 11 });
+    db.close();
+
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    expect(db.prepare("PRAGMA table_info(federation_session_bindings)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual([
+      "product",
+      "family_ref",
+      "person_ref",
+      "agent_ref",
+      "local_session_ref",
+      "external_session_ref",
+      "created_at",
+      "updated_at"
+    ]);
+    expect(db.prepare("PRAGMA table_info(person_agent_assignment_versions)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual([
+      "person_ref",
+      "assignment_version",
+      "updated_at"
+    ]);
+    expect(db.prepare("PRAGMA table_info(federation_session_invocation_claims)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual([
+      "product",
+      "family_ref",
+      "person_ref",
+      "agent_ref",
+      "local_session_ref",
+      "invocation_ref",
+      "service_ref",
+      "claimed_at",
+      "lease_expires_at"
+    ]);
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 12"
+    ).get()).toEqual({ count: 1 });
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("keeps Domain Event schema installation compatible from V11 through latest V15", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-domain-event-version-compat-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 11 });
+    expect(() => new DomainEventStore(db!)).not.toThrow();
+    db.close();
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    expect(() => new DomainEventStore(db!)).not.toThrow();
+  });
+
+  it("adds durable Family identity context snapshots in V13", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-identity-v13-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 12 });
+    const initialized = new FamilyDomainRepository(db).initializeFamily({
+      familyName: "V13 家庭",
+      ownerName: "V13 成员",
+      deviceName: "V13 设备",
+      deviceCredential: "v13-device-credential-with-enough-length"
+    });
+    db.close();
+
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    expect(db.prepare("PRAGMA table_info(person_federation_context_versions)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual(["person_ref", "context_version", "updated_at"]);
+    expect(db.prepare("PRAGMA table_info(federation_actor_contexts)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual([
+      "context_ref", "product", "family_ref", "person_ref", "device_ref",
+      "entry_session_ref", "person_display_name", "family_display_name",
+      "assignment_version", "context_version", "expires_at", "created_at",
+      "service_ref", "roles_json"
+    ]);
+    expect(db.prepare(
+      "SELECT context_version FROM person_federation_context_versions"
+    ).get()).toEqual({ context_version: 1 });
+    db.prepare(
+      "UPDATE persons SET display_name = 'V13 新成员名', updated_at = ? WHERE person_ref = ?"
+    ).run("2026-08-29T01:00:00.000Z", initialized.owner.personRef);
+    db.prepare(
+      `UPDATE family_memberships SET family_role = 'adult', updated_at = ?
+       WHERE family_ref = ? AND person_ref = ?`
+    ).run(
+      "2026-08-29T01:00:01.000Z",
+      initialized.family.familyRef,
+      initialized.owner.personRef
+    );
+    db.prepare(
+      "UPDATE families SET display_name = 'V13 新家庭名', updated_at = ? WHERE family_ref = ?"
+    ).run("2026-08-29T01:00:02.000Z", initialized.family.familyRef);
+    expect(db.prepare(
+      `SELECT context_version FROM person_federation_context_versions
+       WHERE person_ref = ?`
+    ).get(initialized.owner.personRef)).toEqual({ context_version: 4 });
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("upgrades V13 invocation audits to bounded legacy-compatible V14 scope", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-v14-upgrade-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 13 });
+    const onboarding = new FamilyDomainRepository(db).initializeFamily({
+      familyName: "V14 家庭",
+      ownerName: "V14 成员",
+      deviceName: "V14 设备",
+      deviceCredential: "v14-device-credential-with-enough-length"
+    });
+    db.prepare(
+      `INSERT INTO agent_invocation_audit(
+         invocation_ref, correlation_ref, product, person_ref, agent_ref,
+         local_session_ref, status, error_code, started_at, completed_at
+       ) VALUES(?, ?, 'canvas', ?, 'agent:hermes-jarvis', ?, 'failed', ?, ?, ?)`
+    ).run(
+      "invocation:v13-legacy",
+      "correlation:v13-legacy",
+      onboarding.owner.personRef,
+      "local-session:v13-legacy",
+      "AGENT_RUNTIME_UNAVAILABLE",
+      "2026-08-29T00:00:00.000Z",
+      "2026-08-29T00:00:01.000Z"
+    );
+    db.close();
+
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
+      .toEqual({ version: 15 });
+    expect(db.prepare(
+      `SELECT request_sha256, service_ref, family_ref, actor_context_ref,
+              requested_external_session_ref, timeout_ms
+       FROM agent_invocation_audit WHERE invocation_ref = ?`
+    ).get("invocation:v13-legacy")).toEqual({
+      request_sha256: null,
+      service_ref: null,
+      family_ref: null,
+      actor_context_ref: null,
+      requested_external_session_ref: null,
+      timeout_ms: null
+    });
+    expect(() => db!.prepare(
+      `INSERT INTO agent_invocation_audit(
+         invocation_ref, correlation_ref, product, person_ref, agent_ref,
+         local_session_ref, request_sha256, service_ref, family_ref,
+         actor_context_ref, timeout_ms, status, started_at
+       ) VALUES(?, ?, 'canvas', ?, 'agent:hermes-jarvis', ?, ?, NULL, ?, ?,
+                1000, 'accepted', ?)`
+    ).run(
+      "invocation:v14-partial",
+      "correlation:v14-partial",
+      onboarding.owner.personRef,
+      "local-session:v14-partial",
+      "a".repeat(64),
+      onboarding.family.familyRef,
+      "actor-context:v14-partial",
+      "2026-08-29T00:00:02.000Z"
+    )).toThrow(/CHECK constraint failed/);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+
+    db.close();
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 14"
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("upgrades V14 Actor contexts to the exact legacy-compatible V15 schema", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-v15-upgrade-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 14 });
+    const insert = db.prepare(
+      `INSERT INTO federation_actor_contexts(
+         context_ref, product, family_ref, person_ref, device_ref,
+         entry_session_ref, person_display_name, family_display_name,
+         assignment_version, context_version, expires_at, created_at
+       ) VALUES(?, 'canvas', 'family:v15', 'person:v15', 'device:v15',
+         'entry-session:v15', 'V15 成员', 'V15 家庭', 1, 1, ?, ?)`
+    );
+    insert.run(
+      "actor-context:v15-expired",
+      "2000-01-01T00:00:00.000Z",
+      "1999-01-01T00:00:00.000Z"
+    );
+    insert.run(
+      "actor-context:v15-live",
+      "2999-01-01T00:00:00.000Z",
+      "2026-08-30T00:00:00.000Z"
+    );
+    db.close();
+
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    expect(db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get())
+      .toEqual({ version: 15 });
+    expect(db.prepare("PRAGMA table_info(federation_actor_contexts)").all().map(
+      (column) => String((column as { name: unknown }).name)
+    )).toEqual([
+      "context_ref", "product", "family_ref", "person_ref", "device_ref",
+      "entry_session_ref", "person_display_name", "family_display_name",
+      "assignment_version", "context_version", "expires_at", "created_at",
+      "service_ref", "roles_json"
+    ]);
+    expect(db.prepare(
+      `SELECT context_ref, service_ref, roles_json
+       FROM federation_actor_contexts ORDER BY context_ref`
+    ).all()).toEqual([{
+      context_ref: "actor-context:v15-live",
+      service_ref: null,
+      roles_json: null
+    }]);
+    expect(db.prepare(
+      `SELECT type, name FROM sqlite_master
+       WHERE name IN (
+         'federation_actor_contexts_expiry_idx',
+         'federation_actor_contexts_reuse_idx',
+         'federation_actor_context_roles_insert',
+         'federation_actor_context_roles_update'
+       ) ORDER BY name`
+    ).all()).toEqual([
+      { type: "trigger", name: "federation_actor_context_roles_insert" },
+      { type: "trigger", name: "federation_actor_context_roles_update" },
+      { type: "index", name: "federation_actor_contexts_expiry_idx" },
+      { type: "index", name: "federation_actor_contexts_reuse_idx" }
+    ]);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+
+    db.close();
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 15"
+    ).get()).toEqual({ count: 1 });
+  });
+
+  it("enforces V15 service and canonical role constraints for every new shape", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-v15-constraints-"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    const minimumServiceRef = "service:aa";
+    const maximumServiceRef = `service:${"a".repeat(127)}`;
+    const invalidShortServiceRef = "service:a";
+    const invalidLongServiceRef = `service:${"a".repeat(128)}`;
+    const services = [
+      minimumServiceRef,
+      maximumServiceRef,
+      invalidShortServiceRef,
+      invalidLongServiceRef
+    ];
+    const insertService = db.prepare(
+      `INSERT INTO federation_services(
+         service_ref, product, token_hash, status, created_at, revoked_at
+       ) VALUES(?, 'canvas', ?, 'active', '2026-08-30T00:00:00.000Z', NULL)`
+    );
+    services.forEach((serviceRef, index) => {
+      insertService.run(serviceRef, `token-hash-v15-${index}`);
+    });
+    let nextContext = 1;
+    const insertContext = (
+      serviceRef: string | null,
+      rolesJson: string | null,
+    ) => db!.prepare(
+      `INSERT INTO federation_actor_contexts(
+         context_ref, product, family_ref, person_ref, device_ref,
+         entry_session_ref, person_display_name, family_display_name,
+         assignment_version, context_version, expires_at, created_at,
+         service_ref, roles_json
+       ) VALUES(?, 'canvas', 'family:v15', 'person:v15', 'device:v15',
+         'entry-session:v15', 'V15 成员', 'V15 家庭', 1, 1,
+         '2999-01-01T00:00:00.000Z', '2026-08-30T00:00:00.000Z', ?, ?)`
+    ).run(`actor-context:v15-${nextContext++}`, serviceRef, rolesJson);
+
+    insertContext(null, null);
+    for (const rolesJson of [
+      '["owner"]', '["owner","family_admin"]',
+      '["adult"]', '["adult","family_admin"]',
+      '["child"]', '["child","family_admin"]',
+      '["elder"]', '["elder","family_admin"]'
+    ]) {
+      insertContext(minimumServiceRef, rolesJson);
+    }
+    insertContext(maximumServiceRef, '["owner"]');
+
+    for (const [serviceRef, rolesJson] of [
+      [minimumServiceRef, null],
+      [null, '["owner"]'],
+      [invalidShortServiceRef, '["owner"]'],
+      [invalidLongServiceRef, '["owner"]'],
+      ['service:missing', '["owner"]'],
+      [minimumServiceRef, 'not-json'],
+      [minimumServiceRef, '{}'],
+      [minimumServiceRef, '["owner","owner"]'],
+      [minimumServiceRef, '["family_admin","owner"]'],
+      [minimumServiceRef, '["root"]']
+    ] as const) {
+      expect(() => insertContext(serviceRef, rolesJson)).toThrow();
+    }
+    const updateTarget = `actor-context:v15-${nextContext}`;
+    insertContext(minimumServiceRef, '["owner"]');
+    expect(() => db!.prepare(
+      "UPDATE federation_actor_contexts SET roles_json = ? WHERE context_ref = ?"
+    ).run('["owner","owner"]', updateTarget)).toThrow();
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("removes 100000 expired Actor contexts once during the V15 migration", () => {
+    directory = mkdtempSync(join(tmpdir(), "family-ai-federation-v15-history-"));
+    const databasePath = join(directory, "gateway.sqlite");
+    db = openAtVersion(databasePath, { migrationLimit: 14 });
+    const insert = db.prepare(
+      `INSERT INTO federation_actor_contexts(
+         context_ref, product, family_ref, person_ref, device_ref,
+         entry_session_ref, person_display_name, family_display_name,
+         assignment_version, context_version, expires_at, created_at
+       ) VALUES(?, 'canvas', 'family:history', 'person:history', 'device:history',
+         'entry-session:history', '历史成员', '历史家庭', 1, 1, ?,
+         '1999-01-01T00:00:00.000Z')`
+    );
+    db.transaction(() => {
+      for (let index = 0; index < 100_000; index += 1) {
+        insert.run(`actor-context:expired-${index}`, "2000-01-01T00:00:00.000Z");
+      }
+      insert.run("actor-context:future", "2999-01-01T00:00:00.000Z");
+    })();
+    db.close();
+
+    const started = Date.now();
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    expect(Date.now() - started).toBeLessThan(30_000);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM federation_actor_contexts").get())
+      .toEqual({ count: 1 });
+    expect(db.prepare(
+      "SELECT context_ref FROM federation_actor_contexts"
+    ).get()).toEqual({ context_ref: "actor-context:future" });
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+  }, 40_000);
+
   it("creates the formal Chat Work domain schema with thread-scoped uniqueness", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-chat-work-schema-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
 
     const tables = db
       .prepare(
@@ -371,7 +835,7 @@ describe("gateway database", () => {
 
   it("creates durable Thread Provider contexts and turns", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-provider-turn-schema-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
 
     const tables = db
       .prepare(
@@ -431,7 +895,7 @@ describe("gateway database", () => {
   it("installs the versioned Person event, Device Sync and transactional outbox subsystem", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-domain-event-schema-"));
     const databasePath = join(directory, "gateway.sqlite");
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     new DomainEventStore(db, () => new Date("2026-07-23T18:00:00.000Z"));
 
     expect(db.prepare(
@@ -516,7 +980,7 @@ describe("gateway database", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
 
     db.close();
-    db = openGatewayDatabase(databasePath);
+    db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     new DomainEventStore(db, () => new Date("2026-07-23T18:01:00.000Z"));
     expect(db.prepare(
       "SELECT version FROM domain_event_schema_migrations ORDER BY version"
@@ -525,7 +989,7 @@ describe("gateway database", () => {
 
   it("bootstraps missing development records without overwriting operational state", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-gateway-bootstrap-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     runDevelopmentBootstrap(db, bootstrap);
 
     const original = db

@@ -81,7 +81,7 @@ describe("AgentStatusService", () => {
   it("caches adapter health for at most five seconds", async () => {
     const directory = mkdtempSync(join(tmpdir(), "family-ai-agent-status-"));
     directories.push(directory);
-    const db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    const db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     db.prepare(
       `INSERT INTO provider_profiles
        (provider_profile_ref, provider_kind, display_name, created_at)
@@ -134,7 +134,7 @@ describe("AgentStatusService", () => {
   it("reports a configured Hermes catalog entry offline while private input is disabled", async () => {
     const directory = mkdtempSync(join(tmpdir(), "family-ai-hermes-status-"));
     directories.push(directory);
-    const db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    const db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const providerProfileRef = "provider-profile:hermes-jarvis";
     db.prepare(
       `INSERT INTO provider_profiles

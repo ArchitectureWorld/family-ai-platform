@@ -192,6 +192,7 @@ export class WebEntryRepository {
        JOIN assistant_assignments aa
          ON aa.person_ref = p.person_ref
         AND aa.status = 'active'
+        AND aa.agent_ref NOT IN ('agent:hermes-jarvis', 'agent:codex-cli')
        WHERE f.family_ref = ? AND f.status = 'active'`
     ).get(personRef, familyRef);
     if (!row) {
@@ -578,6 +579,7 @@ export class WebEntryRepository {
        JOIN assistant_assignments aa
          ON aa.person_ref = db.person_ref
         AND aa.status = 'active'
+        AND aa.agent_ref NOT IN ('agent:hermes-jarvis', 'agent:codex-cli')
        WHERE db.device_ref = ?
          AND db.owner_scope = 'person'
          AND db.status = 'active'`

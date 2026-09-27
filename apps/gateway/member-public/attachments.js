@@ -215,7 +215,6 @@ export function createAttachmentController(input) {
   const { api, cache, store } = input;
   const cryptoImpl = input.cryptoImpl ?? globalThis.crypto;
   const now = input.now ?? (() => new Date());
-  if (!cryptoImpl?.subtle) throw new Error("WEB_CRYPTO_UNAVAILABLE");
   const activeUploads = new Map();
 
   async function project(agentRef, threadRef) {
@@ -253,9 +252,16 @@ export function createAttachmentController(input) {
         const bytes = new Uint8Array(buffer);
         wholeHash.update(bytes);
         if (!received.has(chunkIndex)) {
-          const digest = hexDigest(
-            await cryptoImpl.subtle.digest("SHA-256", buffer)
-          );
+          let digest;
+          if (cryptoImpl?.subtle) {
+            digest = hexDigest(
+              await cryptoImpl.subtle.digest("SHA-256", buffer)
+            );
+          } else {
+            const chunkHash = new IncrementalSha256();
+            chunkHash.update(bytes);
+            digest = chunkHash.digestHex();
+          }
           await api.putAttachmentChunk(
             draft.attachmentRef,
             chunkIndex,

@@ -6,6 +6,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_MANIFEST="${1:-}"
 [[ "$IMAGE_MANIFEST" == /* && -f "$IMAGE_MANIFEST" ]] || { printf 'real image manifest must be an absolute file\n' >&2; exit 1; }
 IMAGE_ID="$(node -e 'const value=require(process.argv[1]); if(value.manifestKind!=="gateway-image-v1"||!/^sha256:[0-9a-f]{64}$/.test(value.imageId))process.exit(1); process.stdout.write(value.imageId)' "$IMAGE_MANIFEST")"
+IMAGE_MANIFEST_SHA="$(awk 'NR==1 {print $1}' "$IMAGE_MANIFEST.sha256")"
+[[ "$IMAGE_MANIFEST_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 1
 
 TEST_ROOT="$(mktemp -d)"
 PROJECT="a5fixture${RANDOM}${RANDOM}"
@@ -19,7 +21,11 @@ umask 077
 chmod 700 "$TEST_ROOT"
 mkdir -m 700 "$TEST_ROOT/runtime" "$TEST_ROOT/runtime/data" "$TEST_ROOT/runtime/data/attachments" "$TEST_ROOT/snapshot-output" "$TEST_ROOT/evidence"
 
-node "$ROOT_DIR/apps/gateway/dist/migrate.js" --database "$TEST_ROOT/runtime/data/gateway.sqlite" >/dev/null
+GATEWAY_DATABASE_PATH="$TEST_ROOT/runtime/data/gateway.sqlite" \
+  python3 "$ROOT_DIR/apps/gateway/runtime/gateway_lock_exec.py" \
+  --database-from-env GATEWAY_DATABASE_PATH -- \
+  node apps/gateway/dist/migrate.js \
+  --database "$TEST_ROOT/runtime/data/gateway.sqlite" >/dev/null
 chmod 600 "$TEST_ROOT/runtime/data/gateway.sqlite"
 printf 'fixture-attachment\n' > "$TEST_ROOT/runtime/data/attachments/example.txt"
 chmod 600 "$TEST_ROOT/runtime/data/attachments/example.txt"
@@ -48,7 +54,7 @@ node -e 'const fs=require("node:fs"); const [path,image,project,source]=process.
 docker create --name "$CONTAINER" \
   --label "com.docker.compose.project=$PROJECT" \
   --label 'com.docker.compose.service=gateway' \
-  "$IMAGE_ID" node -e 'setInterval(()=>{},1000)' >/dev/null
+  --entrypoint /bin/sh "$IMAGE_ID" -c 'trap "exit 0" TERM; while :; do sleep 60; done' >/dev/null
 docker start "$CONTAINER" >/dev/null
 docker stop -t 1 "$CONTAINER" >/dev/null
 
@@ -70,6 +76,15 @@ node "$ROOT_DIR/scripts/runtime-tool-manifest.mjs" create \
   --release-build-inputs "$ROOT_DIR/scripts/release-build-inputs.json" \
   --output "$TEST_ROOT/evidence/tools.json" > "$TEST_ROOT/tool-sha"
 TOOL_SHA="$(<"$TEST_ROOT/tool-sha")"
+node --input-type=module - "$IMAGE_MANIFEST" "$TEST_ROOT/evidence/tools.json" <<'NODE'
+import { readFileSync } from "node:fs";
+const image = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const tools = JSON.parse(readFileSync(process.argv[3], "utf8")).tools;
+if (image.protectedWalRecoveryV1 !== true) process.exit(1);
+for (const path of ["apps/gateway/src/databaseRecovery.ts", "apps/gateway/src/recoverGatewayDatabase.ts", "apps/gateway/runtime/rename_noreplace.py"]) {
+  if (!tools.some(row => row.path === path && /^[0-9a-f]{64}$/.test(row.sha256))) process.exit(1);
+}
+NODE
 
 node "$ROOT_DIR/scripts/runtime-backup-preflight.mjs" \
   --scope fixture-rehearsal --phase fixture-source-snapshot --release-id fixture-a5 \
@@ -93,11 +108,13 @@ bash "$ROOT_DIR/scripts/runtime-backup.sh" \
   --expected-backup-tool-manifest-sha256 "$TOOL_SHA" > "$TEST_ROOT/snapshot-path"
 SNAPSHOT="$(<"$TEST_ROOT/snapshot-path")"
 
-node -e 'const fs=require("node:fs"); const [path,image,receipt]=process.argv.slice(1); fs.writeFileSync(path, JSON.stringify({manifestKind:"gateway-migration-definition-v1",imageId:image,releaseCapabilityReceiptSha256:receipt,entrypoint:["node","apps/gateway/dist/migrate.js"],workerDisabled:true,networkMode:"none",runtimeMount:"/runtime",databasePath:"/runtime/data/gateway.sqlite",attachmentRoot:"/runtime/data/attachments"},null,2)+"\n",{mode:0o600,flag:"wx"});' \
+node -e 'const fs=require("node:fs"); const [path,image,receipt]=process.argv.slice(1); fs.writeFileSync(path, JSON.stringify({manifestKind:"gateway-migration-definition-v1",imageId:image,releaseCapabilityReceiptSha256:receipt,command:["node","apps/gateway/dist/migrate.js","--database","/runtime/data/gateway.sqlite"],workerDisabled:true,networkMode:"none",runtimeMount:"/runtime",databasePath:"/runtime/data/gateway.sqlite",attachmentRoot:"/runtime/data/attachments"},null,2)+"\n",{mode:0o600,flag:"wx"});' \
   "$TEST_ROOT/evidence/migration.json" "$IMAGE_ID" "$CAPABILITY_SHA"
 bash "$ROOT_DIR/scripts/runtime-candidate-stage.sh" \
   --release-id fixture-a5 --source-snapshot "$SNAPSHOT" \
-  --candidate-image-manifest "$IMAGE_MANIFEST" --capability-receipt "$TEST_ROOT/evidence/capability.json" \
+  --candidate-image-manifest "$IMAGE_MANIFEST" \
+  --expected-candidate-image-manifest-sha256 "$IMAGE_MANIFEST_SHA" \
+  --capability-receipt "$TEST_ROOT/evidence/capability.json" \
   --expected-capability-receipt-sha256 "$CAPABILITY_SHA" --candidate-definition "$TEST_ROOT/evidence/migration.json" \
   --target-parent "$TEST_ROOT" --output-name candidate-a5 --manifest "$TEST_ROOT/evidence/candidate.json" >/dev/null
 node "$ROOT_DIR/scripts/runtime-candidate-manifest.mjs" validate \
@@ -124,7 +141,7 @@ bash "$ROOT_DIR/scripts/runtime-restore.sh" \
   --receipt "$TEST_ROOT/evidence/restore.json" >/dev/null
 
 cmp "$TEST_ROOT/runtime/data/attachments/example.txt" "$TEST_ROOT/original-attachment"
-node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync(process.argv[1])); const c=JSON.parse(fs.readFileSync(process.argv[2])); const r=JSON.parse(fs.readFileSync(process.argv[3])); if(m.schemaVersion!==9||c.beforeSchema!==9||c.afterSchema!==9||r.manifestKind!=="runtime-restore-receipt-v1")process.exit(1)' \
+node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync(process.argv[1])); const c=JSON.parse(fs.readFileSync(process.argv[2])); const r=JSON.parse(fs.readFileSync(process.argv[3])); if(m.schemaVersion!==15||c.beforeSchema!==15||c.afterSchema!==15||r.manifestKind!=="runtime-restore-receipt-v1")process.exit(1)' \
   "$SNAPSHOT/manifest.json" "$TEST_ROOT/evidence/candidate.json" "$TEST_ROOT/evidence/restore.json"
 
 mkdir -m 700 "$TEST_ROOT/runtime-v3" "$TEST_ROOT/runtime-v3/data" "$TEST_ROOT/snapshot-v3-output"
@@ -179,4 +196,4 @@ bash "$ROOT_DIR/scripts/runtime-restore.sh" \
 node --input-type=module -e 'import Database from "better-sqlite3"; const db=new Database(process.argv[1],{readonly:true}); const version=db.prepare("SELECT MAX(version) version FROM schema_migrations").get().version; db.close(); if(version!==3)process.exit(1);' "$TEST_ROOT/runtime-v3/data/gateway.sqlite"
 [[ ! -e "$TEST_ROOT/runtime-v3/data/attachments" ]]
 
-printf 'runtime retained V3/V9 snapshot/candidate/restore fixtures: PASS\n'
+printf 'runtime retained V3/V10 snapshot/candidate/restore fixtures: PASS\n'

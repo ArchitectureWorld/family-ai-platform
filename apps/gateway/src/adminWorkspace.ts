@@ -39,6 +39,7 @@ export function requireAdminAgentAssignment(
       AND rb.provider_profile_ref = aaa.provider_profile_ref
       AND rb.status = 'active'
      WHERE aaa.family_ref = ? AND aaa.person_ref = ? AND aaa.agent_ref = ?
+       AND aaa.agent_ref IN ('agent:hermes-jarvis', 'agent:codex-cli')
        AND aaa.status = 'active'`
   ).get(input.familyRef, input.personRef, input.agentRef) as
     | Record<string, unknown>
@@ -67,6 +68,7 @@ export class AdminWorkspaceRepository {
         AND rb.provider_profile_ref = aaa.provider_profile_ref
         AND rb.status = 'active'
        WHERE aaa.family_ref = ? AND aaa.person_ref = ?
+         AND aaa.agent_ref IN ('agent:hermes-jarvis', 'agent:codex-cli')
          AND aaa.status = 'active'
        ORDER BY aaa.agent_ref`
     ).all(input.familyRef, input.personRef) as Array<Record<string, unknown>>;

@@ -21,13 +21,48 @@ done
 ARTIFACT_DIR="$(dirname "$MANIFEST")"
 [[ "$(basename "$MANIFEST")" == gateway-image-manifest.json ]] || fail IMAGE_MANIFEST_NAME_INVALID
 [[ "$(find "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" == \
-  "gateway-image-manifest.json gateway-image.tar gateway-image.tar.sha256 " ]] || fail ARTIFACT_FILE_SET_INVALID
+  "gateway-image-manifest.json gateway-image-manifest.json.sha256 gateway-image.tar gateway-image.tar.sha256 gateway-runtime-tools.json gateway-runtime-tools.json.sha256 " ]] || fail ARTIFACT_FILE_SET_INVALID
 
 command -v node >/dev/null 2>&1 || fail NODE_UNAVAILABLE
 command -v sha256sum >/dev/null 2>&1 || fail SHA256SUM_UNAVAILABLE
 
+VERIFY_ROOT="$(mktemp -d /tmp/family-ai-ci-verify.XXXXXXXX)"
+RUNTIME_ROOT=""
+PROJECT_NAME=""
+chmod 700 "$VERIFY_ROOT"
+cleanup() {
+  local status=$?
+  if [[ -n "$RUNTIME_ROOT" && -f "$RUNTIME_ROOT/run/compose.isolated.yaml" && -f "$RUNTIME_ROOT/config/compose.env" ]]; then
+    docker compose --project-name "$PROJECT_NAME" \
+      --env-file "$RUNTIME_ROOT/config/compose.env" \
+      --file "$RUNTIME_ROOT/run/compose.isolated.yaml" \
+      down --volumes --remove-orphans >/dev/null 2>&1 || true
+  fi
+  find "$VERIFY_ROOT" -depth -mindepth 1 -delete 2>/dev/null || true
+  rmdir "$VERIFY_ROOT" 2>/dev/null || true
+  if [[ -n "$RUNTIME_ROOT" ]]; then
+    find "$RUNTIME_ROOT" -depth -mindepth 1 -delete 2>/dev/null || true
+    rmdir "$RUNTIME_ROOT" 2>/dev/null || true
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+
+# Artifact transport does not preserve 0600 modes. Import the exact file set
+# into a private unit before validating it; never relax the sealed validators.
+mkdir -m 700 "$VERIFY_ROOT/image"
+for name in gateway-image.tar gateway-image.tar.sha256 gateway-image-manifest.json gateway-image-manifest.json.sha256 gateway-runtime-tools.json gateway-runtime-tools.json.sha256; do
+  [[ -f "$ARTIFACT_DIR/$name" && ! -L "$ARTIFACT_DIR/$name" ]] || fail ARTIFACT_FILE_INVALID
+  cp -- "$ARTIFACT_DIR/$name" "$VERIFY_ROOT/image/$name"
+  chmod 600 "$VERIFY_ROOT/image/$name"
+done
+ARTIFACT_DIR="$VERIFY_ROOT/image"
+MANIFEST="$ARTIFACT_DIR/gateway-image-manifest.json"
+
 cd "$ARTIFACT_DIR"
 sha256sum --check --status gateway-image.tar.sha256 || fail ARCHIVE_HASH_MISMATCH
+sha256sum --check --status gateway-image-manifest.json.sha256 || fail IMAGE_MANIFEST_HASH_MISMATCH
+sha256sum --check --status gateway-runtime-tools.json.sha256 || fail RUNTIME_TOOLS_HASH_MISMATCH
 cd "$ROOT_DIR"
 
 json_field() {
@@ -35,7 +70,7 @@ json_field() {
 import { readFileSync } from "node:fs";
 const [path, field] = process.argv.slice(2);
 const value = field.split(".").reduce((current, key) => current?.[key], JSON.parse(readFileSync(path, "utf8")));
-if (typeof value !== "string" && typeof value !== "number") process.exit(2);
+if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") process.exit(2);
 process.stdout.write(String(value));
 NODE
 }
@@ -48,32 +83,20 @@ CLIENT_VERSION="$(json_field "$MANIFEST" clientDatabaseVersion)"
 CAPABILITY_SHA="$(json_field "$MANIFEST" releaseCapabilityReceiptSha256)"
 RELEASE_INPUTS_SHA="$(json_field "$MANIFEST" releaseBuildInputsSha256)"
 BUILD_INPUT_TREE_HASH="$(json_field "$MANIFEST" buildInputTreeHash)"
+EXPECTED_LAUNCHER_SHA="$(json_field "$MANIFEST" runtimeContract.expected.launcherSha256)"
+EXPECTED_PYTHON_VERSION="$(json_field "$MANIFEST" runtimeContract.expected.pythonVersion)"
+RUNTIME_TOOL_SHA="$(json_field "$MANIFEST" runtimeToolManifestSha256)"
+[[ "$(json_field "$MANIFEST" protectedWalRecoveryV1)" == true ]] || fail WAL_RECOVERY_REQUIRED
+EXPECTED_RECOVERY_JSON="$(node -e 'const e=require(process.argv[1]).runtimeContract.expected;process.stdout.write(JSON.stringify({renameHelperSha256:e.renameHelperSha256,builtSha256:e.builtSha256}))' "$MANIFEST")"
 [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ && "$SOURCE_COMMIT" == "$(git rev-parse HEAD)" ]] || fail SOURCE_COMMIT_MISMATCH
 [[ "$IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ && "$ARCHIVE_SHA" =~ ^[0-9a-f]{64}$ ]] || fail IMAGE_ID_OR_ARCHIVE_HASH_INVALID
 [[ "$ARCHIVE_SHA" == "$(sha256sum "$ARTIFACT_DIR/gateway-image.tar" | awk '{print $1}')" ]] || fail MANIFEST_ARCHIVE_HASH_MISMATCH
 
-VERIFY_ROOT="$(mktemp -d /tmp/family-ai-ci-verify.XXXXXXXX)"
 RUNTIME_ROOT="$(mktemp -d /tmp/family-ai-ci-runtime.XXXXXXXX)"
-chmod 700 "$VERIFY_ROOT" "$RUNTIME_ROOT"
+chmod 700 "$RUNTIME_ROOT"
 PROJECT_NAME="faici${GITHUB_RUN_ID:-0}${GITHUB_RUN_ATTEMPT:-0}${RANDOM}"
 PROJECT_NAME="${PROJECT_NAME,,}"
 PROJECT_NAME="${PROJECT_NAME:0:40}"
-cleanup() {
-  local status=$?
-  if [[ -f "$RUNTIME_ROOT/run/compose.isolated.yaml" && -f "$RUNTIME_ROOT/config/compose.env" ]]; then
-    docker compose --project-name "$PROJECT_NAME" \
-      --env-file "$RUNTIME_ROOT/config/compose.env" \
-      --file "$RUNTIME_ROOT/run/compose.isolated.yaml" \
-      down --volumes --remove-orphans >/dev/null 2>&1 || true
-  fi
-  find "$VERIFY_ROOT" -depth -mindepth 1 -delete 2>/dev/null || true
-  rmdir "$VERIFY_ROOT" 2>/dev/null || true
-  find "$RUNTIME_ROOT" -depth -mindepth 1 -delete 2>/dev/null || true
-  rmdir "$RUNTIME_ROOT" 2>/dev/null || true
-  exit "$status"
-}
-trap cleanup EXIT
-
 node "$ROOT_DIR/scripts/gateway-schema-capabilities.mjs" validate \
   --schema-registry "$ROOT_DIR/scripts/gateway-schema-capabilities.json" \
   --release-capabilities "$ROOT_DIR/scripts/gateway-release-capabilities.json" \
@@ -82,6 +105,7 @@ node "$ROOT_DIR/scripts/gateway-schema-capabilities.mjs" validate \
   --output "$VERIFY_ROOT/capability.json" >/dev/null
 [[ "$(awk 'NR==1 {print $1}' "$VERIFY_ROOT/capability.json.sha256")" == "$CAPABILITY_SHA" ]] \
   || fail CAPABILITY_RECEIPT_MISMATCH
+[[ "$(json_field "$VERIFY_ROOT/capability.json" release.protectedWalRecoveryV1)" == true ]] || fail WAL_RECOVERY_CAPABILITY_INVALID
 node "$ROOT_DIR/scripts/release-build-inputs.mjs" validate \
   --repository "$ROOT_DIR" \
   --source-commit "$SOURCE_COMMIT" \
@@ -96,8 +120,28 @@ command -v docker >/dev/null 2>&1 || fail DOCKER_UNAVAILABLE
 docker load --input "$ARTIFACT_DIR/gateway-image.tar" >/dev/null
 [[ "$(docker image inspect --format '{{.Id}}' "$IMAGE_ID" 2>/dev/null || true)" == "$IMAGE_ID" ]] \
   || fail LOADED_IMAGE_ID_MISMATCH
+[[ "$RUNTIME_TOOL_SHA" == "$(sha256sum "$ARTIFACT_DIR/gateway-runtime-tools.json" | awk '{print $1}')" ]] \
+  || fail RUNTIME_TOOLS_MANIFEST_MISMATCH
+node "$ROOT_DIR/scripts/runtime-tool-manifest.mjs" verify --repository "$ROOT_DIR" \
+  --manifest "$ARTIFACT_DIR/gateway-runtime-tools.json" --expected-sha256 "$RUNTIME_TOOL_SHA" >/dev/null \
+  || fail RUNTIME_TOOL_SOURCE_DRIFT
+ACTUAL_RUNTIME_CONTRACT="$(node "$ROOT_DIR/scripts/gateway-image-runtime-contract.mjs" \
+  inspect --image-id "$IMAGE_ID" \
+  --expected-launcher-sha256 "$EXPECTED_LAUNCHER_SHA" \
+  --expected-python-version "$EXPECTED_PYTHON_VERSION" \
+  --expected-recovery-json "$EXPECTED_RECOVERY_JSON")" || fail IMAGE_RUNTIME_CONTRACT_INVALID
+if ! node --input-type=module - "$MANIFEST" "$ACTUAL_RUNTIME_CONTRACT" <<'NODE'
+import { readFileSync } from "node:fs";
+const [manifestPath, actualJson] = process.argv.slice(2);
+const expected = JSON.parse(readFileSync(manifestPath, "utf8")).runtimeContract;
+if (JSON.stringify(expected) !== JSON.stringify(JSON.parse(actualJson))) process.exit(1);
+NODE
+then
+  fail IMAGE_RUNTIME_CONTRACT_MISMATCH
+fi
 label() { docker image inspect --format "{{index .Config.Labels \"$1\"}}" "$IMAGE_ID"; }
 [[ "$(label org.opencontainers.image.revision)" == "$SOURCE_COMMIT" ]] || fail REVISION_LABEL_MISMATCH
+[[ "$(label org.architectureworld.family-ai.protected-wal-recovery-v1)" == true ]] || fail WAL_RECOVERY_LABEL_MISMATCH
 [[ "$(label org.architectureworld.family-ai.client-database-version)" == "$CLIENT_VERSION" ]] || fail CLIENT_LABEL_MISMATCH
 [[ "$(label org.architectureworld.family-ai.release-capability-receipt-sha256)" == "$CAPABILITY_SHA" ]] || fail CAPABILITY_LABEL_MISMATCH
 [[ "$(label org.architectureworld.family-ai.release-build-inputs-sha256)" == "$RELEASE_INPUTS_SHA" ]] || fail INPUT_LABEL_MISMATCH

@@ -8,8 +8,9 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run test --maxWorkers=1 --no-file-parallelism",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "start": "node dist/index.js",
-    "migrate": "node dist/migrate.js",
+    "start": "python3 runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node dist/index.js",
+    "migrate": "python3 runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node dist/migrate.js --database \"$GATEWAY_DATABASE_PATH\"",
+    "recover-database": "python3 runtime/gateway_lock_exec.py --database-from-env GATEWAY_DATABASE_PATH -- node dist/recoverGatewayDatabase.js",
     "dev": "tsx src/index.ts"
   },
   "dependencies": {

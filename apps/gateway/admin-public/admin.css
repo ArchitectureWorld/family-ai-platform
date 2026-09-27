@@ -90,11 +90,22 @@ h2 {
 }
 
 .form-grid,
-.member-form {
+.member-form,
+.activation-form {
   display: grid;
   gap: 18px;
   max-width: 620px;
   margin-top: 32px;
+}
+
+.activation-form {
+  max-width: 420px;
+}
+
+#admin-activation-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 .member-form {
@@ -457,6 +468,58 @@ button:disabled {
   letter-spacing: 0.04em;
 }
 
+.agent-card-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.agent-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #cddbd1;
+  border-radius: 14px;
+  background: #fff;
+  transition: border-color 200ms ease-out, background-color 200ms ease-out;
+}
+
+.agent-card-heading,
+.agent-card-allocation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-card-heading h5 {
+  margin: 0;
+  color: #17251d;
+  font-size: 1rem;
+}
+
+.agent-card-kind,
+.agent-card-state,
+.agent-card-allocation {
+  color: #52655a;
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+
+.agent-card-kind {
+  font-weight: 720;
+}
+
+.agent-card-state,
+.agent-card .agent-card-allocation {
+  margin: 8px 0 0;
+}
+
+.agent-runtime-unavailable {
+  border-color: #e2c4b9;
+  background: #fff8f5;
+}
+
 .agent-chip-list {
   display: flex;
   flex-wrap: wrap;
@@ -511,20 +574,17 @@ button:disabled {
 }
 
 .agent-remove-button {
-  position: absolute;
-  top: -7px;
-  right: -7px;
-  display: grid;
-  width: 24px;
-  height: 24px;
-  padding: 0;
+  display: inline-grid;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 14px;
   place-items: center;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  color: #fff;
-  background: #d84b42;
-  box-shadow: 0 2px 7px rgb(111 33 28 / 24%);
-  font: 700 17px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+  border: 1px solid #c98b82;
+  border-radius: 11px;
+  color: #87372f;
+  background: #fff;
+  font: inherit;
+  font-weight: 720;
   cursor: pointer;
 }
 
@@ -744,7 +804,7 @@ button:disabled {
 }
 
 .text-button {
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 8px;
   border: 0;
   color: #245c42;
@@ -752,6 +812,12 @@ button:disabled {
   font: inherit;
   font-weight: 740;
   cursor: pointer;
+}
+
+.secondary-button:focus-visible,
+.text-button:focus-visible {
+  outline: 3px solid rgb(52 125 87 / 24%);
+  outline-offset: 2px;
 }
 
 .pairing-actions .form-message {
@@ -793,6 +859,10 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .agent-card {
+    transition: none;
+  }
+
   .progress::after {
     animation: none;
   }
@@ -843,3 +913,18 @@ button:disabled {
     flex-direction: column;
   }
 }
+
+/* Read-only speaker status uses the existing Admin palette and textual states. */
+.speaker-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px; }
+.speaker-card { min-width: 0; padding: 24px; border: 1px solid #cbd7cd; border-radius: 18px; background: #fff; }
+.speaker-card h3 { margin: 0 0 8px; font-size: 1.25rem; }
+.speaker-meta { color: #4b6052; overflow-wrap: anywhere; font-size: 0.9rem; line-height: 1.5; }
+.speaker-source { font-weight: 600; line-height: 1.5; }
+.speaker-link { font-weight: 700; }
+.speaker-link-connected { color: #245c42; }
+.speaker-link-disconnected, .speaker-problem { color: #8c3b19; }
+.speaker-link-unknown { color: #4b6052; }
+.speaker-details { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 10px 12px; line-height: 1.5; }
+.speaker-details dt { color: #4b6052; }
+.speaker-details dd { margin: 0; overflow-wrap: anywhere; }
+.admin-page-navigation { flex-wrap: wrap; }

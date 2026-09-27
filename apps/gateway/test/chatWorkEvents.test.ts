@@ -22,7 +22,7 @@ describe("Chat Work durable events", () => {
 
   beforeEach(() => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-chat-work-events-"));
-    db = openGatewayDatabase(join(directory, "gateway.sqlite"));
+    db = openGatewayDatabase(join(directory, "gateway.sqlite"), { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const family = new FamilyDomainRepository(db);
     const onboarding = family.initializeFamily({
       familyName: "测试家庭",

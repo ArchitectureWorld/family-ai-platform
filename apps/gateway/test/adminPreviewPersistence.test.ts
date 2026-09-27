@@ -30,6 +30,7 @@ describe("development Admin Preview persistence", () => {
 
   async function initializedApp(adminEntryPath: string) {
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "development",
@@ -121,6 +122,7 @@ describe("development Admin Preview persistence", () => {
   it("does not expose the persistence route without explicit development configuration", async () => {
     directory = mkdtempSync(join(tmpdir(), "admin-preview-disabled-"));
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "test"

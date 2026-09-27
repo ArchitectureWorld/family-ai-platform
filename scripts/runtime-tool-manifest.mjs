@@ -25,12 +25,22 @@ const toolPaths = [
   "scripts/runtime-rollback-assets.mjs",
   "scripts/runtime-candidate-stage.sh",
   "scripts/runtime-candidate-manifest.mjs",
+  "scripts/gateway-image-runtime-contract.mjs",
   "scripts/runtime-exchange-preflight.mjs",
   "scripts/atomic-dir-exchange.c",
   "scripts/build-atomic-dir-exchange.sh",
   "scripts/runtime-restore.sh",
   "scripts/runtime-restore.mjs",
-  "apps/gateway/src/migrate.ts"
+  "apps/gateway/src/databaseLock.ts",
+  "apps/gateway/src/databaseRecovery.ts",
+  "apps/gateway/src/databaseRecoveryRuntime.ts",
+  "apps/gateway/src/databaseSecurity.ts",
+  "apps/gateway/src/recoverGatewayDatabase.ts",
+  "apps/gateway/runtime/rename_noreplace.py",
+  "apps/gateway/src/index.ts",
+  "apps/gateway/src/migrate.ts",
+  "apps/gateway/src/provisionFederationService.ts",
+  "apps/gateway/runtime/gateway_lock_exec.py"
 ];
 
 function git(repository, args) {
@@ -85,6 +95,7 @@ async function main() {
     const digest = verifySidecar(manifestPath, args["--expected-sha256"], "TOOL_MANIFEST");
     const manifest = readJson(manifestPath, "TOOL_MANIFEST");
     if (manifest.manifestKind !== "runtime-tool-manifest-v1" || manifest.formatVersion !== 1 || !Array.isArray(manifest.tools)) throw new Error("TOOL_MANIFEST_FORMAT_INVALID");
+    if (JSON.stringify(manifest.tools.map(row => row.path)) !== JSON.stringify(toolPaths)) throw new Error("TOOL_MANIFEST_INPUT_SET_INVALID");
     if (git(repository, ["rev-parse", "HEAD"]) !== manifest.sourceCommit) throw new Error("TOOL_SOURCE_HEAD_MISMATCH");
     for (const tool of manifest.tools) {
       const path = join(repository, tool.path);

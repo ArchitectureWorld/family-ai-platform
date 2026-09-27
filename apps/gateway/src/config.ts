@@ -1,3 +1,5 @@
+import { familyRefSchema } from "@family-ai/contracts";
+import type { SpeakerMonitorConfig } from "./speakerMonitor.js";
 import {
   accessSync,
   constants,
@@ -5,8 +7,9 @@ import {
   lstatSync,
   realpathSync
 } from "node:fs";
-import { parse, resolve, sep } from "node:path";
+import { isAbsolute, parse, resolve, sep } from "node:path";
 import {
+  BrokerProviderAdapter,
   CodexCliProviderAdapter,
   FakeProviderAdapter,
   HermesCliProviderAdapter,
@@ -36,8 +39,14 @@ export interface RealGatewayProviderRuntimeConfig {
   };
 }
 
+export interface BrokerGatewayProviderRuntimeConfig {
+  mode: "broker";
+  socketPath: string;
+}
+
 export type GatewayProviderRuntimeConfig =
   | FakeGatewayProviderRuntimeConfig
+  | BrokerGatewayProviderRuntimeConfig
   | RealGatewayProviderRuntimeConfig;
 
 export interface GatewayProviderRuntime {
@@ -47,6 +56,7 @@ export interface GatewayProviderRuntime {
 }
 
 export interface GatewayConfig {
+  speakerMonitor?: SpeakerMonitorConfig;
   host: string;
   port: number;
   databasePath: string;
@@ -57,6 +67,12 @@ export interface GatewayConfig {
   providerRuntime: GatewayProviderRuntimeConfig;
   previewAdminEntryPath?: string;
   previewAdminOrigin?: string;
+  adminWebEnabled: boolean;
+  productionAdminEntryPath?: string;
+  productionAdminActivationPath?: string;
+  adminWebOrigin?: string;
+  canvasBaseUrl?: string;
+  canvasAllowContainerService?: boolean;
 }
 
 function positiveInteger(raw: string | undefined, fallback: number, name: string): number {
@@ -65,6 +81,44 @@ function positiveInteger(raw: string | undefined, fallback: number, name: string
     throw new Error(`${name} must be a positive integer`);
   }
   return value;
+}
+
+function booleanFlag(raw: string | undefined, name: string): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "1") return true;
+  if (raw === "0") return false;
+  throw new Error(`${name} must be 0 or 1`);
+}
+
+function adminOrigin(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("GATEWAY_ADMIN_WEB_ORIGIN must be a valid HTTPS origin");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.hostname === "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error("GATEWAY_ADMIN_WEB_ORIGIN must be a valid HTTPS origin");
+  }
+  return url.origin;
+}
+
+function protectedPath(raw: string | undefined, name: string): string | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const path = resolve(raw);
+  if (path === parse(path).root || path.split(sep).includes(".git")) {
+    throw new Error(`${name} is unsafe`);
+  }
+  return path;
 }
 
 function attachmentDirectory(raw: string | undefined): string {
@@ -85,6 +139,29 @@ function attachmentDirectory(raw: string | undefined): string {
     return realpathSync(path);
   }
   return path;
+}
+
+function canvasBaseUrl(raw: string | undefined, containerized: boolean): string | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("FAMILY_AI_CANVAS_BASE_URL must be a valid URL");
+  }
+  const trustedHost = ["127.0.0.1", "localhost", "::1"].includes(url.hostname) ||
+    (containerized && url.hostname === "canvas");
+  if (
+    url.protocol !== "http:" ||
+    !trustedHost ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("FAMILY_AI_CANVAS_BASE_URL must be a trusted internal HTTP origin");
+  }
+  return url.origin;
 }
 
 function runtimeConfigurationError(): Error {
@@ -120,6 +197,23 @@ function existingDirectory(raw: string | undefined): string {
   }
 }
 
+function existingUnixSocket(raw: string | undefined): string {
+  if (!raw || !isAbsolute(raw) || resolve(raw) !== raw) {
+    throw runtimeConfigurationError();
+  }
+  try {
+    const information = lstatSync(raw);
+    if (!information.isSocket() || information.isSymbolicLink()) {
+      throw runtimeConfigurationError();
+    }
+    const real = realpathSync(raw);
+    if (real !== raw) throw runtimeConfigurationError();
+    return real;
+  } catch {
+    throw runtimeConfigurationError();
+  }
+}
+
 function profileNames(raw: string | undefined): readonly string[] {
   if (!raw) throw runtimeConfigurationError();
   const profiles = raw.split(",").map(value => value.trim().toLowerCase());
@@ -147,6 +241,17 @@ function hermesPrivateInputMode(
 function providerRuntimeConfig(env: NodeJS.ProcessEnv): GatewayProviderRuntimeConfig {
   const mode = env.FAMILY_AI_PROVIDER_MODE ?? "fake";
   if (mode === "fake") return { mode };
+  if (mode === "broker") {
+    const runtime: BrokerGatewayProviderRuntimeConfig = {
+      mode,
+      socketPath: existingUnixSocket(env.FAMILY_AI_AGENT_BROKER_SOCKET)
+    };
+    Object.defineProperty(runtime, "toJSON", {
+      value: () => ({ mode: "broker" }),
+      enumerable: false
+    });
+    return runtime;
+  }
   if (mode !== "real") throw runtimeConfigurationError();
   const runtime: RealGatewayProviderRuntimeConfig = {
     mode,
@@ -197,6 +302,43 @@ export function buildProviderRuntime(
       ),
       agents: [],
       authoritative: false
+    };
+  }
+
+  if (config.mode === "broker") {
+    const catalog = [
+      {
+        agentRef: "agent:hermes-jarvis",
+        providerProfileRef: "provider-profile:broker-jarvis",
+        providerKind: "hermes" as const,
+        displayName: "Jarvis"
+      },
+      {
+        agentRef: "agent:hermes-zzh",
+        providerProfileRef: "provider-profile:broker-zzh",
+        providerKind: "hermes" as const,
+        displayName: "于途"
+      },
+      {
+        agentRef: "agent:hermes-nsy",
+        providerProfileRef: "provider-profile:broker-nsy",
+        providerKind: "hermes" as const,
+        displayName: "乔晶晶"
+      }
+    ] satisfies readonly ConfiguredAgentRuntime[];
+    return {
+      router: new ProviderAdapterRouter(
+        catalog.map((agent) => [
+          agent.providerProfileRef,
+          new BrokerProviderAdapter({
+            socketPath: config.socketPath,
+            targetAgentRef: agent.agentRef,
+            providerProfileRef: agent.providerProfileRef
+          })
+        ] as const)
+      ),
+      agents: catalog,
+      authoritative: true
     };
   }
 
@@ -275,9 +417,9 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     throw new Error("GATEWAY_MODE must be test, development, or production");
   }
   const providerRuntime = providerRuntimeConfig(env);
-  if (mode === "production" && providerRuntime.mode !== "real") {
+  if (mode === "production" && providerRuntime.mode === "fake") {
     throw new Error(
-      "GATEWAY_MODE=production requires an explicit real Provider runtime"
+      "GATEWAY_MODE=production requires an explicit non-Fake Provider runtime"
     );
   }
 
@@ -296,6 +438,10 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
   }
 
   const attachmentRoot = attachmentDirectory(env.FAMILY_AI_ATTACHMENT_ROOT);
+  const configuredCanvasBaseUrl = canvasBaseUrl(
+    env.FAMILY_AI_CANVAS_BASE_URL,
+    containerized
+  );
   const attachmentQuotaBytes = positiveInteger(
     env.FAMILY_AI_ATTACHMENT_QUOTA_BYTES,
     21474836480,
@@ -319,7 +465,52 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     throw new Error("Admin Preview persistence is development-only");
   }
 
+  const adminWebFlag = booleanFlag(env.GATEWAY_ADMIN_WEB_ENABLED, "GATEWAY_ADMIN_WEB_ENABLED");
+  const adminWebEnabled = adminWebFlag ?? mode === "development";
+  const adminWebOrigin = adminOrigin(env.GATEWAY_ADMIN_WEB_ORIGIN);
+  const productionAdminEntryPath = protectedPath(
+    env.GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH,
+    "GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH"
+  );
+  const productionAdminActivationPath = protectedPath(
+    env.GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH,
+    "GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH"
+  );
+  if (mode === "production" && adminWebEnabled) {
+    if (
+      productionAdminEntryPath === undefined ||
+      productionAdminActivationPath === undefined ||
+      adminWebOrigin === undefined
+    ) {
+      throw new Error(
+        "Production Admin Web requires GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH, " +
+        "GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH, and GATEWAY_ADMIN_WEB_ORIGIN"
+      );
+    }
+  }
+  if (
+    (productionAdminEntryPath === undefined) !==
+    (productionAdminActivationPath === undefined)
+  ) {
+    throw new Error(
+      "Production Admin Web paths must be configured together"
+    );
+  }
+
+  const speakerFile = env.FAMILY_AI_SPEAKER_MONITOR_FILE;
+  const speakerFamily = env.FAMILY_AI_SPEAKER_MONITOR_FAMILY_REF;
+  let speakerMonitor: SpeakerMonitorConfig | undefined;
+  if (speakerFile !== undefined || speakerFamily !== undefined) {
+    if (!speakerFile || !isAbsolute(speakerFile) || resolve(speakerFile) !== speakerFile ||
+        speakerFile === parse(speakerFile).root || speakerFile.split(sep).includes(".git") ||
+        !familyRefSchema.safeParse(speakerFamily).success) {
+      throw new Error("Speaker monitor configuration is invalid");
+    }
+    speakerMonitor = { filePath: speakerFile, familyRef: speakerFamily! };
+  }
+
   const config = {
+    ...(speakerMonitor === undefined ? {} : { speakerMonitor }),
     host,
     port,
     databasePath: resolve(env.GATEWAY_DATABASE_PATH ?? ".runtime/data/gateway.sqlite"),
@@ -327,6 +518,20 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
     attachmentQuotaBytes,
     deviceToken,
     mode,
+    adminWebEnabled,
+    ...(productionAdminEntryPath === undefined
+      ? {}
+      : {
+          productionAdminEntryPath,
+          productionAdminActivationPath: productionAdminActivationPath!
+        }),
+    ...(adminWebOrigin === undefined ? {} : { adminWebOrigin }),
+    ...(configuredCanvasBaseUrl === undefined
+      ? {}
+      : {
+          canvasBaseUrl: configuredCanvasBaseUrl,
+          canvasAllowContainerService: containerized
+        }),
     ...(previewAdminEntryPath === undefined
       ? {}
       : {

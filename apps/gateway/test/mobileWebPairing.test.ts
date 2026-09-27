@@ -43,6 +43,7 @@ afterEach(() => {
 describe("mobile pairing and product Web boundaries", () => {
   it("reports claimed state and the active personal mobile-device count", async () => {
     const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: databasePath(),
       deviceToken: bootstrapToken,
       mode: "test"
@@ -139,6 +140,7 @@ describe("mobile pairing and product Web boundaries", () => {
 
   it("does not expose the historical acceptance-only browser assets", async () => {
     const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: databasePath(),
       deviceToken: bootstrapToken,
       mode: "development"

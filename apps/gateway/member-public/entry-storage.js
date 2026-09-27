@@ -1,3 +1,5 @@
+import { secureRandomUuid } from "./pairing.js";
+
 export const INSTALLATION_KEY = "family-ai-web-installation-id";
 const LOCK_PREFIX = "family-ai-member-entry-lock:";
 const IDENTITY_PREFIX = "family-ai-member-cache-identity:";
@@ -268,8 +270,12 @@ export function createEntryStorage({
   }
 
   function nextInstallationId(previousInstallationId = null) {
-    if (typeof cryptoImpl?.randomUUID !== "function") throw invalidRecord();
-    const value = cryptoImpl.randomUUID();
+    let value;
+    try {
+      value = secureRandomUuid(cryptoImpl);
+    } catch {
+      throw invalidRecord();
+    }
     if (
       !validUuid(value)
       || (

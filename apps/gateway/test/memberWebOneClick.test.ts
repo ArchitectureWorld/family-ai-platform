@@ -82,9 +82,12 @@ describe("one-click Member Web experience", () => {
   it("copies every static quality input into the Docker build stage", () => {
     const dockerfile = read("Dockerfile");
 
-    expect(dockerfile).toContain("COPY AGENTS.md ./");
+    expect(dockerfile).toContain("COPY --chown=node:node AGENTS.md ./");
     expect(dockerfile).toContain(
-      "COPY docs/development/2026-07-25-member-web-product-workbench.md docs/development/2026-07-25-member-web-product-workbench.md"
+      "COPY --chown=node:node docs/development/2026-07-25-member-web-product-workbench.md docs/development/2026-07-25-member-web-product-workbench.md"
+    );
+    expect(dockerfile).toContain(
+      "COPY --chown=node:node docs/development/2026-08-29-federation-service-bootstrap.md docs/development/2026-08-29-federation-service-bootstrap.md"
     );
   });
 

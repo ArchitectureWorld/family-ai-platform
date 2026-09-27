@@ -93,6 +93,7 @@ describe("Gateway Event Sync REST contract integration", () => {
   it("returns catch-up and ACK payloads accepted by the public contracts", async () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-sync-contracts-"));
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "test",

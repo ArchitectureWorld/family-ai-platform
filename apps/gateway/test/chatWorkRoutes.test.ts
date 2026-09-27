@@ -1,10 +1,11 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGatewayApp } from "../src/app.js";
 import { ChatWorkDomainRepository } from "../src/chatWorkDomain.js";
 import { openGatewayDatabase } from "../src/database.js";
+import type { CanvasWorkflowClient } from "../src/workExecutionLinks.js";
 
 const deviceToken = "chat-work-routes-bootstrap-device-token";
 const bootstrapHeaders = {
@@ -36,12 +37,35 @@ describe("Chat Work HTTP routes", () => {
   let personal: EntryCredential;
   let ownerPersonRef = "";
   let ownerDeviceRef = "";
+  const canvasWorkflowClient: CanvasWorkflowClient = {
+    createFamilyWorkflow: vi.fn(async () => ({
+      schemaVersion: "family-workflow-result/1.0" as const,
+      workflow: {
+        schemaVersion: "resource-ref/1.0" as const,
+        system: "super-canvas" as const,
+        kind: "workflow",
+        id: "workflow:http-route",
+        uri: "ai://super-canvas/workflow/workflow:http-route"
+      },
+      rootSession: {
+        schemaVersion: "resource-ref/1.0" as const,
+        system: "super-canvas" as const,
+        kind: "session",
+        id: "session:http-route",
+        uri: "ai://super-canvas/session/session:http-route"
+      },
+      deepLink: "http://127.0.0.1:3000/session-alpha/session:http-route"
+    })),
+    revokeFamilyWorkflow: vi.fn(async () => undefined)
+  };
 
   async function openApp() {
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
+      canvasWorkflowClient,
       now: () => currentNow
     });
   }
@@ -70,6 +94,7 @@ describe("Chat Work HTTP routes", () => {
   }
 
   beforeEach(async () => {
+    vi.mocked(canvasWorkflowClient.createFamilyWorkflow).mockClear();
     directory = mkdtempSync(join(tmpdir(), "family-ai-chat-work-routes-"));
     databasePath = join(directory, "gateway.sqlite");
     await openApp();
@@ -180,6 +205,73 @@ describe("Chat Work HTTP routes", () => {
     });
     expect(listed.statusCode).toBe(200);
     expect(listed.json().conversations).toEqual([created.json().conversation]);
+  });
+
+  it("creates, lists, and revokes a Canvas execution link from server-owned Work facts", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/work-conversations",
+      headers: entryHeaders(personal),
+      payload: {
+        protocolVersion: 1,
+        agentRef: personal.agentRef,
+        title: "跨仓执行链接",
+        goal: "在超级画板中继续"
+      }
+    });
+    const workRef = created.json().conversation.workConversationRef as string;
+
+    const linked = await app.inject({
+      method: "POST",
+      url: `/api/v1/work-conversations/${encodeURIComponent(workRef)}/execution-links`,
+      headers: entryHeaders(personal),
+      payload: {
+        protocolVersion: 1,
+        idempotencyKey: "http-work-canvas-link-1",
+        messageRefs: [],
+        attachmentRefs: []
+      }
+    });
+
+    expect(linked.statusCode, linked.body).toBe(201);
+    expect(linked.json()).toMatchObject({
+      protocolVersion: 1,
+      link: {
+        workConversationRef: workRef,
+        externalResource: { id: "workflow:http-route" },
+        status: "active"
+      }
+    });
+    expect(canvasWorkflowClient.createFamilyWorkflow).toHaveBeenCalledTimes(1);
+    const canvasRequest = vi.mocked(
+      canvasWorkflowClient.createFamilyWorkflow
+    ).mock.calls[0]?.[0];
+    expect(canvasRequest?.actor.principal.id).toBe(ownerPersonRef);
+    expect(canvasRequest?.work).toMatchObject({
+      sourceWork: { id: workRef },
+      title: "跨仓执行链接",
+      goal: "在超级画板中继续"
+    });
+
+    const listed = await app.inject({
+      method: "GET",
+      url: `/api/v1/work-conversations/${encodeURIComponent(workRef)}/execution-links`,
+      headers: entryHeaders(personal)
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().links).toHaveLength(1);
+
+    const linkRef = linked.json().link.linkRef as string;
+    const revoked = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/work-conversations/${encodeURIComponent(workRef)}/execution-links/${encodeURIComponent(linkRef)}`,
+      headers: entryHeaders(personal)
+    });
+    expect(revoked.statusCode).toBe(200);
+    expect(revoked.json().link).toMatchObject({
+      status: "revoked",
+      deepLink: null
+    });
   });
 
   it("persists Person and Assistant messages, replays retries and returns ascending pages", async () => {
@@ -346,7 +438,7 @@ describe("Chat Work HTTP routes", () => {
     const workConversationRef = conversion.json().conversation.workConversationRef as string;
     await app.close();
 
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     const repository = new ChatWorkDomainRepository(db, () => currentNow);
     repository.saveWorkProgressSnapshot({
       personRef: ownerPersonRef,

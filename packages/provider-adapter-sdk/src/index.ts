@@ -7,6 +7,7 @@ import {
 } from "@family-ai/contracts";
 
 export * from "./codexCliProvider.js";
+export * from "./brokerProvider.js";
 export * from "./hermesCliProvider.js";
 export * from "./processRunner.js";
 export * from "./providerPrompt.js";

@@ -1,17 +1,20 @@
-import { parentPort, workerData } from "node:worker_threads";
 import { tsImport } from "tsx/esm/api";
 const { AgentManagementRepository } = await tsImport("../../src/agentManagement.ts", import.meta.url);
 const { openGatewayDatabase } = await tsImport("../../src/database.ts", import.meta.url);
 
-const port = parentPort;
-if (!port) throw new Error("Agent mount worker requires a parent port");
+if (typeof process.send !== "function") {
+  throw new Error("Agent mount worker requires an IPC channel");
+}
 
-const input = workerData;
-const db = openGatewayDatabase(input.databasePath);
+const input = JSON.parse(process.env.AGENT_MANAGEMENT_MOUNT_INPUT ?? "null");
+const db = openGatewayDatabase(input.databasePath, {
+  intent: "test-create-or-existing",
+  simulate: "migrate-create-or-existing"
+});
 const repository = new AgentManagementRepository(db, () => new Date(input.now));
 
-port.postMessage({ type: "ready" });
-port.once("message", (message) => {
+process.send({ type: "ready", pid: process.pid });
+process.once("message", (message) => {
   if (
     typeof message !== "object" ||
     message === null ||
@@ -21,21 +24,22 @@ port.once("message", (message) => {
     throw new Error("Agent mount worker received an invalid command");
   }
 
-  port.postMessage({ type: "mounting" });
+  process.send({ type: "mounting" });
   try {
     const mount = repository.mountMemberAgent({
       familyRef: input.familyRef,
       personRef: input.personRef,
       agentRef: input.agentRef
     });
-    port.postMessage({ type: "result", mount });
+    process.send({ type: "result", mount });
   } catch (error) {
-    port.postMessage({
+    process.send({
       type: "error",
       code: error?.code ?? "UNKNOWN",
       message: error instanceof Error ? error.message : "unknown mount failure"
     });
   } finally {
     db.close();
+    process.disconnect();
   }
 });

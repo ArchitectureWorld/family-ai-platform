@@ -8,6 +8,7 @@ import {
   symlinkSync,
   writeFileSync
 } from "node:fs";
+import http, { type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,6 +22,7 @@ import { FamilyDomainRepository } from "../src/familyDomain.js";
 
 const token = "configuration-test-token-with-enough-length";
 const temporaryDirectories: string[] = [];
+const socketServers: Server[] = [];
 
 function runtimeFixture() {
   const root = mkdtempSync(join(tmpdir(), "family-ai-runtime-config-"));
@@ -76,7 +78,29 @@ function realEnvironment(fixture = runtimeFixture()): NodeJS.ProcessEnv {
   };
 }
 
-afterEach(() => {
+async function brokerEnvironment(): Promise<NodeJS.ProcessEnv> {
+  const root = mkdtempSync(join(tmpdir(), "family-ai-broker-config-"));
+  temporaryDirectories.push(root);
+  const socketPath = join(root, "agent-broker.sock");
+  const server = http.createServer();
+  socketServers.push(server);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => resolve());
+  });
+  return {
+    GATEWAY_DEVICE_TOKEN: token,
+    FAMILY_AI_PROVIDER_MODE: "broker",
+    FAMILY_AI_AGENT_BROKER_SOCKET: socketPath
+  };
+}
+
+afterEach(async () => {
+  await Promise.all(
+    socketServers.splice(0).map((server) =>
+      new Promise<void>((resolve) => server.close(() => resolve()))
+    )
+  );
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -123,6 +147,35 @@ describe("Gateway configuration", () => {
       GATEWAY_DEVICE_TOKEN: token,
       FAMILY_AI_ATTACHMENT_QUOTA_BYTES: "0"
     })).toThrow("positive integer");
+  });
+
+  it("allows only trusted internal Canvas origins", () => {
+    expect(loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      FAMILY_AI_CANVAS_BASE_URL: "http://127.0.0.1:3000"
+    })).toMatchObject({
+      canvasBaseUrl: "http://127.0.0.1:3000",
+      canvasAllowContainerService: false
+    });
+    expect(loadGatewayConfig({
+      GATEWAY_DEVICE_TOKEN: token,
+      GATEWAY_CONTAINERIZED: "true",
+      GATEWAY_HOST: "0.0.0.0",
+      FAMILY_AI_CANVAS_BASE_URL: "http://canvas:3000"
+    })).toMatchObject({
+      canvasBaseUrl: "http://canvas:3000",
+      canvasAllowContainerService: true
+    });
+    for (const value of [
+      "https://127.0.0.1:3000",
+      "http://example.com:3000",
+      "http://user:password@127.0.0.1:3000"
+    ]) {
+      expect(() => loadGatewayConfig({
+        GATEWAY_DEVICE_TOKEN: token,
+        FAMILY_AI_CANVAS_BASE_URL: value
+      })).toThrow("FAMILY_AI_CANVAS_BASE_URL");
+    }
   });
 
   it("rejects non-loopback binding outside the approved container profile", () => {
@@ -190,7 +243,7 @@ describe("Gateway configuration", () => {
         GATEWAY_HOST: "127.0.0.1",
         GATEWAY_DEVICE_TOKEN: token
       })
-    ).toThrow("real Provider runtime");
+    ).toThrow("non-Fake Provider runtime");
     expect(loadGatewayConfig({
       ...realEnvironment(),
       GATEWAY_MODE: "production"
@@ -198,6 +251,125 @@ describe("Gateway configuration", () => {
       mode: "production",
       providerRuntime: { mode: "real" }
     });
+  });
+
+  it("requires an explicit protected production Admin Web configuration", () => {
+    const root = mkdtempSync(join(tmpdir(), "family-ai-production-admin-config-"));
+    temporaryDirectories.push(root);
+    const entryPath = join(root, "admin-entry.json");
+    const activationPath = join(root, "admin-activation.json");
+    writeFileSync(entryPath, "{}\n", { mode: 0o600 });
+    writeFileSync(activationPath, "{}\n", { mode: 0o600 });
+    const enabled = loadGatewayConfig({
+      ...realEnvironment(),
+      GATEWAY_MODE: "production",
+      GATEWAY_ADMIN_WEB_ENABLED: "1",
+      GATEWAY_ADMIN_WEB_ORIGIN: "https://admin.example:8793",
+      GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH: entryPath,
+      GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH: activationPath
+    });
+    expect(enabled).toMatchObject({
+      adminWebEnabled: true,
+      productionAdminEntryPath: entryPath,
+      productionAdminActivationPath: activationPath,
+      adminWebOrigin: "https://admin.example:8793"
+    });
+    expect(loadGatewayConfig({
+      ...realEnvironment(),
+      GATEWAY_MODE: "production"
+    }).adminWebEnabled).toBe(false);
+    expect(() => loadGatewayConfig({
+      ...realEnvironment(),
+      GATEWAY_MODE: "production",
+      GATEWAY_ADMIN_WEB_ENABLED: "1",
+      GATEWAY_ADMIN_WEB_ORIGIN: "https://admin.example:8793",
+      GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH: entryPath
+    })).toThrow("Production Admin Web");
+    expect(() => loadGatewayConfig({
+      ...realEnvironment(),
+      GATEWAY_MODE: "production",
+      GATEWAY_ADMIN_WEB_ENABLED: "1",
+      GATEWAY_ADMIN_WEB_ORIGIN: "http://admin.example:8793",
+      GATEWAY_PRODUCTION_ADMIN_ENTRY_PATH: entryPath,
+      GATEWAY_PRODUCTION_ADMIN_ACTIVATION_PATH: activationPath
+    })).toThrow("HTTPS origin");
+  });
+
+  it("loads a real non-symlink UDS for production Broker mode and serializes only its mode", async () => {
+    const environment = await brokerEnvironment();
+    const config = loadGatewayConfig({
+      ...environment,
+      GATEWAY_MODE: "production"
+    });
+
+    expect(config).toMatchObject({
+      mode: "production",
+      providerRuntime: { mode: "broker" }
+    });
+    expect(JSON.stringify(config.providerRuntime)).toBe('{"mode":"broker"}');
+    expect(JSON.stringify(config.providerRuntime)).not.toContain(
+      environment.FAMILY_AI_AGENT_BROKER_SOCKET
+    );
+  });
+
+  it("rejects missing, relative, non-socket, and symlink Broker paths", async () => {
+    const environment = await brokerEnvironment();
+    const socketPath = environment.FAMILY_AI_AGENT_BROKER_SOCKET!;
+    const root = join(socketPath, "..");
+    const regularFile = join(root, "regular-file");
+    const socketLink = join(root, "linked.sock");
+    writeFileSync(regularFile, "not a socket");
+    symlinkSync(socketPath, socketLink);
+
+    for (const value of [undefined, "relative.sock", regularFile, socketLink]) {
+      expect(() => loadGatewayConfig({
+        GATEWAY_DEVICE_TOKEN: token,
+        FAMILY_AI_PROVIDER_MODE: "broker",
+        ...(value === undefined
+          ? {}
+          : { FAMILY_AI_AGENT_BROKER_SOCKET: value })
+      })).toThrow("runtime configuration");
+    }
+  });
+
+  it("registers exactly Jarvis, 于途, and 乔晶晶 through Broker profiles", async () => {
+    const runtime = buildProviderRuntime(
+      loadGatewayConfig(await brokerEnvironment()).providerRuntime
+    );
+
+    expect(runtime.authoritative).toBe(true);
+    expect(runtime.agents).toEqual([
+      {
+        agentRef: "agent:hermes-jarvis",
+        displayName: "Jarvis",
+        providerProfileRef: "provider-profile:broker-jarvis",
+        providerKind: "hermes"
+      },
+      {
+        agentRef: "agent:hermes-zzh",
+        displayName: "于途",
+        providerProfileRef: "provider-profile:broker-zzh",
+        providerKind: "hermes"
+      },
+      {
+        agentRef: "agent:hermes-nsy",
+        displayName: "乔晶晶",
+        providerProfileRef: "provider-profile:broker-nsy",
+        providerKind: "hermes"
+      }
+    ]);
+    for (const agent of runtime.agents) {
+      expect(() => runtime.router.resolve(agent.providerProfileRef)).not.toThrow();
+    }
+    for (const providerProfileRef of [
+      "provider-profile:codex-cli",
+      "provider-profile:hermes-arbitrary",
+      "provider-profile:fake-local"
+    ]) {
+      expect(() => runtime.router.resolve(providerProfileRef)).toThrow(
+        "PROVIDER_ADAPTER_NOT_CONFIGURED"
+      );
+    }
   });
 
   it("validates every executable and server-owned runtime directory in real mode", () => {
@@ -383,7 +555,7 @@ describe("Gateway configuration", () => {
   it("reconciles runtime catalog and existing owner Admin assignments idempotently", async () => {
     const fixture = runtimeFixture();
     const databasePath = join(fixture.root, "gateway.sqlite");
-    const seed = openGatewayDatabase(databasePath);
+    const seed = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     new FamilyDomainRepository(seed).initializeFamily({
       familyName: "Runtime Family",
       ownerName: "Runtime Owner",
@@ -397,6 +569,7 @@ describe("Gateway configuration", () => {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
         databasePath,
         deviceToken: token,
         mode: "development",
@@ -407,7 +580,7 @@ describe("Gateway configuration", () => {
       await app.close();
     }
 
-    const verified = openGatewayDatabase(databasePath);
+    const verified = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(verified.prepare(
       `SELECT COUNT(*) AS count
        FROM admin_agent_assignments

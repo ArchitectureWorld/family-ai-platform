@@ -1,0 +1,45 @@
+{
+  "observedAt": "2026-08-27T00:00:00.000Z",
+  "listener": "127.0.0.1:8790",
+  "listenerState": "not-observed",
+  "owner": {
+    "kind": "unknown",
+    "project": "not-observed",
+    "service": "not-observed",
+    "container": "not-observed"
+  },
+  "image": {
+    "id": "not-observed",
+    "sourceCommit": "not-observed"
+  },
+  "runtime": {
+    "schemaVersion": "not-observed",
+    "restartCount": "not-observed",
+    "health": "not-observed",
+    "createdAt": "not-observed",
+    "startedAt": "not-observed"
+  },
+  "attachments": {
+    "state": "not-observed",
+    "permissions": "not-observed",
+    "fileCount": "not-observed"
+  },
+  "routes": {
+    "root": "not-observed",
+    "member": "not-observed",
+    "admin": "not-observed",
+    "memberEntryContext": "not-observed"
+  },
+  "providers": ["not-observed"],
+  "systemd": {
+    "system": "not-observed",
+    "user": "not-observed"
+  },
+  "capabilities": {
+    "memberWeb": "not-observed",
+    "adminWeb": "not-observed",
+    "attachments": "not-observed",
+    "hermesProvider": "not-observed",
+    "codexProvider": "not-observed"
+  }
+}

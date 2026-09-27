@@ -145,6 +145,16 @@ for (const rawEntry of Buffer.from(tree).toString("utf8").split("\0")) {
 if (!seen.has(manifestRepoPath)) fail("MANIFEST_NOT_TRACKED");
 const manifestRule = manifest.rules.find(candidate => matches(candidate.pattern, manifestRepoPath));
 if (manifestRule?.classification !== "runtime-build") fail("MANIFEST_MUST_BE_RUNTIME_BUILD");
+// Recovery must never disappear from the sealed source closure through a broad rule change.
+for (const path of seen.has("apps/gateway/package.json") ? [
+  "apps/gateway/src/databaseRecovery.ts", "apps/gateway/src/databaseRecoveryRuntime.ts",
+  "apps/gateway/src/recoverGatewayDatabase.ts", "apps/gateway/src/databaseSecurity.ts",
+  "apps/gateway/runtime/rename_noreplace.py", "apps/gateway/runtime/gateway_lock_exec.py"
+] : []) {
+  if (!seen.has(path) || manifest.rules.find(candidate => matches(candidate.pattern, path))?.classification !== "runtime-build") {
+    fail("RECOVERY_BUILD_INPUT_MISSING");
+  }
+}
 records.sort(Buffer.compare);
 const buildInputTreeHash = sha256(Buffer.concat(records));
 const receipt = {

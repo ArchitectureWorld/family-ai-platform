@@ -10,12 +10,26 @@ import { buildGatewayApp } from "../src/app.js";
 import { openGatewayDatabase } from "../src/database.js";
 
 const deviceToken = "agent-routes-test-device-token-long-enough";
-const configuredAgentRuntimes = [{
-  agentRef: "agent:codex-cli",
-  displayName: "Codex CLI",
-  providerProfileRef: "provider-profile:codex-cli",
-  providerKind: "codex" as const
-}];
+const configuredAgentRuntimes = [
+  {
+    agentRef: "agent:codex-cli",
+    displayName: "Codex CLI",
+    providerProfileRef: "provider-profile:codex-cli",
+    providerKind: "codex" as const
+  },
+  {
+    agentRef: "agent:hermes-jarvis",
+    displayName: "Jarvis",
+    providerProfileRef: "provider-profile:hermes-jarvis",
+    providerKind: "hermes" as const
+  },
+  {
+    agentRef: "agent:hermes-zzh",
+    displayName: "于途",
+    providerProfileRef: "provider-profile:hermes-zzh",
+    providerKind: "hermes" as const
+  }
+];
 const bootstrapHeaders = {
   authorization: `Bearer ${deviceToken}`,
   "x-device-ref": "device:test"
@@ -59,6 +73,7 @@ describe("Admin Agent routes", () => {
     directory = mkdtempSync(join(tmpdir(), "family-ai-agent-routes-"));
     databasePath = join(directory, "gateway.sqlite");
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -89,35 +104,35 @@ describe("Admin Agent routes", () => {
   });
 
   function setRuntimeStatus(status: "active" | "disabled") {
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       db.prepare(
         "UPDATE agent_runtime_bindings SET status = ? WHERE agent_ref = ?"
-      ).run(status, "agent:codex-cli");
+      ).run(status, "agent:hermes-zzh");
     } finally {
       db.close();
     }
   }
 
-  function codexAssignment() {
-    const db = openGatewayDatabase(databasePath);
+  function personalAssignment() {
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     try {
       return db.prepare(
         `SELECT status, is_default
          FROM assistant_assignments
          WHERE person_ref = ? AND agent_ref = ?`
-      ).get(personRef, "agent:codex-cli");
+      ).get(personRef, "agent:hermes-zzh");
     } finally {
       db.close();
     }
   }
 
-  async function mountCodex() {
+  async function mountPersonal() {
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts`,
       headers: entryHeaders(admin),
-      payload: { agentRef: "agent:codex-cli" }
+      payload: { agentRef: "agent:hermes-zzh" }
     });
     expect(response.statusCode).toBe(201);
   }
@@ -152,39 +167,102 @@ describe("Admin Agent routes", () => {
     expect(denied.body).not.toContain("content_text");
   });
 
-  it("rejects the internal owner on every ordinary member-Agent surface", async () => {
-    const requests = [
-      app.inject({
-        method: "GET",
-        url: `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}/agent-mounts`,
-        headers: entryHeaders(admin)
-      }),
-      app.inject({
-        method: "POST",
-        url: `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}/agent-mounts`,
-        headers: entryHeaders(admin),
-        payload: { agentRef: "agent:codex-cli" }
-      }),
-      app.inject({
-        method: "DELETE",
-        url: `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}/agent-mounts/agent%3Acodex-cli`,
-        headers: entryHeaders(admin)
-      }),
-      app.inject({
-        method: "PUT",
-        url: `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}/default-agent`,
-        headers: entryHeaders(admin),
-        payload: { agentRef: null }
-      })
-    ];
+  it("supports owner personal mount list default and unmount surfaces", async () => {
+    const base = `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}`;
+    const empty = await app.inject({
+      method: "GET",
+      url: `${base}/agent-mounts`,
+      headers: entryHeaders(admin)
+    });
+    expect(empty.statusCode).toBe(200);
+    const mounted = await app.inject({
+      method: "POST",
+      url: `${base}/agent-mounts`,
+      headers: entryHeaders(admin),
+      payload: { agentRef: "agent:hermes-zzh" }
+    });
+    expect(mounted.statusCode).toBe(201);
+    const selected = await app.inject({
+      method: "PUT",
+      url: `${base}/default-agent`,
+      headers: entryHeaders(admin),
+      payload: { agentRef: "agent:hermes-zzh" }
+    });
+    expect(selected.statusCode).toBe(200);
+    expect(memberAgentMountsResponseSchema.parse(selected.json()).defaultAgentRef)
+      .toBe("agent:hermes-zzh");
+    const unmounted = await app.inject({
+      method: "DELETE",
+      url: `${base}/agent-mounts/agent%3Ahermes-zzh`,
+      headers: entryHeaders(admin)
+    });
+    expect(unmounted.statusCode).toBe(200);
+    const afterUnmount = memberAgentMountsResponseSchema.parse(unmounted.json());
+    expect(afterUnmount.defaultAgentRef).toBeNull();
+    expect(afterUnmount.mountedAgents).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ agentRef: "agent:hermes-zzh" })
+    ]));
+  });
 
-    for (const response of await Promise.all(requests)) {
-      expect(response.statusCode).toBe(404);
-      expect(response.json()).toMatchObject({
-        code: "PERSON_NOT_IN_FAMILY",
-        category: "permission",
-        retryable: false
-      });
+  it("allows owner personal Agents but rejects every system mutation before version changes", async () => {
+    const ownerMounted = await app.inject({
+      method: "POST",
+      url: `/api/v1/admin/members/${encodeURIComponent(ownerPersonRef)}/agent-mounts`,
+      headers: entryHeaders(admin),
+      payload: { agentRef: "agent:hermes-zzh" }
+    });
+    expect(ownerMounted.statusCode).toBe(201);
+
+    const before = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    const beforeVersion = before.prepare(
+      `SELECT assignment_version FROM person_agent_assignment_versions
+       WHERE person_ref = ?`
+    ).get(personRef) ?? null;
+    before.close();
+    for (const agentRef of ["agent:hermes-jarvis", "agent:codex-cli"]) {
+      const encoded = encodeURIComponent(agentRef);
+      const responses = [
+        await app.inject({
+          method: "POST",
+          url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts`,
+          headers: entryHeaders(admin),
+          payload: { agentRef }
+        }),
+        await app.inject({
+          method: "DELETE",
+          url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/${encoded}`,
+          headers: entryHeaders(admin)
+        }),
+        await app.inject({
+          method: "PUT",
+          url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/default-agent`,
+          headers: entryHeaders(admin),
+          payload: { agentRef }
+        })
+      ];
+      for (const response of responses) {
+        expect(response.statusCode).toBe(403);
+        expect(response.json()).toMatchObject({
+          code: "SYSTEM_AGENT_PERSONAL_FORBIDDEN",
+          category: "permission",
+          retryable: false
+        });
+      }
+    }
+    const verified = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
+    try {
+      expect(verified.prepare(
+        `SELECT assignment_version FROM person_agent_assignment_versions
+         WHERE person_ref = ?`
+      ).get(personRef) ?? null).toEqual(beforeVersion);
+      expect(verified.prepare(
+        `SELECT COUNT(*) AS count FROM assistant_assignments
+         WHERE person_ref = ? AND agent_ref IN (
+           'agent:hermes-jarvis', 'agent:codex-cli'
+         )`
+      ).get(personRef)).toEqual({ count: 0 });
+    } finally {
+      verified.close();
     }
   });
 
@@ -194,7 +272,7 @@ describe("Admin Agent routes", () => {
       method: "POST",
       url: mountUrl,
       headers: entryHeaders(admin),
-      payload: { agentRef: "agent:codex-cli" }
+      payload: { agentRef: "agent:hermes-zzh" }
     });
     expect(mounted.statusCode).toBe(201);
     const first = memberAgentMountsResponseSchema.parse(mounted.json());
@@ -202,12 +280,12 @@ describe("Admin Agent routes", () => {
       method: "POST",
       url: mountUrl,
       headers: entryHeaders(admin),
-      payload: { agentRef: "agent:codex-cli" }
+      payload: { agentRef: "agent:hermes-zzh" }
     });
     expect(replay.statusCode).toBe(201);
     const second = memberAgentMountsResponseSchema.parse(replay.json());
-    expect(second.mountedAgents.find((item) => item.agentRef === "agent:codex-cli")?.assignmentRef)
-      .toBe(first.mountedAgents.find((item) => item.agentRef === "agent:codex-cli")?.assignmentRef);
+    expect(second.mountedAgents.find((item) => item.agentRef === "agent:hermes-zzh")?.assignmentRef)
+      .toBe(first.mountedAgents.find((item) => item.agentRef === "agent:hermes-zzh")?.assignmentRef);
 
     const cleared = await app.inject({
       method: "PUT",
@@ -222,7 +300,7 @@ describe("Admin Agent routes", () => {
   it("rejects personal mutations, cross-family members, and unconfigured Agents", async () => {
     const denied = await app.inject({
       method: "DELETE",
-      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/agent%3Acodex-cli`,
+      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/agent%3Ahermes-zzh`,
       headers: entryHeaders(personal)
     });
     expect(denied.statusCode).toBe(403);
@@ -248,7 +326,7 @@ describe("Admin Agent routes", () => {
   it("rejects absent, unconfigured, and disabled Agent deletes without ending a mount", async () => {
     const configuredAbsent = await app.inject({
       method: "DELETE",
-      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/agent%3Acodex-cli`,
+      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/agent%3Ahermes-zzh`,
       headers: entryHeaders(admin)
     });
     expectBoundedAgentError(configuredAbsent, "AGENT_NOT_MOUNTED");
@@ -260,15 +338,15 @@ describe("Admin Agent routes", () => {
     });
     expectBoundedAgentError(unconfigured, "AGENT_RUNTIME_UNAVAILABLE");
 
-    await mountCodex();
+    await mountPersonal();
     setRuntimeStatus("disabled");
     const disabled = await app.inject({
       method: "DELETE",
-      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/agent%3Acodex-cli`,
+      url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/agent-mounts/agent%3Ahermes-zzh`,
       headers: entryHeaders(admin)
     });
     expectBoundedAgentError(disabled, "AGENT_RUNTIME_UNAVAILABLE");
-    expect(codexAssignment()).toEqual({ status: "active", is_default: 0 });
+    expect(personalAssignment()).toEqual({ status: "active", is_default: 0 });
   });
 
   it("rejects unconfigured and disabled non-null defaults without selecting a hidden mount", async () => {
@@ -280,15 +358,15 @@ describe("Admin Agent routes", () => {
     });
     expectBoundedAgentError(unconfigured, "AGENT_RUNTIME_UNAVAILABLE");
 
-    await mountCodex();
+    await mountPersonal();
     setRuntimeStatus("disabled");
     const disabled = await app.inject({
       method: "PUT",
       url: `/api/v1/admin/members/${encodeURIComponent(personRef)}/default-agent`,
       headers: entryHeaders(admin),
-      payload: { agentRef: "agent:codex-cli" }
+      payload: { agentRef: "agent:hermes-zzh" }
     });
     expectBoundedAgentError(disabled, "AGENT_RUNTIME_UNAVAILABLE");
-    expect(codexAssignment()).toEqual({ status: "active", is_default: 0 });
+    expect(personalAssignment()).toEqual({ status: "active", is_default: 0 });
   });
 });

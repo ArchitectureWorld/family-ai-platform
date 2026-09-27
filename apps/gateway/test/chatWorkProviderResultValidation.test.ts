@@ -82,6 +82,7 @@ describe("Chat Work Provider result validation", () => {
 
   async function createApp(providerAdapter: ProviderAdapter) {
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: join(directory, "gateway.sqlite"),
       deviceToken,
       mode: "test",

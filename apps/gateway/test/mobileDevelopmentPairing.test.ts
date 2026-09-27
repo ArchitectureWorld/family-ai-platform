@@ -33,6 +33,7 @@ afterEach(() => {
 describe("development browser pairing", () => {
   it("permits the local acceptance page to generate contract-safe QR material", async () => {
     const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: databasePath(),
       deviceToken: bootstrapToken,
       mode: "development"
@@ -79,6 +80,7 @@ describe("development browser pairing", () => {
 
   it("does not relax HTTPS generation outside development mode", async () => {
     const app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath: databasePath(),
       deviceToken: bootstrapToken,
       mode: "test"

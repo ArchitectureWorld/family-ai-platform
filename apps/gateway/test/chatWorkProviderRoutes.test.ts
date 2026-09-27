@@ -158,6 +158,7 @@ describe("Chat Work Provider HTTP flow", () => {
 
   async function openApp(providerAdapter: ProviderAdapter = adapter) {
     app = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
       databasePath,
       deviceToken,
       mode: "test",
@@ -435,7 +436,7 @@ describe("Chat Work Provider HTTP flow", () => {
 
     const inFlight = sendMessage(chat.threadRef, "unmount-in-flight", "等待 Provider。");
     await holding.invoked;
-    const db = openGatewayDatabase(databasePath);
+    const db = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     db.prepare(
       `UPDATE assistant_assignments
        SET status = 'ended', effective_to = ?
@@ -462,7 +463,7 @@ describe("Chat Work Provider HTTP flow", () => {
     });
     expect(holding.calls).toHaveLength(1);
 
-    const verification = openGatewayDatabase(databasePath);
+    const verification = openGatewayDatabase(databasePath, { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" });
     expect(verification.prepare(
       `SELECT COUNT(*) AS count FROM thread_messages
        WHERE thread_ref = ? AND actor_type = 'assistant'`
