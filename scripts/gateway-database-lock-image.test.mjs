@@ -148,9 +148,23 @@ for (const runtimePath of [
     assert.equal(result.stdout, "");
     assert.equal(result.stderr, "GATEWAY_IMAGE_RUNTIME_INVALID\n");
   } finally {
-    spawnSync("docker", ["image", "rm", "--force", tag]);
+    spawnSync("docker", ["image", "rm", "--force", "--no-prune", tag]);
     if (baseTag !== undefined) {
-      spawnSync("docker", ["image", "rm", "--force", baseTag]);
+      const borrowed = spawnSync("docker", [
+        "image", "inspect", "--format", "{{json .RepoTags}}", image
+      ], { encoding: "utf8" });
+      assert.equal(borrowed.status, 0, borrowed.stderr);
+      const tags = JSON.parse(borrowed.stdout) ?? [];
+      // Docker removes the image when its last tag is removed. A source loaded
+      // by immutable ID must retain one protection tag for the following gates.
+      if (tags.some((value) => value !== baseTag)) {
+        const removed = spawnSync("docker", ["image", "rm", "--no-prune", baseTag], {
+          encoding: "utf8"
+        });
+        assert.equal(removed.status, 0, removed.stderr);
+      }
+      const preserved = spawnSync("docker", ["image", "inspect", image], { encoding: "utf8" });
+      assert.equal(preserved.status, 0, "Cleanup must preserve the borrowed sealed source image");
     }
     rmSync(fixture, { recursive: true, force: true });
   }
