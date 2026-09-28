@@ -15,6 +15,7 @@ const FAMILY_MANAGER_AGENT_REF = "agent:family-manager";
 const PERSONAL_ASSISTANT_AGENT_REF = "agent:personal-assistant";
 const DEVELOPMENT_PROVIDER_PROFILE_REF = "provider-profile:fake-local";
 const ENTRY_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+export const ADMIN_ENTRY_EXPIRES_AT = "9999-12-31T23:59:59.999Z";
 
 export interface EntryCredential {
   entryBindingRef: string;
@@ -302,7 +303,7 @@ export class FamilyDomainRepository {
           entry.entryBindingRef,
           sha256(entry.token),
           now,
-          expiresAt
+          entry.audience === "family_admin" ? ADMIN_ENTRY_EXPIRES_AT : expiresAt
         );
       }
     })();

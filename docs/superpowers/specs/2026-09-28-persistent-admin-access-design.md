@@ -17,13 +17,13 @@
 
 ### 1. 会话状态
 
-新增版本化 Schema 字段 `entry_sessions.expiration_policy`，枚举 `fixed` 和 `until_revoked`，旧行默认 `fixed`。只允许 audience=`family_admin` 的新会话使用 `until_revoked`。初次建家时 admin 使用该策略，personal 保持固定期限。认证和所有按 `expires_at` 过滤 Entry 的查询采用统一判定：状态 active、设备/绑定/家庭/成员均有效，且策略为 `until_revoked` 或固定到期时间未过；`until_revoked` 必须同时校验管理员 audience。数据库触发器阻止为 personal Entry 设置该策略。原 `expires_at` 字段保留供固定期限行使用；持续有效行的时间字段为兼容值，授权只看策略。Schema 更新需通过 migration-only 路径验证和可回滚副本演练。
+为避免改动当前 V15 的精确 Schema 指纹和保留运行时恢复链，管理员新会话在现有 `expires_at` 字段写入固定的兼容上界 `9999-12-31T23:59:59.999Z`。Gateway 不再为管理员会话设置 30 天或其他日常使用期限；实际失效由主动退出、Session/Binding/Device 撤销控制。固定上界只是一种旧 Schema 编码形式，不作为对浏览器凭据永久保存的承诺。个人会话继续使用原固定期限和原认证 SQL。所有写入上界的代码必须先确认 audience=`family_admin`；测试在多年后验证管理员仍可用、个人仍过期。无 Schema 变化，也不调整 migration 或正式发布恢复工具。
 
-现有 expired 或 revoked 行不自动变回 active。即使其旧 token 仍在受保护文件中，也不能凭旧行直接获得管理员 API 权限。部署时由受控本机 operator 恢复过程验证受保护文件与数据库 Hash、现存管理员绑定、设备和家庭状态，拒绝 revoked 记录，签发新的 `until_revoked` operator Entry，原子更新受保护入口文件；失败不得留下可被误认为有效的新入口。该过程记录不含秘密的操作证据，必须有备份和恢复路径。
+现有 expired 或 revoked 行不自动变回 active。即使其旧 token 仍在受保护文件中，也不能凭旧行直接获得管理员 API 权限。部署时由受控本机 operator 恢复过程验证受保护文件与数据库 Hash、现存管理员绑定、设备和家庭状态，拒绝 revoked 记录，签发新的管理员 operator Entry，原子更新受保护入口文件；失败不得留下可被误认为有效的新入口。该过程记录不含秘密的操作证据，必须有备份和恢复路径。
 
 ### 2. 浏览器激活
 
-受保护 operator Entry 只用于激活时证明管理员根授权，不直接装进浏览器。每次成功激活都产生新的 32-byte 随机浏览器 Entry token 和独立 sessionRef，绑定同一个现有管理员 Entry binding，`expiration_policy=until_revoked`；浏览器 Cookie 仅含该次会话的材料。旧管理员浏览器会话不因新浏览器激活而被替换。管理员退出只撤销当前浏览器会话并清除 Cookie；设备撤销会阻断所有相关会话。每次管理请求继续校验当前 session、binding、device、audience 和同源防护。
+受保护 operator Entry 只用于激活时证明管理员根授权，不直接装进浏览器。每次成功激活都产生新的 32-byte 随机浏览器 Entry token 和独立 sessionRef，绑定同一个现有管理员 Entry binding，管理员兼容上界；浏览器 Cookie 仅含该次会话的材料。旧管理员浏览器会话不因新浏览器激活而被替换。管理员退出只撤销当前浏览器会话并清除 Cookie；设备撤销会阻断所有相关会话。每次管理请求继续校验当前 session、binding、device、audience 和同源防护。
 
 管理员 Cookie 使用现有 Secure、HttpOnly、SameSite=Strict 约束；为跨浏览器重启保持登录，可设置持久 Cookie 并在已认证的管理访问中刷新。Cookie 被用户或浏览器清除时需再次激活；这不改变服务器会话的无时间上限规则。不得写入 localStorage、URL、公开 API、日志或审计正文。
 
