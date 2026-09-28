@@ -509,6 +509,18 @@ export function createAdminApi({
       }
       return { activated: true };
     },
+    async logout() {
+      if (!cookieSession) throw new AdminApiError("ADMIN_COOKIE_SESSION_REQUIRED", 401);
+      const result = await request("/api/v1/admin/logout", { method: "POST" });
+      if (
+        !isRecord(result) ||
+        Object.keys(result).length !== 1 ||
+        result.loggedOut !== true
+      ) {
+        throw new AdminApiError("ADMIN_LOGOUT_RESPONSE_INVALID", 502);
+      }
+      return { loggedOut: true };
+    },
     async adminAccessMode() {
       const value = await request("/api/v1/admin/access-mode", {
         publicRequest: true

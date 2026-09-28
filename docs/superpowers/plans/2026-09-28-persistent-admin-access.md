@@ -46,6 +46,7 @@
 ### Task 2: Independent browser sessions and logout
 
 **Files:**
+- Modify: `apps/gateway/src/familyDomain.ts`
 - Modify: `apps/gateway/src/adminProductionActivation.ts`
 - Modify: `apps/gateway/src/app.ts`
 - Modify: `apps/gateway/src/webEntryCookies.ts`

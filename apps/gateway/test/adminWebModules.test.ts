@@ -440,6 +440,25 @@ describe("Admin Web API client", () => {
     expect(JSON.stringify(requests)).not.toContain(token);
   });
 
+  it("logs out the cookie-backed administrator without sending an Entry token", async () => {
+    const { createAdminApi } = await apiModule();
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      requests.push({ url: String(input), init });
+      return Response.json({ loggedOut: true });
+    });
+    const api = createAdminApi({ fetchImpl, cookieSession: true });
+    await expect(api.logout()).resolves.toEqual({ loggedOut: true });
+    expect(requests).toEqual([{
+      url: "/api/v1/admin/logout",
+      init: {
+        method: "POST",
+        headers: { "X-Family-AI-Web-Request": "1" }
+      }
+    }]);
+    expect(JSON.stringify(requests)).not.toContain(token);
+  });
+
   it("validates the explicit Admin Web mode without using Preview access endpoints", async () => {
     const { createAdminApi } = await apiModule();
     const requests: Array<{ url: string; init: RequestInit }> = [];

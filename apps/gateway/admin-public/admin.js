@@ -483,6 +483,26 @@ async function renderManagement(credential, persistenceWarning = "") {
     }));
   }
 
+  if (credential?.cookieSession === true) {
+    const logoutButton = element("button", {
+      className: "primary-button",
+      text: "退出管理员",
+      attributes: { type: "button" }
+    });
+    const logoutFeedback = messageNode();
+    logoutButton.addEventListener("click", async () => {
+      logoutButton.disabled = true;
+      try {
+        await api.logout();
+        showProductionActivation("已退出管理员。");
+      } catch (error) {
+        logoutFeedback.textContent = errorText(error);
+        logoutButton.disabled = false;
+      }
+    });
+    summaryRoot.append(logoutButton, logoutFeedback);
+  }
+
   membersRoot.replaceChildren();
   const list = element("div", {
     className: "member-list",

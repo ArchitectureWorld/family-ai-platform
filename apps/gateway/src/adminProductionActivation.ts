@@ -3,8 +3,15 @@ import { constants } from "node:fs";
 import { chmod, lstat, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { setWebEntrySessionCookieHeaders } from "./webEntryCookies.js";
-import { EntrySessionAuthenticator } from "./entrySessionAuth.js";
+import {
+  clearWebSessionCookieHeaders,
+  parseCookieHeader,
+  setWebEntrySessionCookieHeaders,
+  WEB_COOKIE_NAMES,
+  webAuthenticationSource
+} from "./webEntryCookies.js";
+import { EntrySessionAuthenticator, requireEntryRequestWithSession } from "./entrySessionAuth.js";
+import { FamilyDomainRepository } from "./familyDomain.js";
 import { GatewayDomainError } from "./service.js";
 
 const MAX_FILE_BYTES = 64 * 1024;
@@ -235,12 +242,13 @@ async function consumeActivation(path: string): Promise<void> {
   }
 }
 
-function sendActivationCookies(reply: FastifyReply, entry: ProductionAdminEntry): void {
+function sendActivationCookies(reply: FastifyReply, entry: { entrySessionRef: string; token: string }): void {
   reply.header(
     "Set-Cookie",
     setWebEntrySessionCookieHeaders(
       { entrySessionRef: entry.entrySessionRef, entryToken: entry.token },
-      "production"
+      "production",
+      { persistent: true }
     )
   );
 }
@@ -254,6 +262,7 @@ export function registerAdminProductionActivation(
     activationPath?: string;
     adminWebOrigin?: string;
     entryAuthenticator: EntrySessionAuthenticator;
+    familyRepository: FamilyDomainRepository;
     now?: () => Date;
   }
 ): void {
@@ -267,6 +276,25 @@ export function registerAdminProductionActivation(
     return;
   }
   const now = input.now ?? (() => new Date());
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (
+      request.method !== "GET" ||
+      reply.statusCode >= 400 ||
+      !(request.url === "/api/v1/portal/context" || request.url.startsWith("/api/v1/admin/")) ||
+      webAuthenticationSource(request) !== "entry_cookie"
+    ) return payload;
+    const cookies = parseCookieHeader(request.headers.cookie);
+    const entrySessionRef = cookies[WEB_COOKIE_NAMES.entrySessionRef];
+    const entryToken = cookies[WEB_COOKIE_NAMES.entryToken];
+    if (!entrySessionRef || !entryToken) return payload;
+    const authentication = input.entryAuthenticator.authenticate(entrySessionRef, entryToken);
+    if (authentication.status === "authenticated" && authentication.context.audience === "family_admin") {
+      reply.header("Set-Cookie", setWebEntrySessionCookieHeaders(
+        { entrySessionRef, entryToken }, "production", { persistent: true }
+      ));
+    }
+    return payload;
+  });
   app.post("/api/v1/admin/activate", async (request, reply) => {
     if (!sameOrigin(request, input.adminWebOrigin!)) throw invalidActivation();
     const body = request.body;
@@ -312,15 +340,35 @@ export function registerAdminProductionActivation(
         throw invalidActivation();
       }
       await consumeActivation(input.activationPath!);
+      const browserSession = input.familyRepository.issueAdminBrowserSession(
+        entry.entrySessionRef, now()
+      );
       reply
         .header("Cache-Control", "no-store")
         .header("Pragma", "no-cache");
-      sendActivationCookies(reply, entry);
+      sendActivationCookies(reply, browserSession);
       return reply.send({ activated: true });
     } catch (error) {
       if (error instanceof GatewayDomainError) throw error;
       throw invalidActivation();
     }
+  });
+  app.post("/api/v1/admin/logout", async (request, reply) => {
+    if (!sameOrigin(request, input.adminWebOrigin!)) throw invalidActivation();
+    if (webAuthenticationSource(request) !== "entry_cookie") throw invalidActivation();
+    const authenticated = requireEntryRequestWithSession(
+      request, input.entryAuthenticator, "family_admin"
+    );
+    const operatorEntry = parseAdminEntry(
+      parseJson(await readProtectedBytes(input.adminEntryPath!))
+    );
+    if (authenticated.entrySessionRef !== operatorEntry.entrySessionRef) {
+      input.familyRepository.revokeAdminBrowserSession(
+        authenticated.entrySessionRef, authenticated.context.entryBindingRef, now()
+      );
+    }
+    reply.header("Set-Cookie", clearWebSessionCookieHeaders("production"));
+    return reply.send({ loggedOut: true });
   });
 }
 

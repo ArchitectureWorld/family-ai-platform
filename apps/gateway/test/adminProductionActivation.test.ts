@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeProviderAdapter } from "@family-ai/provider-adapter-sdk";
 import { buildGatewayApp } from "../src/app.js";
+import { openGatewayDatabase } from "../src/database.js";
 import {
   createProductionAdminActivation
 } from "../src/adminProductionActivation.js";
@@ -120,6 +121,87 @@ describe("production Admin Web activation", () => {
     expect(cookies?.join("\n")).toContain("Secure");
     expect(cookies?.join("\n")).toContain("SameSite=Strict");
     expect(existsSync(fixtureValue.activationPath)).toBe(false);
+  });
+
+  it("issues separate persistent browser sessions and revokes only the browser that logs out", async () => {
+    const { app, entryPath, activationPath, databasePath, body } = await fixture("separate-browsers");
+    const activate = async () => {
+      const activation = await createProductionAdminActivation({
+        adminEntryPath: entryPath, activationPath
+      });
+      const response = await app.inject({
+        method: "POST", url: "/api/v1/admin/activate",
+        headers: activationHeaders(), payload: { code: activation.code }
+      });
+      expect(response.statusCode).toBe(200);
+      const setCookies = response.headers["set-cookie"] as string[];
+      expect(setCookies.join(";")).toContain("Max-Age=");
+      expect(setCookies.join(";")).not.toContain(body.entries.admin.token);
+      return setCookies.map(value => value.split(";", 1)[0]).join("; ");
+    };
+    const firstCookie = await activate();
+    const secondCookie = await activate();
+    expect(firstCookie).not.toBe(secondCookie);
+    expect(firstCookie).not.toContain(body.entries.admin.entrySessionRef);
+    expect(secondCookie).not.toContain(body.entries.admin.entrySessionRef);
+
+    const firstBefore = await app.inject({
+      method: "GET", url: "/api/v1/admin/members", headers: { cookie: firstCookie }
+    });
+    const secondBefore = await app.inject({
+      method: "GET", url: "/api/v1/admin/members", headers: { cookie: secondCookie }
+    });
+    expect(firstBefore.statusCode).toBe(200);
+    expect(secondBefore.statusCode).toBe(200);
+    expect(String(firstBefore.headers["set-cookie"])).toContain("Max-Age=");
+
+    const crossOrigin = await app.inject({
+      method: "POST", url: "/api/v1/admin/logout",
+      headers: {
+        cookie: firstCookie, "x-family-ai-web-request": "1",
+        origin: "https://other.example:8793", "sec-fetch-site": "cross-site"
+      }
+    });
+    expect(crossOrigin.statusCode).not.toBe(200);
+
+    const logout = await app.inject({
+      method: "POST", url: "/api/v1/admin/logout",
+      headers: {
+        cookie: firstCookie, host: "admin.example:8793",
+        "x-family-ai-web-request": "1", ...activationHeaders()
+      }
+    });
+    expect(logout.statusCode).toBe(200);
+    expect(logout.json()).toEqual({ loggedOut: true });
+    expect(String(logout.headers["set-cookie"])).toContain("Max-Age=0");
+
+    const firstAfter = await app.inject({
+      method: "GET", url: "/api/v1/admin/members", headers: { cookie: firstCookie }
+    });
+    const secondAfter = await app.inject({
+      method: "GET", url: "/api/v1/admin/members", headers: { cookie: secondCookie }
+    });
+    expect(firstAfter.statusCode).toBe(401);
+    expect(secondAfter.statusCode).toBe(200);
+    const operatorContext = await app.inject({
+      method: "GET", url: "/api/v1/portal/context",
+      headers: {
+        authorization: `Bearer ${body.entries.admin.token}`,
+        "x-entry-session-ref": body.entries.admin.entrySessionRef
+      }
+    });
+    expect(operatorContext.statusCode).toBe(200);
+
+    const db = openGatewayDatabase(databasePath, {
+      intent: "test-create-or-existing", simulate: "migrate-create-or-existing"
+    });
+    db.prepare("UPDATE managed_devices SET status = 'revoked' WHERE device_ref = ?")
+      .run(body.device.deviceRef);
+    db.close();
+    const revoked = await app.inject({
+      method: "GET", url: "/api/v1/admin/members", headers: { cookie: secondCookie }
+    });
+    expect(revoked.statusCode).toBe(403);
   });
 
   it("rejects wrong, expired, malformed, replayed, and cross-origin activation", async () => {
