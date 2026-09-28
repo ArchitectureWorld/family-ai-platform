@@ -6,7 +6,7 @@ import { readProtectedAdminEntry } from "./adminProductionActivation.js";
 import { sha256, type GatewayDatabase } from "./database.js";
 import { ADMIN_ENTRY_EXPIRES_AT } from "./familyDomain.js";
 
-type RecoveryStage = "beforeReplace" | "afterReplace";
+type RecoveryStage = "beforeReplace" | "afterRenameBeforeSync" | "afterReplace";
 
 interface RecoveryRow {
   token_hash: string;
@@ -46,12 +46,17 @@ async function syncDirectory(path: string): Promise<void> {
   }
 }
 
-async function atomicProtectedWrite(path: string, bytes: Buffer): Promise<void> {
+async function atomicProtectedWrite(
+  path: string,
+  bytes: Buffer,
+  afterRename?: () => void
+): Promise<void> {
   const temporary = path + ".tmp." + randomUUID();
   try {
     await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
     await syncFile(temporary);
     await rename(temporary, path);
+    afterRename?.();
     await syncDirectory(path);
   } catch (error) {
     await rm(temporary, { force: true });
@@ -85,6 +90,8 @@ export async function recoverAdminOperatorEntry(input: {
   checkpoint?: (stage: RecoveryStage) => void;
 }): Promise<{ status: "reissued" | "already-active" }> {
   const { entry, bytes: previousBytes } = await readProtectedAdminEntry(input.entryPath);
+  const checkedAt = (input.now ?? (() => new Date()))();
+  const nowIso = checkedAt.toISOString();
   const row = recoveryRow(input.database, entry.entrySessionRef);
   if (
     !row ||
@@ -98,9 +105,11 @@ export async function recoverAdminOperatorEntry(input: {
   if (row.status === "active" && row.expires_at === ADMIN_ENTRY_EXPIRES_AT) {
     return { status: "already-active" };
   }
-  if (row.status !== "expired") invalid();
+  if (
+    row.status !== "expired" &&
+    !(row.status === "active" && Date.parse(row.expires_at) <= checkedAt.getTime())
+  ) invalid();
 
-  const nowIso = (input.now ?? (() => new Date()))().toISOString();
   const newSessionRef = "entry-session:" + randomUUID();
   const newToken = randomBytes(32).toString("base64url");
   const nextBytes = Buffer.from(JSON.stringify({
@@ -117,13 +126,21 @@ export async function recoverAdminOperatorEntry(input: {
     const current = recoveryRow(input.database, entry.entrySessionRef);
     if (
       !current ||
-      current.status !== "expired" ||
+      !(
+        current.status === "expired" ||
+        (current.status === "active" && Date.parse(current.expires_at) <= checkedAt.getTime())
+      ) ||
       current.entry_binding_ref !== entry.entryBindingRef ||
       current.family_ref !== entry.familyRef ||
       current.person_ref !== entry.personRef ||
       current.device_ref !== entry.deviceRef ||
       !hashMatches(current.token_hash, sha256(entry.token))
     ) invalid();
+    if (current.status === "active") {
+      input.database.prepare(
+        "UPDATE entry_sessions SET status = 'expired' WHERE entry_session_ref = ? AND status = 'active'"
+      ).run(entry.entrySessionRef);
+    }
     input.database.prepare([
       "INSERT INTO entry_sessions",
       "(entry_session_ref, entry_binding_ref, token_hash, status,",
@@ -134,8 +151,10 @@ export async function recoverAdminOperatorEntry(input: {
       nowIso, ADMIN_ENTRY_EXPIRES_AT
     );
     input.checkpoint?.("beforeReplace");
-    await atomicProtectedWrite(input.entryPath, nextBytes);
-    replaced = true;
+    await atomicProtectedWrite(input.entryPath, nextBytes, () => {
+      replaced = true;
+      input.checkpoint?.("afterRenameBeforeSync");
+    });
     input.checkpoint?.("afterReplace");
     input.database.exec("COMMIT");
     return { status: "reissued" };

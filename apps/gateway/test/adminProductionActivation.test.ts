@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -121,6 +122,31 @@ describe("production Admin Web activation", () => {
     expect(cookies?.join("\n")).toContain("Secure");
     expect(cookies?.join("\n")).toContain("SameSite=Strict");
     expect(existsSync(fixtureValue.activationPath)).toBe(false);
+  });
+
+  it("does not strand an activation lock when a consumed code is replayed", async () => {
+    const { app, entryPath, activationPath } = await fixture("replay-reissue");
+    const activate = (code: string) => app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code }
+    });
+    expect((await activate("AAAAA-BBBBB")).statusCode).toBe(401);
+    expect(existsSync(activationPath + ".lock")).toBe(false);
+    const first = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath
+    });
+    const activateAgain = (code: string) => app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code }
+    });
+    expect((await activateAgain(first.code)).statusCode).toBe(200);
+    expect(existsSync(activationPath + ".lock")).toBe(false);
+    expect((await activateAgain(first.code)).statusCode).toBe(401);
+    expect(existsSync(activationPath + ".lock")).toBe(false);
+    const next = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath
+    });
+    expect((await activateAgain(next.code)).statusCode).toBe(200);
   });
 
   it("issues separate persistent browser sessions and revokes only the browser that logs out", async () => {
@@ -253,17 +279,29 @@ describe("production Admin Web activation", () => {
     expect(correct.statusCode).toBe(401);
   });
 
-  it("fails closed while a protected activation claim is left by a crashed process", async () => {
-    const { app, entryPath, activationPath } = await fixture("claim-crash");
+  it("fails closed after a separate process dies while holding the activation claim", async () => {
+    const { app, entryPath, activationPath, databasePath } = await fixture("claim-crash");
     const activation = await createProductionAdminActivation({
       adminEntryPath: entryPath, activationPath
     });
-    writeFileSync(`${activationPath}.lock`, "claimed", { mode: 0o600 });
+    const crashed = spawnSync(process.execPath, [
+      "-e",
+      "require('node:fs').openSync(process.argv[1], 'wx', 0o600); process.kill(process.pid, 'SIGKILL')",
+      activationPath + ".lock"
+    ], { encoding: "utf8" });
+    expect(crashed.signal).toBe("SIGKILL");
+    expect(existsSync(activationPath + ".lock")).toBe(true);
     const response = await app.inject({
       method: "POST", url: "/api/v1/admin/activate",
       headers: activationHeaders(), payload: { code: activation.code }
     });
     expect(response.statusCode).toBe(401);
+    const generator = spawnSync(process.execPath, [
+      join(process.cwd(), "../../scripts/admin-production-activate.mjs"),
+      "--database", databasePath, "--entry", entryPath, "--output", activationPath
+    ], { encoding: "utf8" });
+    expect(generator.status).toBe(1);
+    expect(generator.stdout).toBe("");
     expect(existsSync(activationPath)).toBe(true);
   });
 

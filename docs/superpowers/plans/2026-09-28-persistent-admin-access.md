@@ -85,7 +85,7 @@
 - Test: `apps/gateway/test/adminOperatorRecovery.test.ts`, `apps/gateway/test/adminProductionActivation.test.ts`, `apps/gateway/test/memberPreviewScripts.test.ts`
 - Document: `docs/operations/release-and-rollback.md`
 
-**Interfaces:** Local operator command takes protected DB and entry paths; validates old token Hash, expired-but-not-revoked status and active admin binding/device; issues a fresh administrator root session with `ADMIN_ENTRY_EXPIRES_AT` and atomically updates 0600 file with backup/recovery evidence. Activation-code generation fails before writing if its operator Entry cannot authenticate.
+**Interfaces:** Local operator command takes protected DB and entry paths; validates old token Hash, expired or elapsed-but-still-active status, and active admin binding/device; issues a fresh administrator root session with `ADMIN_ENTRY_EXPIRES_AT` and atomically updates 0600 file with backup/recovery evidence. Activation-code generation fails before writing if its operator Entry cannot authenticate.
 
 - [ ] **Step 1: Write failing tests** for correct recovery, revoked root/device refusal, mismatched token refusal, file-write fault recovery, repeat invocation, and activation preflight.
 - [ ] **Step 2: Run** `../../node_modules/.bin/vitest run test/adminOperatorRecovery.test.ts test/adminProductionActivation.test.ts --maxWorkers=1 --no-file-parallelism`; expected RED on missing recovery/preflight.

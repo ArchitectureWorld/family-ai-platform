@@ -77,6 +77,25 @@ describe("protected operator recovery", () => {
       .toBe(updated.entrySessionRef);
   });
 
+  it("reissues an old active row whose deadline passed before any authentication request", async () => {
+    const { db, root, entryPath } = fixture();
+    db.prepare(
+      "UPDATE entry_sessions SET expires_at = ? WHERE entry_session_ref = ?"
+    ).run("2000-01-01T00:00:00.000Z", root.entrySessionRef);
+    expect(db.prepare(
+      "SELECT status FROM entry_sessions WHERE entry_session_ref = ?"
+    ).get(root.entrySessionRef)).toEqual({ status: "active" });
+    const result = await recoverAdminOperatorEntry({
+      database: db, entryPath, now: () => new Date("2026-09-28T00:00:00.000Z")
+    });
+    expect(result.status).toBe("reissued");
+    expect(db.prepare(
+      "SELECT status FROM entry_sessions WHERE entry_session_ref = ?"
+    ).get(root.entrySessionRef)).toEqual({ status: "expired" });
+    const updated = JSON.parse(readFileSync(entryPath, "utf8"));
+    expect(updated.entrySessionRef).not.toBe(root.entrySessionRef);
+  });
+
   it("rejects revoked roots, revoked devices, and mismatched protected tokens", async () => {
     const revokedRoot = fixture();
     revokedRoot.db.prepare(
@@ -150,6 +169,44 @@ describe("protected operator recovery", () => {
     ], { encoding: "utf8" });
     expect(missingDatabase.status).toBe(1);
     expect(existsSync(expiredOutput)).toBe(false);
+  });
+
+  it("refuses the operator CLI without the inherited exclusive database lock", () => {
+    const { db, root, entryPath, databasePath } = fixture();
+    db.prepare(
+      "UPDATE entry_sessions SET status = 'expired' WHERE entry_session_ref = ?"
+    ).run(root.entrySessionRef);
+    const direct = spawnSync(process.execPath, [
+      "--import", "tsx",
+      join(process.cwd(), "src/adminOperatorCli.ts"),
+      "--database", databasePath, "--entry", entryPath
+    ], { encoding: "utf8" });
+    expect(direct.status).toBe(1);
+    expect(direct.stdout).toBe("");
+    expect(direct.stderr).toContain("ADMIN_OPERATOR_RECOVERY_FAILED");
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM entry_sessions WHERE entry_binding_ref = ?"
+    ).get(root.entryBindingRef)).toEqual({ count: 1 });
+  });
+
+  it("restores the old protected file when syncing its directory fails after rename", async () => {
+    const { db, root, entryPath } = fixture();
+    db.prepare(
+      "UPDATE entry_sessions SET status = 'expired' WHERE entry_session_ref = ?"
+    ).run(root.entrySessionRef);
+    const before = readFileSync(entryPath);
+    await expect(recoverAdminOperatorEntry({
+      database: db, entryPath,
+      checkpoint: stage => {
+        if (stage === "afterRenameBeforeSync") {
+          throw new Error("TEST_DIRECTORY_SYNC_FAILURE");
+        }
+      }
+    })).rejects.toThrow("TEST_DIRECTORY_SYNC_FAILURE");
+    expect(readFileSync(entryPath)).toEqual(before);
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM entry_sessions WHERE entry_binding_ref = ?"
+    ).get(root.entryBindingRef)).toEqual({ count: 1 });
   });
 
   it("restores the old protected file and rolls back when replacement fails", async () => {

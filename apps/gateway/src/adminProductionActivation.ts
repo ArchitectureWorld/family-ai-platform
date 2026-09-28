@@ -402,8 +402,21 @@ export function registerAdminProductionActivation(
         .header("Cache-Control", "no-store")
         .header("Pragma", "no-cache");
       sendActivationCookies(reply, browserSession);
+      if (lockPath !== null) {
+        await rm(lockPath);
+        lockPath = null;
+      }
       return reply.send({ activated: true });
     } catch (error) {
+      if (lockPath !== null && !releaseLock) {
+        try {
+          await lstat(input.activationPath!);
+        } catch (stateError) {
+          if ((stateError as NodeJS.ErrnoException).code === "ENOENT") {
+            releaseLock = true;
+          }
+        }
+      }
       if (error instanceof GatewayDomainError) throw error;
       throw invalidActivation();
     } finally {
