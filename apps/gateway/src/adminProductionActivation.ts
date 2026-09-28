@@ -145,6 +145,13 @@ function parseAdminEntry(value: unknown): ProductionAdminEntry {
   return candidate as unknown as ProductionAdminEntry;
 }
 
+export async function readProtectedAdminEntry(
+  path: string
+): Promise<{ entry: ProductionAdminEntry; bytes: Buffer }> {
+  const bytes = await readProtectedBytes(path);
+  return { entry: parseAdminEntry(parseJson(bytes)), bytes };
+}
+
 function parseActivation(value: unknown): ProductionActivationRecord {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw protectedError();

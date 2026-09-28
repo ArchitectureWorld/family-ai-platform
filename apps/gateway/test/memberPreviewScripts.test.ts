@@ -18,6 +18,8 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { openGatewayDatabase } from "../src/database.js";
+import { FamilyDomainRepository } from "../src/familyDomain.js";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const scripts = [
@@ -259,20 +261,32 @@ describe("isolated Member Web Preview scripts", () => {
     const directory = temporaryDirectory();
     const entryPath = join(directory, "admin-entry.json");
     const activationPath = join(directory, "admin-activation.json");
-    const token = fixtureToken("A");
-    writeFileSync(entryPath, `${JSON.stringify({
+    const databasePath = join(directory, "gateway.sqlite");
+    const db = openGatewayDatabase(databasePath, {
+      intent: "test-create-or-existing", simulate: "migrate-create-or-existing"
+    });
+    const onboarding = new FamilyDomainRepository(db).initializeFamily({
+      familyName: "正式脚本测试家庭",
+      ownerName: "管理员",
+      deviceName: "管理电脑",
+      deviceCredential: "admin-script-test-device-credential"
+    });
+    db.close();
+    const rootEntry = onboarding.entries.admin;
+    const token = rootEntry.token;
+    writeFileSync(entryPath, JSON.stringify({
       version: 1,
       origin: "https://admin.example:8793",
-      familyRef: "family:production-test",
-      personRef: "person:production-test",
-      deviceRef: "device:production-test",
-      entryBindingRef: "entry-binding:production-test",
-      entrySessionRef: "entry-session:production-test",
+      familyRef: onboarding.family.familyRef,
+      personRef: onboarding.owner.personRef,
+      deviceRef: onboarding.device.deviceRef,
+      entryBindingRef: rootEntry.entryBindingRef,
+      entrySessionRef: rootEntry.entrySessionRef,
       token
-    })}\n`, { mode: 0o600 });
+    }) + "\n", { mode: 0o600 });
     const result = spawnSync(
       process.execPath,
-      [join(root, "scripts/admin-production-activate.mjs"), "--entry", entryPath, "--output", activationPath],
+      [join(root, "scripts/admin-production-activate.mjs"), "--database", databasePath, "--entry", entryPath, "--output", activationPath],
       { encoding: "utf8" }
     );
     expect(result.status).toBe(0);

@@ -1,4 +1,5 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import Database from "better-sqlite3";
 import { constants } from "node:fs";
 import { chmod, lstat, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -110,6 +111,51 @@ async function atomicWrite(path, content) {
   }
 }
 
+function validateCurrentEntry(databasePath, entry, checkedAt) {
+  exactPath(databasePath);
+  let database;
+  try {
+    database = new Database(databasePath, { readonly: true, fileMustExist: true });
+    database.pragma("query_only = ON");
+    const schema = database.prepare(
+      "SELECT MAX(version) AS version FROM schema_migrations"
+    ).get();
+    if (schema?.version !== 15) fail("PROTECTED_ADMIN_ENTRY_INVALID");
+    const row = database.prepare([
+      "SELECT es.token_hash, es.status, es.expires_at,",
+      "eb.entry_binding_ref, eb.family_ref, eb.person_ref, eb.device_ref",
+      "FROM entry_sessions es",
+      "JOIN entry_bindings eb ON eb.entry_binding_ref = es.entry_binding_ref",
+      "AND eb.status = 'active' AND eb.audience = 'family_admin'",
+      "JOIN managed_devices d ON d.device_ref = eb.device_ref AND d.status = 'active'",
+      "JOIN device_bindings db ON db.device_ref = d.device_ref",
+      "AND db.family_ref = eb.family_ref AND db.person_ref = eb.person_ref",
+      "AND db.owner_scope = 'person' AND db.status = 'active'",
+      "JOIN families f ON f.family_ref = eb.family_ref AND f.status = 'active'",
+      "JOIN persons p ON p.person_ref = eb.person_ref AND p.status = 'active'",
+      "JOIN family_memberships fm ON fm.family_ref = eb.family_ref",
+      "AND fm.person_ref = eb.person_ref AND fm.status = 'active'",
+      "WHERE es.entry_session_ref = ?"
+    ].join(" ")).get(entry.entrySessionRef);
+    const expected = Buffer.from(createHash("sha256").update(entry.token).digest("hex"), "hex");
+    const stored = Buffer.from(row?.token_hash ?? "", "hex");
+    if (
+      !row || row.status !== "active" ||
+      Date.parse(row.expires_at) <= checkedAt.getTime() ||
+      row.entry_binding_ref !== entry.entryBindingRef ||
+      row.family_ref !== entry.familyRef ||
+      row.person_ref !== entry.personRef ||
+      row.device_ref !== entry.deviceRef ||
+      stored.length !== 32 ||
+      !timingSafeEqual(expected, stored)
+    ) fail("PROTECTED_ADMIN_ENTRY_INVALID");
+  } catch {
+    fail("PROTECTED_ADMIN_ENTRY_INVALID");
+  } finally {
+    database?.close();
+  }
+}
+
 async function acquireActivationLock(path) {
   exactPath(path);
   const lockPath = `${path}.lock`;
@@ -125,11 +171,13 @@ async function acquireActivationLock(path) {
 export async function createProductionAdminActivation({
   adminEntryPath,
   activationPath,
+  databasePath,
   now = () => new Date(),
   randomBytesImpl = randomBytes
 } = {}) {
-  validateEntry(await readProtectedJson(adminEntryPath));
+  const entry = validateEntry(await readProtectedJson(adminEntryPath));
   const createdAt = now();
+  validateCurrentEntry(databasePath, entry, createdAt);
   const salt = randomBytesImpl(16);
   if (!Buffer.isBuffer(salt) || salt.length !== 16) fail("PROTECTED_ADMIN_FILE_INVALID");
   const activationCode = code(randomBytesImpl);
@@ -154,10 +202,15 @@ export async function createProductionAdminActivation({
 }
 
 function parseArgs(argv) {
-  if (argv.length !== 4 || argv[0] !== "--entry" || argv[2] !== "--output") {
+  if (
+    argv.length !== 6 ||
+    argv[0] !== "--database" ||
+    argv[2] !== "--entry" ||
+    argv[4] !== "--output"
+  ) {
     fail("ADMIN_PRODUCTION_ACTIVATION_ARGUMENTS_INVALID");
   }
-  return { adminEntryPath: argv[1], activationPath: argv[3] };
+  return { databasePath: argv[1], adminEntryPath: argv[3], activationPath: argv[5] };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

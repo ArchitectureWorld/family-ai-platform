@@ -81,8 +81,8 @@
 
 **Files:**
 - Create: `apps/gateway/src/adminOperatorRecovery.ts`, `apps/gateway/src/adminOperatorCli.ts`
-- Modify: `scripts/admin-production-activate.mjs`
-- Test: `apps/gateway/test/adminOperatorRecovery.test.ts`, `apps/gateway/test/adminProductionActivation.test.ts`
+- Modify: `apps/gateway/runtime/gateway_lock_exec.py`, `apps/gateway/src/adminProductionActivation.ts`, `scripts/admin-production-activate.mjs`
+- Test: `apps/gateway/test/adminOperatorRecovery.test.ts`, `apps/gateway/test/adminProductionActivation.test.ts`, `apps/gateway/test/memberPreviewScripts.test.ts`
 - Document: `docs/operations/release-and-rollback.md`
 
 **Interfaces:** Local operator command takes protected DB and entry paths; validates old token Hash, expired-but-not-revoked status and active admin binding/device; issues a fresh administrator root session with `ADMIN_ENTRY_EXPIRES_AT` and atomically updates 0600 file with backup/recovery evidence. Activation-code generation fails before writing if its operator Entry cannot authenticate.
