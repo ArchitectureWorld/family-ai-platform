@@ -72,7 +72,7 @@
 **Interfaces:** Version 2 protected record has `version, createdAt, salt, codeHash, failedAttempts`, no expiry. A cross-process exclusive claim protects validate/increment/consume; at 10 wrong attempts the code is locked. V1 retains the old five-minute rule.
 
 - [ ] **Step 1: Write failing tests** for V2 use after months, one-use replay, replacement, ten wrong attempts persisted across app restart, concurrent use, crash fail-closed, and expired V1 rejection. Test UI text and script output without copying secrets to logs.
-- [ ] **Step 2: Run** `../../node_modules/.bin/vitest run test/adminProductionActivation.test.ts test/adminWebModules.test.ts --maxWorkers=1 --no-file-parallelism memberPreviewScripts.test.ts`; expected RED on V2 cases.
+- [ ] **Step 2: Run** `../../node_modules/.bin/vitest run test/adminProductionActivation.test.ts test/adminWebModules.test.ts test/memberPreviewScripts.test.ts --maxWorkers=1 --no-file-parallelism`; expected RED on V2 cases.
 - [ ] **Step 3: Implement** versioned parser, script, persistent counter/claim, and UI copy.
 - [ ] **Step 4: Run the same focused command**; expected PASS.
 - [ ] **Step 5: Commit** `feat(admin): make one-time activation revocation-bound`.

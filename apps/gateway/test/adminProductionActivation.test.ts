@@ -202,9 +202,92 @@ describe("production Admin Web activation", () => {
       method: "GET", url: "/api/v1/admin/members", headers: { cookie: secondCookie }
     });
     expect(revoked.statusCode).toBe(403);
+   }, 15_000);
+
+  it("accepts an unused V2 activation code months after its creation", async () => {
+    const { app, entryPath, activationPath } = await fixture("no-time-limit");
+    const activation = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath,
+      now: () => new Date("2020-01-01T00:00:00.000Z")
+    });
+    const record = JSON.parse(readFileSync(activationPath, "utf8"));
+    expect(record).toMatchObject({ version: 2, failedAttempts: 0 });
+    expect(record).not.toHaveProperty("expiresAt");
+    const response = await app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code: activation.code }
+    });
+    expect(response.statusCode).toBe(200);
   });
 
-  it("rejects wrong, expired, malformed, replayed, and cross-origin activation", async () => {
+  it("locks a V2 code after ten wrong guesses and keeps the lock across a Gateway restart", async () => {
+    const fixtureValue = await fixture("wrong-attempts");
+    const activation = await createProductionAdminActivation({
+      adminEntryPath: fixtureValue.entryPath,
+      activationPath: fixtureValue.activationPath
+    });
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await fixtureValue.app.inject({
+        method: "POST", url: "/api/v1/admin/activate",
+        headers: activationHeaders(), payload: { code: "AAAAA-BBBBB" }
+      });
+      expect(response.statusCode).toBe(401);
+    }
+    const record = JSON.parse(readFileSync(fixtureValue.activationPath, "utf8"));
+    expect(record.failedAttempts).toBe(10);
+    await fixtureValue.app.close();
+    apps.splice(apps.indexOf(fixtureValue.app), 1);
+    const reopened = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
+      databasePath: fixtureValue.databasePath, deviceToken, mode: "production",
+      providerAdapter: new FakeProviderAdapter(), adminWebEnabled: true,
+      productionAdminEntryPath: fixtureValue.entryPath,
+      productionAdminActivationPath: fixtureValue.activationPath,
+      adminWebOrigin: origin
+    });
+    apps.push(reopened);
+    const correct = await reopened.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code: activation.code }
+    });
+    expect(correct.statusCode).toBe(401);
+  });
+
+  it("fails closed while a protected activation claim is left by a crashed process", async () => {
+    const { app, entryPath, activationPath } = await fixture("claim-crash");
+    const activation = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath
+    });
+    writeFileSync(`${activationPath}.lock`, "claimed", { mode: 0o600 });
+    const response = await app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code: activation.code }
+    });
+    expect(response.statusCode).toBe(401);
+    expect(existsSync(activationPath)).toBe(true);
+  });
+
+  it("invalidates a replaced code and admits only one concurrent use", async () => {
+    const { app, entryPath, activationPath } = await fixture("replacement-race");
+    const oldCode = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath
+    });
+    const currentCode = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath
+    });
+    const oldAttempt = await app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code: oldCode.code }
+    });
+    expect(oldAttempt.statusCode).toBe(401);
+    const attempts = await Promise.all([1, 2].map(() => app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code: currentCode.code }
+    })));
+    expect(attempts.map(response => response.statusCode).sort()).toEqual([200, 401]);
+  });
+
+  it("rejects wrong, expired V1, malformed, replayed, and cross-origin activation", async () => {
     const fixtureValue = await fixture("invalid");
     const activation = await createProductionAdminActivation({
       adminEntryPath: fixtureValue.entryPath,
@@ -223,6 +306,14 @@ describe("production Admin Web activation", () => {
       payload: { code: activation.code }
     });
     expect(crossOrigin.statusCode).toBe(401);
+    const oldRecord = JSON.parse(readFileSync(fixtureValue.activationPath, "utf8"));
+    writeFileSync(fixtureValue.activationPath, `${JSON.stringify({
+      version: 1,
+      createdAt: "2026-09-11T00:00:00.000Z",
+      expiresAt: "2026-09-11T00:05:00.000Z",
+      salt: oldRecord.salt,
+      codeHash: oldRecord.codeHash
+    })}\n`, { mode: 0o600 });
     const expired = await fixtureValue.app.inject({
       method: "POST", url: "/api/v1/admin/activate", headers: activationHeaders(),
       payload: { code: activation.code }

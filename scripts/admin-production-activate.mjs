@@ -110,6 +110,18 @@ async function atomicWrite(path, content) {
   }
 }
 
+async function acquireActivationLock(path) {
+  exactPath(path);
+  const lockPath = `${path}.lock`;
+  const handle = await open(
+    lockPath,
+    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+    0o600
+  );
+  await handle.close();
+  return lockPath;
+}
+
 export async function createProductionAdminActivation({
   adminEntryPath,
   activationPath,
@@ -118,21 +130,27 @@ export async function createProductionAdminActivation({
 } = {}) {
   validateEntry(await readProtectedJson(adminEntryPath));
   const createdAt = now();
-  const expiresAt = new Date(createdAt.getTime() + 5 * 60 * 1000);
   const salt = randomBytesImpl(16);
   if (!Buffer.isBuffer(salt) || salt.length !== 16) fail("PROTECTED_ADMIN_FILE_INVALID");
   const activationCode = code(randomBytesImpl);
-  await atomicWrite(
-    activationPath,
-    `${JSON.stringify({
-      version: 1,
-      createdAt: createdAt.toISOString(),
-      expiresAt: expiresAt.toISOString(),
-      salt: salt.toString("base64url"),
-      codeHash: hash(salt, activationCode)
-    })}\n`
-  );
-  return { code: activationCode, expiresAt: expiresAt.toISOString(), outputPath: activationPath };
+  const lockPath = await acquireActivationLock(activationPath);
+  let written = false;
+  try {
+    await atomicWrite(
+      activationPath,
+      `${JSON.stringify({
+        version: 2,
+        createdAt: createdAt.toISOString(),
+        salt: salt.toString("base64url"),
+        codeHash: hash(salt, activationCode),
+        failedAttempts: 0
+      })}\n`
+    );
+    written = true;
+    return { code: activationCode, outputPath: activationPath };
+  } finally {
+    if (written) await rm(lockPath);
+  }
 }
 
 function parseArgs(argv) {
@@ -145,7 +163,7 @@ function parseArgs(argv) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
     const result = await createProductionAdminActivation(parseArgs(process.argv.slice(2)));
-    process.stdout.write(`${result.code} expiresAt=${result.expiresAt}\n`);
+    process.stdout.write(`${result.code}\n`);
   } catch {
     process.stderr.write("ADMIN_PRODUCTION_ACTIVATION_FAILED\n");
     process.exitCode = 1;

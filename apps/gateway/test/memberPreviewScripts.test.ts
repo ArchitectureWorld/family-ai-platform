@@ -255,7 +255,7 @@ describe("isolated Member Web Preview scripts", () => {
     expect(existsSync(join(root, relativePath))).toBe(true);
   });
 
-  it("creates only a salted five-minute production admin activation record", () => {
+  it("creates a protected one-time production admin activation record without a time limit", () => {
     const directory = temporaryDirectory();
     const entryPath = join(directory, "admin-entry.json");
     const activationPath = join(directory, "admin-activation.json");
@@ -276,15 +276,16 @@ describe("isolated Member Web Preview scripts", () => {
       { encoding: "utf8" }
     );
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toMatch(/^[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5} expiresAt=\d{4}-\d{2}-\d{2}T/u);
+    expect(result.stdout.trim()).toMatch(/^[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5}$/u);
     expect(statSync(activationPath).mode & 0o777).toBe(0o600);
     const record = JSON.parse(readFileSync(activationPath, "utf8"));
     expect(Object.keys(record).sort()).toEqual([
-      "codeHash", "createdAt", "expiresAt", "salt", "version"
+      "codeHash", "createdAt", "failedAttempts", "salt", "version"
     ]);
-    expect(record.version).toBe(1);
+    expect(record.version).toBe(2);
+    expect(record.failedAttempts).toBe(0);
     expect(record.codeHash).not.toContain(token);
-    expect(record.expiresAt).not.toBe(record.createdAt);
+    expect(record).not.toHaveProperty("expiresAt");
   });
 
   it.each([".gitignore", ".dockerignore"])(
