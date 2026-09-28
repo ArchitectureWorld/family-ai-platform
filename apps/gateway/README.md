@@ -1,6 +1,6 @@
 # Family AI Gateway Foundation
 
-`apps/gateway` 是 Family AI Platform 的唯一业务后端和数据权威。当前 `main` 源码包含 Browser Entry Session、移动/网页设备配对、Chat / Work、同步、附件、Member Web、development-only Admin Web，以及 Fake/Hermes/Codex Provider Adapter。源码存在、自动化通过、隔离 Preview 通过和正式 `8790` 已部署是四种不同事实；正式运行物仍是旧 Compose/V3/Fake-only 版本。
+`apps/gateway` 是 Family AI Platform 的唯一业务后端和数据权威。当前 `main` 源码包含 Browser Entry Session、移动/网页设备配对、Chat / Work、同步、附件、Member Web、development Preview Admin Web、显式启用的 production Admin Web，以及 Fake/Hermes/Codex Provider Adapter。源码存在、自动化通过、隔离 Preview 通过和正式 `8790` 已部署是四种不同事实；正式运行物仍是旧 Compose/V3/Fake-only 版本。
 
 ## 运行边界
 
@@ -45,7 +45,7 @@ ChatWork Provider Lane
 - `src/agentRoutes.ts`、`src/adminWorkspaceRoutes.ts`：成员 Agent 挂载与管理员独立工作区；
 - `src/migrate.ts`：不启动 HTTP/Provider 的 migration-only 入口；
 - `src/index.ts`：正式进程入口；
-- `member-public/*`：同源 Member Web；`admin-public/*` 只在显式 development 配置下注册；`public/*` 是开发验收台。
+- `member-public/*`：同源 Member Web；`admin-public/*` 由 development Preview 或显式 production Admin Web 开关注册；`public/*` 是开发验收台。
 
 ## 数据模型
 
@@ -60,6 +60,12 @@ ChatWork Provider Lane
 ## API
 
 公开协议按职责分组：`/api/v1/web-entry/*`、`/api/v1/mobile/*`、`/api/v1/chat*`、`/api/v1/work-conversations*`、`/api/v1/attachments/*`、`/api/v1/events/*`、`/api/v1/sync/*`、`/api/v1/admin/*`，另保留 Foundation conversation API。除 `/health` 和静态入口外均先验证对应 audience 的 Entry Session/Device 权限；Cookie 写请求还要求同源元数据和 `X-Family-AI-Web-Request: 1`。Admin Session 不自动获得 Personal 正文权限。
+
+## 管理员入口有效期
+
+本分支候选的 `family_admin` 新会话使用现有 V15 Schema 的远未来兼容值，日常使用不因 30 天期限中断；个人入口期限保持原状。production Admin Web 的每次一次性短码激活都会创建独立的管理员浏览器会话，退出当前浏览器只撤销它自己。新激活码无时间期限，但使用一次、主动替换或十次错误尝试后失效。浏览器 Cookie 被清除时需重新激活；服务器仍会逐次校验 Session、Binding、Device、audience 与同源请求。
+
+受保护 operator 根入口和旧已过期行不会被服务启动自动恢复。本机恢复命令与备份、失败处理见 [管理员入口重签与长期有效激活码](../../docs/operations/release-and-rollback.md#管理员入口重签与长期有效激活码)。本段描述候选源码行为，不能据此认定正式运行物已升级。
 
 ## 核心安全规则
 
