@@ -23,7 +23,7 @@ export const AGENT_TARGETS = [
     agentRef: "agent:hermes-jarvis",
     home: join(YOURAN_HOME, ".hermes"),
     profile: "default",
-    displayName: "Jarvis",
+    displayName: "朱宁",
     serviceName: "hermes-gateway.service",
     system: true,
     sessionScope: "jarvis"

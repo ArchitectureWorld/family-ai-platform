@@ -3,7 +3,7 @@ const UNAVAILABLE_TEXT = "无法确认当前 Agent 配置。请重新加载后�
 const REUSE_NOTE =
   "同一个 Agent 可以提供给多个成员；如果它连接的是同一个 Hermes Profile，Hermes 内部记忆也可能共享。";
 const APPROVED_AGENTS = Object.freeze([
-  Object.freeze({ agentRef: "agent:hermes-jarvis", displayName: "Jarvis", system: true }),
+  Object.freeze({ agentRef: "agent:hermes-jarvis", displayName: "朱宁", system: true }),
   Object.freeze({ agentRef: "agent:hermes-zzh", displayName: "于途", system: false }),
   Object.freeze({ agentRef: "agent:hermes-nsy", displayName: "乔晶晶", system: false })
 ]);

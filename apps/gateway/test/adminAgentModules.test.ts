@@ -151,7 +151,7 @@ const catalog = {
   agents: [
     {
       agentRef: "agent:hermes-jarvis",
-      displayName: "Jarvis",
+      displayName: "朱宁",
       system: true,
       runtime: "available",
       runtimeLabel: "可用"
@@ -257,7 +257,7 @@ describe("Admin member Agent controls", () => {
       "agent:hermes-zzh",
       "agent:hermes-nsy"
     ]);
-    expect(cards[0]?.textContent).toContain("Jarvis");
+    expect(cards[0]?.textContent).toContain("朱宁");
     expect(cards[0]?.textContent).toContain("系统 Agent");
     expect(cards[0]?.textContent).toContain("可用");
     expect(cards[0]?.textContent).toContain("由家庭管理系统统一提供");

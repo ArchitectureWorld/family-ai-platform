@@ -332,7 +332,7 @@ describe("Gateway configuration", () => {
     }
   });
 
-  it("registers exactly Jarvis, 于途, and 乔晶晶 through Broker profiles", async () => {
+  it("registers exactly 朱宁, 于途, and 乔晶晶 through Broker profiles", async () => {
     const runtime = buildProviderRuntime(
       loadGatewayConfig(await brokerEnvironment()).providerRuntime
     );
@@ -341,7 +341,7 @@ describe("Gateway configuration", () => {
     expect(runtime.agents).toEqual([
       {
         agentRef: "agent:hermes-jarvis",
-        displayName: "Jarvis",
+        displayName: "朱宁",
         providerProfileRef: "provider-profile:broker-jarvis",
         providerKind: "hermes"
       },
@@ -524,7 +524,7 @@ describe("Gateway configuration", () => {
     expect(runtime.agents).toEqual([
       {
         agentRef: "agent:hermes-jarvis",
-        displayName: "Jarvis",
+        displayName: "朱宁",
         providerProfileRef: "provider-profile:hermes-jarvis",
         providerKind: "hermes"
       },

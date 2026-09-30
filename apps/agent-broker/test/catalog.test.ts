@@ -30,7 +30,7 @@ describe("fixed Hermes Agent catalog", () => {
         displayName
       ])
     ).toEqual([
-      ["agent:hermes-jarvis", join("/home", "youran", ".hermes"), "default", "Jarvis"],
+      ["agent:hermes-jarvis", join("/home", "youran", ".hermes"), "default", "朱宁"],
       [
         "agent:hermes-zzh",
         join("/home", "youran", "hermes-personal-assistants"),
@@ -61,7 +61,7 @@ describe("fixed Hermes Agent catalog", () => {
       {
         protocolVersion: 1,
         agentRef: "agent:hermes-jarvis",
-        displayName: "Jarvis",
+        displayName: "朱宁",
         kind: "agent",
         runtime: "hermes-local",
         status: "available",

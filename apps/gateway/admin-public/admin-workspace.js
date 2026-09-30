@@ -1,7 +1,7 @@
 const FIXED_PANES = Object.freeze([
   Object.freeze({
     agentRef: "agent:hermes-jarvis",
-    displayName: "Jarvis"
+    displayName: "朱宁"
   }),
   Object.freeze({
     agentRef: "agent:codex-cli",

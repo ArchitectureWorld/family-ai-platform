@@ -257,7 +257,7 @@ describe("Unix-socket Agent Broker", () => {
       agents: [
         expect.objectContaining({
           agentRef: "agent:hermes-jarvis",
-          displayName: "Jarvis",
+          displayName: "朱宁",
           status: "available"
         }),
         expect.objectContaining({
