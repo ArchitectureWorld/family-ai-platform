@@ -1,7 +1,7 @@
 # 家庭管家显示名称更新为朱宁
 
 - 分支：`codex/zhuning-display-names`。
-- 开发基线：实时核对 `main` / `origin/main` 均为 `92651ad2d28c16f5489cb1506d71cad08d1f62e2`。
+- 开发基线：PR #40 已合入 `main`（`104aa33`），包含现网 `27ef236` 的持续管理员登录能力；本候选已重基线到该提交。
 - 范围：Broker 对外目录、Gateway broker/direct runtime catalog、Admin 目录白名单、工作台标题及无障碍名称统一使用“朱宁”。
 - 身份边界：继续使用 `agent:hermes-jarvis`；Provider Profile、Hermes Home、`sessionScope=jarvis`、外部 Session、授权与历史消息均不改动。
 
@@ -11,7 +11,7 @@ Gateway 的 `buildProviderRuntime()` 使用本地配置目录；它不导入 Bro
 
 现有管理员 API 提供目录查询与成员挂载、解绑、默认 Agent 设置，没有改名接口。本次复用既有启动对账，不新增接口或数据库迁移。正常发布新版 Gateway 后，原 Agent 的显示名按既有逻辑变为朱宁，不创建第二个 Agent。回退旧 Gateway 会在启动时恢复旧显示名，身份与会话仍保持原值。
 
-## 验证
+## 首轮验证（重基线前，保留失败记录）
 
 - `npm ci`：通过，143 packages。
 - 聚焦基线：Gateway 四文件 61 项通过。
@@ -26,10 +26,12 @@ Gateway 的 `buildProviderRuntime()` 使用本地配置目录；它不导入 Bro
 - 不可变 Docker 镜像、隔离 dev-up/acceptance、真实浏览器：SKIP。经协调先封存本分支；正式 source 与 main 尚未对齐，旧 main 镜像不能直接发布，待最终基线确定后重跑全部运行门禁。
 - 真实 Provider 与正式服务：本分支未执行，不发起计费调用。
 
-## 正式发布前置条件
+## 归并与最终发布门禁
 
-2026-09-30 只读核对发现正式镜像 source 为 `27ef2367a17507396c43ca6f165862b16507bbef`，对应 `codex/admin-persistent-access`；它不是当前 `main` 的祖先。该分支包含管理员根会话、浏览器会话、单次激活与 operator recovery 共八个已部署提交。直接用本开发基线构建物替换现网会回退这些能力，因此本分支产物不能据此直接发布。必须先解决权威基线与正式 source 的差异，再对最终候选重跑规定门禁。
+2026-09-30 经用户授权，PR #40 已合入 main，原正式 source `27ef236` 已纳入唯一权威基线。新候选保留管理员根会话、独立浏览器会话、V2 单次激活与 operator recovery，不以旧 main 回退现网。PR #40 exact head 的七项远端检查全部通过，独立合并前复核无阻断。
 
-两份基线的 `apps/agent-broker` 与 `packages` 完全相同，已用限定路径的 `git diff --exit-code` 确认；Gateway 的基线差异不应误报为 Broker 源码差异。任何组件正式发布仍需各自的封存产物与运行验证，本分支没有执行发布。
+最终候选须重新执行 `npm ci`、完整 `npm run check`、唯一 wrapper 镜像构建、同镜像隔离启动/自动验收与浏览器两轮、刷新、容器重启后第三轮。源码矩阵按 Dockerfile 已有分层使用私有 tmpfs 临时目录；sealed-image 恢复矩阵继续使用真实 Docker volume，不改测试时限、不跳过失败用例。最终结果记录在 PR 验收说明，不能以首轮聚焦通过替代。
 
-本次不改主工作区的四个用户未提交文件；不改正式数据库、Compose、Broker systemd 单元、监听端口或模型配置。历史文档和消息中的旧称呼保留原记录。测试随机 loopback 端口不形成常驻服务配置。
+部署按现有受控流程保留精确镜像、配置和停写备份，先对无网络真实数据副本演练，再切换 Gateway 与同源 Broker。显示名由启动对账更新，不直接编辑正式数据库，不重签现有 operator 或浏览器令牌。现有登录、会话、路由及历史正文应保持一致，失败恢复旧运行物。
+
+本任务不包含主工作区四个未提交文件。端口、Provider 模型、唤醒词不属于网页显示名范围；家庭音箱正式名称为朱宁，生产唤醒词继续使用管家。历史文档和消息中的旧称呼保留当时记录。
