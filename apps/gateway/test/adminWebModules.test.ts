@@ -182,7 +182,7 @@ describe("Admin Web API client", () => {
   it("normalizes only the exact approved Agent catalog and strips private fields", async () => {
     const { createAdminApi } = await apiModule();
     const approved = [
-      ["agent:hermes-jarvis", "Jarvis", "idle", "空闲"],
+      ["agent:hermes-jarvis", "朱宁", "idle", "空闲"],
       ["agent:hermes-zzh", "于途", "working", "工作中"],
       ["agent:hermes-nsy", "乔晶晶", "problem", "有问题"]
     ].map(([agentRef, displayName, status, statusLabel]) => ({
@@ -206,7 +206,7 @@ describe("Admin Web API client", () => {
     expect(await api.agents()).toEqual({
       protocolVersion: 1,
       agents: [
-        { agentRef: "agent:hermes-jarvis", displayName: "Jarvis", system: true, runtime: "available", runtimeLabel: "可用" },
+        { agentRef: "agent:hermes-jarvis", displayName: "朱宁", system: true, runtime: "available", runtimeLabel: "可用" },
         { agentRef: "agent:hermes-zzh", displayName: "于途", system: false, runtime: "available", runtimeLabel: "可用" },
         { agentRef: "agent:hermes-nsy", displayName: "乔晶晶", system: false, runtime: "unavailable", runtimeLabel: "不可用" }
       ]

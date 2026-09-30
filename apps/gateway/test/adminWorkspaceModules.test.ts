@@ -166,7 +166,7 @@ const statuses = {
   agents: [
     {
       agentRef: "agent:hermes-jarvis",
-      displayName: "Jarvis",
+      displayName: "朱宁",
       status: "idle",
       statusLabel: "空闲",
       activeTurnCount: 0,
@@ -197,7 +197,7 @@ const statuses = {
 const summary = {
   protocolVersion: 1,
   agents: [
-    { agentRef: "agent:hermes-jarvis", displayName: "Jarvis" },
+    { agentRef: "agent:hermes-jarvis", displayName: "朱宁" },
     { agentRef: "agent:codex-cli", displayName: "Codex" }
   ]
 };
@@ -364,6 +364,7 @@ describe("Admin Jarvis/Codex workspace panes", () => {
 
     const paneNodes = root.querySelectorAll("[data-agent-pane]");
     expect(paneNodes).toHaveLength(2);
+    expect(paneNodes[0]?.querySelector("h3")?.textContent).toBe("朱宁");
     expect(paneNodes.map((pane) => pane.getAttribute("data-agent-pane")))
       .toEqual(["agent:hermes-jarvis", "agent:codex-cli"]);
 

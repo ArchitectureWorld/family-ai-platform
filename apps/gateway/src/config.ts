@@ -311,7 +311,7 @@ export function buildProviderRuntime(
         agentRef: "agent:hermes-jarvis",
         providerProfileRef: "provider-profile:broker-jarvis",
         providerKind: "hermes" as const,
-        displayName: "Jarvis"
+        displayName: "朱宁"
       },
       {
         agentRef: "agent:hermes-zzh",
@@ -361,7 +361,7 @@ export function buildProviderRuntime(
     agentRef: "agent:hermes-jarvis",
     providerProfileRef: jarvisProviderRef,
     providerKind: "hermes",
-    displayName: "Jarvis"
+    displayName: "朱宁"
   });
 
   for (const profileName of config.hermes.profiles) {

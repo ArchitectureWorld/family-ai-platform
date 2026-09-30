@@ -33,7 +33,7 @@ const AGENT_PUBLIC_PROBLEMS = new Set([
 const APPROVED_ADMIN_AGENTS = Object.freeze([
   Object.freeze({
     agentRef: "agent:hermes-jarvis",
-    displayName: "Jarvis",
+    displayName: "朱宁",
     system: true
   }),
   Object.freeze({
