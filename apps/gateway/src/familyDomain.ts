@@ -15,6 +15,7 @@ const FAMILY_MANAGER_AGENT_REF = "agent:family-manager";
 const PERSONAL_ASSISTANT_AGENT_REF = "agent:personal-assistant";
 const DEVELOPMENT_PROVIDER_PROFILE_REF = "provider-profile:fake-local";
 const ENTRY_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+export const ADMIN_ENTRY_EXPIRES_AT = "9999-12-31T23:59:59.999Z";
 
 export interface EntryCredential {
   entryBindingRef: string;
@@ -302,7 +303,7 @@ export class FamilyDomainRepository {
           entry.entryBindingRef,
           sha256(entry.token),
           now,
-          expiresAt
+          entry.audience === "family_admin" ? ADMIN_ENTRY_EXPIRES_AT : expiresAt
         );
       }
     })();
@@ -313,6 +314,72 @@ export class FamilyDomainRepository {
       device: { deviceRef, displayName: input.deviceName, status: "active" },
       entries: { admin, personal }
     };
+  }
+
+  issueAdminBrowserSession(
+    operatorSessionRef: string,
+    issuedAt: Date
+  ): { entrySessionRef: string; token: string } {
+    return this.db.transaction(() => {
+      const issuedAtIso = issuedAt.toISOString();
+      const root = this.db.prepare(
+        `SELECT eb.entry_binding_ref
+         FROM entry_sessions es
+         JOIN entry_bindings eb
+           ON eb.entry_binding_ref = es.entry_binding_ref
+          AND eb.status = 'active' AND eb.audience = 'family_admin'
+         JOIN managed_devices d ON d.device_ref = eb.device_ref AND d.status = 'active'
+         JOIN device_bindings db
+           ON db.device_ref = d.device_ref
+          AND db.family_ref = eb.family_ref
+          AND db.person_ref = eb.person_ref
+          AND db.owner_scope = 'person'
+          AND db.status = 'active'
+         JOIN families f ON f.family_ref = eb.family_ref AND f.status = 'active'
+         JOIN persons p ON p.person_ref = eb.person_ref AND p.status = 'active'
+         JOIN family_memberships fm
+           ON fm.family_ref = eb.family_ref AND fm.person_ref = eb.person_ref
+          AND fm.status = 'active'
+         WHERE es.entry_session_ref = ?
+           AND es.status = 'active' AND es.expires_at > ?`
+      ).get(operatorSessionRef, issuedAtIso) as { entry_binding_ref: string } | undefined;
+      if (!root) {
+        throw new GatewayDomainError(
+          "ENTRY_SESSION_INVALID", 401, "permission", false, "入口会话无效。"
+        );
+      }
+      const entrySessionRef = `entry-session:${randomUUID()}`;
+      const token = randomBytes(32).toString("base64url");
+      this.db.prepare(
+        `INSERT INTO entry_sessions
+         (entry_session_ref, entry_binding_ref, token_hash, status,
+          created_at, expires_at, revoked_at)
+         VALUES(?, ?, ?, 'active', ?, ?, NULL)`
+      ).run(
+        entrySessionRef, root.entry_binding_ref, sha256(token),
+        issuedAtIso, ADMIN_ENTRY_EXPIRES_AT
+      );
+      return { entrySessionRef, token };
+    }).immediate();
+  }
+
+  revokeAdminBrowserSession(
+    entrySessionRef: string,
+    entryBindingRef: string,
+    revokedAt: Date
+  ): boolean {
+    const result = this.db.prepare(
+      `UPDATE entry_sessions
+       SET status = 'revoked', revoked_at = ?
+       WHERE entry_session_ref = ? AND entry_binding_ref = ?
+         AND status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM entry_bindings eb
+           WHERE eb.entry_binding_ref = entry_sessions.entry_binding_ref
+             AND eb.audience = 'family_admin'
+         )`
+    ).run(revokedAt.toISOString(), entrySessionRef, entryBindingRef);
+    return result.changes === 1;
   }
 
   authenticateEntrySession(

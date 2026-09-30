@@ -3,8 +3,15 @@ import { constants } from "node:fs";
 import { chmod, lstat, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { setWebEntrySessionCookieHeaders } from "./webEntryCookies.js";
-import { EntrySessionAuthenticator } from "./entrySessionAuth.js";
+import {
+  clearWebSessionCookieHeaders,
+  parseCookieHeader,
+  setWebEntrySessionCookieHeaders,
+  WEB_COOKIE_NAMES,
+  webAuthenticationSource
+} from "./webEntryCookies.js";
+import { EntrySessionAuthenticator, requireEntryRequestWithSession } from "./entrySessionAuth.js";
+import { FamilyDomainRepository } from "./familyDomain.js";
 import { GatewayDomainError } from "./service.js";
 
 const MAX_FILE_BYTES = 64 * 1024;
@@ -29,7 +36,7 @@ export interface ProductionAdminEntry {
   readonly token: string;
 }
 
-interface ProductionActivationRecord {
+interface LegacyProductionActivationRecord {
   readonly version: 1;
   readonly createdAt: string;
   readonly expiresAt: string;
@@ -37,9 +44,18 @@ interface ProductionActivationRecord {
   readonly codeHash: string;
 }
 
+interface ProductionActivationRecordV2 {
+  readonly version: 2;
+  readonly createdAt: string;
+  readonly salt: string;
+  readonly codeHash: string;
+  readonly failedAttempts: number;
+}
+
+type ProductionActivationRecord = LegacyProductionActivationRecord | ProductionActivationRecordV2;
+
 export interface ProductionAdminActivation {
   readonly code: string;
-  readonly expiresAt: string;
   readonly outputPath: string;
 }
 
@@ -53,7 +69,7 @@ function invalidActivation(): GatewayDomainError {
     401,
     "permission",
     false,
-    "管理员激活码无效或已过期。"
+    "管理员激活码无效、已使用或已锁定。"
   );
 }
 
@@ -129,25 +145,37 @@ function parseAdminEntry(value: unknown): ProductionAdminEntry {
   return candidate as unknown as ProductionAdminEntry;
 }
 
+export async function readProtectedAdminEntry(
+  path: string
+): Promise<{ entry: ProductionAdminEntry; bytes: Buffer }> {
+  const bytes = await readProtectedBytes(path);
+  return { entry: parseAdminEntry(parseJson(bytes)), bytes };
+}
+
 function parseActivation(value: unknown): ProductionActivationRecord {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw protectedError();
   }
   const candidate = value as Record<string, unknown>;
   const keys = Object.keys(candidate).sort().join("\0");
+  const legacy = candidate.version === 1 &&
+    keys === "codeHash\0createdAt\0expiresAt\0salt\0version" &&
+    typeof candidate.expiresAt === "string" &&
+    Number.isFinite(Date.parse(candidate.expiresAt));
+  const current = candidate.version === 2 &&
+    keys === "codeHash\0createdAt\0failedAttempts\0salt\0version" &&
+    Number.isInteger(candidate.failedAttempts) &&
+    Number(candidate.failedAttempts) >= 0 &&
+    Number(candidate.failedAttempts) <= 10;
   if (
-    keys !== "codeHash\0createdAt\0expiresAt\0salt\0version" ||
-    candidate.version !== 1 ||
+    (!legacy && !current) ||
     typeof candidate.createdAt !== "string" ||
-    typeof candidate.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(candidate.createdAt)) ||
     typeof candidate.salt !== "string" ||
     !/^[A-Za-z0-9_-]{16,128}$/u.test(candidate.salt) ||
     typeof candidate.codeHash !== "string" ||
     !/^[a-f0-9]{64}$/u.test(candidate.codeHash)
   ) {
-    throw protectedError();
-  }
-  if (!Number.isFinite(Date.parse(candidate.createdAt)) || !Number.isFinite(Date.parse(candidate.expiresAt))) {
     throw protectedError();
   }
   return candidate as unknown as ProductionActivationRecord;
@@ -193,6 +221,18 @@ async function atomicWrite(path: string, content: string): Promise<void> {
   }
 }
 
+async function acquireActivationLock(path: string): Promise<string> {
+  exactPath(path);
+  const lockPath = `${path}.lock`;
+  const handle = await open(
+    lockPath,
+    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+    0o600
+  );
+  await handle.close();
+  return lockPath;
+}
+
 export async function createProductionAdminActivation(input: {
   adminEntryPath: string;
   activationPath: string;
@@ -202,22 +242,28 @@ export async function createProductionAdminActivation(input: {
   parseAdminEntry(parseJson(await readProtectedBytes(input.adminEntryPath)));
   const now = input.now ?? (() => new Date());
   const createdAt = now();
-  const expiresAt = new Date(createdAt.getTime() + ACTIVATION_TTL_MS);
   const random = input.randomBytesImpl ?? randomBytes;
   const salt = random(16);
   if (!Buffer.isBuffer(salt) || salt.length !== 16) throw protectedError();
   const code = randomCode(random);
-  await atomicWrite(
-    input.activationPath,
-    `${JSON.stringify({
-      version: 1,
-      createdAt: createdAt.toISOString(),
-      expiresAt: expiresAt.toISOString(),
-      salt: salt.toString("base64url"),
-      codeHash: hashCode(salt, code).toString("hex")
-    })}\n`
-  );
-  return { code, expiresAt: expiresAt.toISOString(), outputPath: input.activationPath };
+  const lockPath = await acquireActivationLock(input.activationPath);
+  let written = false;
+  try {
+    await atomicWrite(
+      input.activationPath,
+      `${JSON.stringify({
+        version: 2,
+        createdAt: createdAt.toISOString(),
+        salt: salt.toString("base64url"),
+        codeHash: hashCode(salt, code).toString("hex"),
+        failedAttempts: 0
+      })}\n`
+    );
+    written = true;
+    return { code, outputPath: input.activationPath };
+  } finally {
+    if (written) await rm(lockPath);
+  }
 }
 
 function sameOrigin(request: FastifyRequest, origin: string): boolean {
@@ -235,12 +281,13 @@ async function consumeActivation(path: string): Promise<void> {
   }
 }
 
-function sendActivationCookies(reply: FastifyReply, entry: ProductionAdminEntry): void {
+function sendActivationCookies(reply: FastifyReply, entry: { entrySessionRef: string; token: string }): void {
   reply.header(
     "Set-Cookie",
     setWebEntrySessionCookieHeaders(
       { entrySessionRef: entry.entrySessionRef, entryToken: entry.token },
-      "production"
+      "production",
+      { persistent: true }
     )
   );
 }
@@ -254,6 +301,7 @@ export function registerAdminProductionActivation(
     activationPath?: string;
     adminWebOrigin?: string;
     entryAuthenticator: EntrySessionAuthenticator;
+    familyRepository: FamilyDomainRepository;
     now?: () => Date;
   }
 ): void {
@@ -267,6 +315,25 @@ export function registerAdminProductionActivation(
     return;
   }
   const now = input.now ?? (() => new Date());
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (
+      request.method !== "GET" ||
+      reply.statusCode >= 400 ||
+      !(request.url === "/api/v1/portal/context" || request.url.startsWith("/api/v1/admin/")) ||
+      webAuthenticationSource(request) !== "entry_cookie"
+    ) return payload;
+    const cookies = parseCookieHeader(request.headers.cookie);
+    const entrySessionRef = cookies[WEB_COOKIE_NAMES.entrySessionRef];
+    const entryToken = cookies[WEB_COOKIE_NAMES.entryToken];
+    if (!entrySessionRef || !entryToken) return payload;
+    const authentication = input.entryAuthenticator.authenticate(entrySessionRef, entryToken);
+    if (authentication.status === "authenticated" && authentication.context.audience === "family_admin") {
+      reply.header("Set-Cookie", setWebEntrySessionCookieHeaders(
+        { entrySessionRef, entryToken }, "production", { persistent: true }
+      ));
+    }
+    return payload;
+  });
   app.post("/api/v1/admin/activate", async (request, reply) => {
     if (!sameOrigin(request, input.adminWebOrigin!)) throw invalidActivation();
     const body = request.body;
@@ -280,20 +347,34 @@ export function registerAdminProductionActivation(
     ) {
       throw invalidActivation();
     }
+    let lockPath: string | null = null;
+    let releaseLock = false;
     try {
+      lockPath = await acquireActivationLock(input.activationPath!);
       const activation = parseActivation(
         parseJson(await readProtectedBytes(input.activationPath!))
       );
       const entry = parseAdminEntry(parseJson(await readProtectedBytes(input.adminEntryPath!)));
       const current = now().getTime();
-      if (
-        current < Date.parse(activation.createdAt) ||
-        current >= Date.parse(activation.expiresAt) ||
-        !constantTimeHashEqual(
-          activation.codeHash,
-          hashCode(Buffer.from(activation.salt, "base64url"), (body as { code: string }).code)
-        )
-      ) {
+      const isBeforeCreation = current < Date.parse(activation.createdAt);
+      const isExpiredLegacy = activation.version === 1 &&
+        current >= Date.parse(activation.expiresAt);
+      const isLocked = activation.version === 2 && activation.failedAttempts >= 10;
+      const matches = constantTimeHashEqual(
+        activation.codeHash,
+        hashCode(Buffer.from(activation.salt, "base64url"), (body as { code: string }).code)
+      );
+      if (isBeforeCreation || isExpiredLegacy || isLocked || !matches) {
+        if (
+          activation.version === 2 &&
+          !isBeforeCreation && !isLocked && !matches
+        ) {
+          await atomicWrite(input.activationPath!, `${JSON.stringify({
+            ...activation,
+            failedAttempts: activation.failedAttempts + 1
+          })}\n`);
+        }
+        releaseLock = true;
         throw invalidActivation();
       }
       const authentication = input.entryAuthenticator.authenticate(
@@ -309,18 +390,55 @@ export function registerAdminProductionActivation(
         authentication.context.device.deviceRef !== entry.deviceRef ||
         authentication.context.entryBindingRef !== entry.entryBindingRef
       ) {
+        releaseLock = true;
         throw invalidActivation();
       }
       await consumeActivation(input.activationPath!);
+      releaseLock = true;
+      const browserSession = input.familyRepository.issueAdminBrowserSession(
+        entry.entrySessionRef, now()
+      );
       reply
         .header("Cache-Control", "no-store")
         .header("Pragma", "no-cache");
-      sendActivationCookies(reply, entry);
+      sendActivationCookies(reply, browserSession);
+      if (lockPath !== null) {
+        await rm(lockPath);
+        lockPath = null;
+      }
       return reply.send({ activated: true });
     } catch (error) {
+      if (lockPath !== null && !releaseLock) {
+        try {
+          await lstat(input.activationPath!);
+        } catch (stateError) {
+          if ((stateError as NodeJS.ErrnoException).code === "ENOENT") {
+            releaseLock = true;
+          }
+        }
+      }
       if (error instanceof GatewayDomainError) throw error;
       throw invalidActivation();
+    } finally {
+      if (lockPath !== null && releaseLock) await rm(lockPath, { force: true });
     }
+  });
+  app.post("/api/v1/admin/logout", async (request, reply) => {
+    if (!sameOrigin(request, input.adminWebOrigin!)) throw invalidActivation();
+    if (webAuthenticationSource(request) !== "entry_cookie") throw invalidActivation();
+    const authenticated = requireEntryRequestWithSession(
+      request, input.entryAuthenticator, "family_admin"
+    );
+    const operatorEntry = parseAdminEntry(
+      parseJson(await readProtectedBytes(input.adminEntryPath!))
+    );
+    if (authenticated.entrySessionRef !== operatorEntry.entrySessionRef) {
+      input.familyRepository.revokeAdminBrowserSession(
+        authenticated.entrySessionRef, authenticated.context.entryBindingRef, now()
+      );
+    }
+    reply.header("Set-Cookie", clearWebSessionCookieHeaders("production"));
+    return reply.send({ loggedOut: true });
   });
 }
 

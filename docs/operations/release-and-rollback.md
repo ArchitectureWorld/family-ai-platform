@@ -76,3 +76,25 @@ preflight（仍在线、只读）
 `runtime-restore.sh` 先在目标同级目录完成复制、SQLite 与 inventory 校验，写 durable intent，之后只用受封口 helper 做一次 `RENAME_EXCHANGE`。若 syscall 已成功但 receipt 尚未写出，重入只依据 intent 与两个实时 inode 唯一对账；不删除交换后保留的旧 runtime。`rollbackClientRequired=true` 时，缺 candidate manifest、bundle、guard archive、portable template、source instance 或 materialization receipt 任一项都会在停服前失败；bundle 只允许 regular file/directory，物化为只读目录，禁止直接挂载 tar。
 
 `scripts/verify-foundation.sh` 仅用于仓库自己的 disposable `.runtime`。显式传入的非空 retained runtime 会在任何 Docker/reset 操作前失败；正式数据升级只能走本节发布链路。
+
+## 管理员入口重签与长期有效激活码
+
+此流程只用于已批准的正式 Family Admin 发布。当前运行物仍需先按“发布前只读事实门”核对，不能把本分支源码当成现网状态；不自动操作正式服务。管理员新会话沿用 V15 Schema，在 `expires_at` 写入 `9999-12-31T23:59:59.999Z` 作为兼容上界；个人 Session 和数据库迁移版本不变。
+
+1. 精确停止 Family Gateway 写入者，取得数据库锁，并分别备份数据库、受保护管理员 Entry 文件及激活目录。备份保持 `0700/0600`，不得复制到 Git、公共台账或日志；记录旧镜像和回滚定义。
+2. 在已构建的相同 source commit 下运行仅本机的根入口重签命令。它只接受 Hash 匹配、绑定/设备/家庭仍有效且状态为 `expired` 或时间已过但状态仍为 `active` 的旧管理员 Entry；`revoked` 一律拒绝。命令在独占数据库锁下签发新 Session，旧行仍为 expired，并在受保护目录保留 `0600` 的旧文件备份。成功输出只有 `ADMIN_OPERATOR_REISSUED` 或 `ADMIN_OPERATOR_ALREADY_ACTIVE`。
+3. 用已经重签的 Entry 生成新的版本 2 短码。短码无时间期限，仍只可使用一次；重签后生成新码会替换旧码。十次有效格式的错误猜测会锁定该码。命令只在本机 stdout 输出短码；不得把它写入 URL、Git、共享台账或日志。生成前会以只读方式核对当前管理员 Session，失效时拒绝写入。
+4. 从实际管理员浏览器激活，核对独立浏览器 Session、刷新与重启后继续使用；检查普通成员拒绝、主动退出只撤销本浏览器、设备撤销阻断所有关联会话。再按正式发布 Gate 记录镜像、数据和入口身份及回滚验证。
+
+占位命令形式如下；实际路径只填在本机受保护终端，不写进本文件：
+
+```bash
+python3 apps/gateway/runtime/gateway_lock_exec.py \
+  --database "$ADMIN_DB" -- \
+  node apps/gateway/dist/adminOperatorCli.js \
+  --database "$ADMIN_DB" --entry "$ADMIN_ENTRY"
+node scripts/admin-production-activate.mjs \
+  --database "$ADMIN_DB" --entry "$ADMIN_ENTRY" --output "$ADMIN_ACTIVATION"
+```
+
+若进程在激活码读改写中崩溃，`record.json.lock` 会让后续请求 fail-closed。先确认 Gateway 写入者停止并保存现场，再由 operator 对照受保护目录和备份恢复或重新生成；不得让网页端自动清锁。若根入口重签在文件替换与数据库提交之间中断，先用旧文件备份恢复一致状态，再重新执行；激活脚本的预检会拒绝不一致的入口。正式回滚应同时恢复相同时间点的数据库和受保护入口文件，避免 Session 引用与 Hash 错配。

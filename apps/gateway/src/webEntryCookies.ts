@@ -88,11 +88,13 @@ export function setWebEntryCookieHeaders(
 
 export function setWebEntrySessionCookieHeaders(
   secrets: Pick<WebEntryCookieSecrets, "entrySessionRef" | "entryToken">,
-  mode: WebCookieMode
+  mode: WebCookieMode,
+  options: { persistent?: boolean } = {}
 ): string[] {
+  const attributes = options.persistent ? { maxAge: 365 * 24 * 60 * 60 } : {};
   return [
-    cookie(WEB_COOKIE_NAMES.entrySessionRef, secrets.entrySessionRef, mode),
-    cookie(WEB_COOKIE_NAMES.entryToken, secrets.entryToken, mode)
+    cookie(WEB_COOKIE_NAMES.entrySessionRef, secrets.entrySessionRef, mode, attributes),
+    cookie(WEB_COOKIE_NAMES.entryToken, secrets.entryToken, mode, attributes)
   ];
 }
 

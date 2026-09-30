@@ -433,6 +433,7 @@ export async function buildGatewayApp(options: BuildGatewayAppOptions) {
     mode: options.mode,
     enabled: options.adminWebEnabled ?? options.mode === "development",
     entryAuthenticator,
+    familyRepository,
     now,
     ...(options.productionAdminEntryPath === undefined
       ? {}

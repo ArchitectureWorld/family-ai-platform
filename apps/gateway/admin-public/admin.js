@@ -142,7 +142,7 @@ function errorText(error) {
     }
     if (error.code === "REQUEST_INVALID") return "请检查填写的名称和成员角色。";
     if (error.code === "ADMIN_ACTIVATION_CODE_INVALID") return "激活码格式不正确。";
-    if (error.code === "ADMIN_ACTIVATION_INVALID") return "激活码无效或已过期，请重新生成。";
+    if (error.code === "ADMIN_ACTIVATION_INVALID") return "激活码无效、已使用或已锁定，请重新生成。";
   }
   return "暂时无法完成操作，请稍后重试。";
 }
@@ -481,6 +481,26 @@ async function renderManagement(credential, persistenceWarning = "") {
       text: persistenceWarning,
       attributes: { role: "status" }
     }));
+  }
+
+  if (credential?.cookieSession === true) {
+    const logoutButton = element("button", {
+      className: "primary-button",
+      text: "退出管理员",
+      attributes: { type: "button" }
+    });
+    const logoutFeedback = messageNode();
+    logoutButton.addEventListener("click", async () => {
+      logoutButton.disabled = true;
+      try {
+        await api.logout();
+        showProductionActivation("已退出管理员。");
+      } catch (error) {
+        logoutFeedback.textContent = errorText(error);
+        logoutButton.disabled = false;
+      }
+    });
+    summaryRoot.append(logoutButton, logoutFeedback);
   }
 
   membersRoot.replaceChildren();

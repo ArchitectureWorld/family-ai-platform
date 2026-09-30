@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -13,6 +14,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeProviderAdapter } from "@family-ai/provider-adapter-sdk";
 import { buildGatewayApp } from "../src/app.js";
+import { openGatewayDatabase } from "../src/database.js";
 import {
   createProductionAdminActivation
 } from "../src/adminProductionActivation.js";
@@ -122,7 +124,208 @@ describe("production Admin Web activation", () => {
     expect(existsSync(fixtureValue.activationPath)).toBe(false);
   });
 
-  it("rejects wrong, expired, malformed, replayed, and cross-origin activation", async () => {
+  it("does not strand an activation lock when a consumed code is replayed", async () => {
+    const { app, entryPath, activationPath } = await fixture("replay-reissue");
+    const activate = (code: string) => app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code }
+    });
+    expect((await activate("AAAAA-BBBBB")).statusCode).toBe(401);
+    expect(existsSync(activationPath + ".lock")).toBe(false);
+    const first = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath
+    });
+    const activateAgain = (code: string) => app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code }
+    });
+    expect((await activateAgain(first.code)).statusCode).toBe(200);
+    expect(existsSync(activationPath + ".lock")).toBe(false);
+    expect((await activateAgain(first.code)).statusCode).toBe(401);
+    expect(existsSync(activationPath + ".lock")).toBe(false);
+    const next = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath
+    });
+    expect((await activateAgain(next.code)).statusCode).toBe(200);
+  });
+
+  it("issues separate persistent browser sessions and revokes only the browser that logs out", async () => {
+    const { app, entryPath, activationPath, databasePath, body } = await fixture("separate-browsers");
+    const activate = async () => {
+      const activation = await createProductionAdminActivation({
+        adminEntryPath: entryPath, activationPath
+      });
+      const response = await app.inject({
+        method: "POST", url: "/api/v1/admin/activate",
+        headers: activationHeaders(), payload: { code: activation.code }
+      });
+      expect(response.statusCode).toBe(200);
+      const setCookies = response.headers["set-cookie"] as string[];
+      expect(setCookies.join(";")).toContain("Max-Age=");
+      expect(setCookies.join(";")).not.toContain(body.entries.admin.token);
+      return setCookies.map(value => value.split(";", 1)[0]).join("; ");
+    };
+    const firstCookie = await activate();
+    const secondCookie = await activate();
+    expect(firstCookie).not.toBe(secondCookie);
+    expect(firstCookie).not.toContain(body.entries.admin.entrySessionRef);
+    expect(secondCookie).not.toContain(body.entries.admin.entrySessionRef);
+
+    const firstBefore = await app.inject({
+      method: "GET", url: "/api/v1/admin/members", headers: { cookie: firstCookie }
+    });
+    const secondBefore = await app.inject({
+      method: "GET", url: "/api/v1/admin/members", headers: { cookie: secondCookie }
+    });
+    expect(firstBefore.statusCode).toBe(200);
+    expect(secondBefore.statusCode).toBe(200);
+    expect(String(firstBefore.headers["set-cookie"])).toContain("Max-Age=");
+
+    const crossOrigin = await app.inject({
+      method: "POST", url: "/api/v1/admin/logout",
+      headers: {
+        cookie: firstCookie, "x-family-ai-web-request": "1",
+        origin: "https://other.example:8793", "sec-fetch-site": "cross-site"
+      }
+    });
+    expect(crossOrigin.statusCode).not.toBe(200);
+
+    const logout = await app.inject({
+      method: "POST", url: "/api/v1/admin/logout",
+      headers: {
+        cookie: firstCookie, host: "admin.example:8793",
+        "x-family-ai-web-request": "1", ...activationHeaders()
+      }
+    });
+    expect(logout.statusCode).toBe(200);
+    expect(logout.json()).toEqual({ loggedOut: true });
+    expect(String(logout.headers["set-cookie"])).toContain("Max-Age=0");
+
+    const firstAfter = await app.inject({
+      method: "GET", url: "/api/v1/admin/members", headers: { cookie: firstCookie }
+    });
+    const secondAfter = await app.inject({
+      method: "GET", url: "/api/v1/admin/members", headers: { cookie: secondCookie }
+    });
+    expect(firstAfter.statusCode).toBe(401);
+    expect(secondAfter.statusCode).toBe(200);
+    const operatorContext = await app.inject({
+      method: "GET", url: "/api/v1/portal/context",
+      headers: {
+        authorization: `Bearer ${body.entries.admin.token}`,
+        "x-entry-session-ref": body.entries.admin.entrySessionRef
+      }
+    });
+    expect(operatorContext.statusCode).toBe(200);
+
+    const db = openGatewayDatabase(databasePath, {
+      intent: "test-create-or-existing", simulate: "migrate-create-or-existing"
+    });
+    db.prepare("UPDATE managed_devices SET status = 'revoked' WHERE device_ref = ?")
+      .run(body.device.deviceRef);
+    db.close();
+    const revoked = await app.inject({
+      method: "GET", url: "/api/v1/admin/members", headers: { cookie: secondCookie }
+    });
+    expect(revoked.statusCode).toBe(403);
+   }, 15_000);
+
+  it("accepts an unused V2 activation code months after its creation", async () => {
+    const { app, entryPath, activationPath } = await fixture("no-time-limit");
+    const activation = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath,
+      now: () => new Date("2020-01-01T00:00:00.000Z")
+    });
+    const record = JSON.parse(readFileSync(activationPath, "utf8"));
+    expect(record).toMatchObject({ version: 2, failedAttempts: 0 });
+    expect(record).not.toHaveProperty("expiresAt");
+    const response = await app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code: activation.code }
+    });
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("locks a V2 code after ten wrong guesses and keeps the lock across a Gateway restart", async () => {
+    const fixtureValue = await fixture("wrong-attempts");
+    const activation = await createProductionAdminActivation({
+      adminEntryPath: fixtureValue.entryPath,
+      activationPath: fixtureValue.activationPath
+    });
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await fixtureValue.app.inject({
+        method: "POST", url: "/api/v1/admin/activate",
+        headers: activationHeaders(), payload: { code: "AAAAA-BBBBB" }
+      });
+      expect(response.statusCode).toBe(401);
+    }
+    const record = JSON.parse(readFileSync(fixtureValue.activationPath, "utf8"));
+    expect(record.failedAttempts).toBe(10);
+    await fixtureValue.app.close();
+    apps.splice(apps.indexOf(fixtureValue.app), 1);
+    const reopened = await buildGatewayApp({
+      databaseOpenRequest: { intent: "test-create-or-existing", simulate: "migrate-create-or-existing" },
+      databasePath: fixtureValue.databasePath, deviceToken, mode: "production",
+      providerAdapter: new FakeProviderAdapter(), adminWebEnabled: true,
+      productionAdminEntryPath: fixtureValue.entryPath,
+      productionAdminActivationPath: fixtureValue.activationPath,
+      adminWebOrigin: origin
+    });
+    apps.push(reopened);
+    const correct = await reopened.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code: activation.code }
+    });
+    expect(correct.statusCode).toBe(401);
+  });
+
+  it("fails closed after a separate process dies while holding the activation claim", async () => {
+    const { app, entryPath, activationPath, databasePath } = await fixture("claim-crash");
+    const activation = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath
+    });
+    const crashed = spawnSync(process.execPath, [
+      "-e",
+      "require('node:fs').openSync(process.argv[1], 'wx', 0o600); process.kill(process.pid, 'SIGKILL')",
+      activationPath + ".lock"
+    ], { encoding: "utf8" });
+    expect(crashed.signal).toBe("SIGKILL");
+    expect(existsSync(activationPath + ".lock")).toBe(true);
+    const response = await app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code: activation.code }
+    });
+    expect(response.statusCode).toBe(401);
+    const generator = spawnSync(process.execPath, [
+      join(process.cwd(), "../../scripts/admin-production-activate.mjs"),
+      "--database", databasePath, "--entry", entryPath, "--output", activationPath
+    ], { encoding: "utf8" });
+    expect(generator.status).toBe(1);
+    expect(generator.stdout).toBe("");
+    expect(existsSync(activationPath)).toBe(true);
+  });
+
+  it("invalidates a replaced code and admits only one concurrent use", async () => {
+    const { app, entryPath, activationPath } = await fixture("replacement-race");
+    const oldCode = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath
+    });
+    const currentCode = await createProductionAdminActivation({
+      adminEntryPath: entryPath, activationPath
+    });
+    const oldAttempt = await app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code: oldCode.code }
+    });
+    expect(oldAttempt.statusCode).toBe(401);
+    const attempts = await Promise.all([1, 2].map(() => app.inject({
+      method: "POST", url: "/api/v1/admin/activate",
+      headers: activationHeaders(), payload: { code: currentCode.code }
+    })));
+    expect(attempts.map(response => response.statusCode).sort()).toEqual([200, 401]);
+  });
+
+  it("rejects wrong, expired V1, malformed, replayed, and cross-origin activation", async () => {
     const fixtureValue = await fixture("invalid");
     const activation = await createProductionAdminActivation({
       adminEntryPath: fixtureValue.entryPath,
@@ -141,6 +344,14 @@ describe("production Admin Web activation", () => {
       payload: { code: activation.code }
     });
     expect(crossOrigin.statusCode).toBe(401);
+    const oldRecord = JSON.parse(readFileSync(fixtureValue.activationPath, "utf8"));
+    writeFileSync(fixtureValue.activationPath, `${JSON.stringify({
+      version: 1,
+      createdAt: "2026-09-11T00:00:00.000Z",
+      expiresAt: "2026-09-11T00:05:00.000Z",
+      salt: oldRecord.salt,
+      codeHash: oldRecord.codeHash
+    })}\n`, { mode: 0o600 });
     const expired = await fixtureValue.app.inject({
       method: "POST", url: "/api/v1/admin/activate", headers: activationHeaders(),
       payload: { code: activation.code }

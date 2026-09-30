@@ -168,6 +168,8 @@ def command_role(command: list[str], database: str) -> str:
             "dist/migrate.js": "migrate",
             "apps/gateway/dist/provisionFederationService.js": "provision",
             "dist/provisionFederationService.js": "provision",
+            "apps/gateway/dist/adminOperatorCli.js": "provision",
+            "dist/adminOperatorCli.js": "provision",
             "apps/gateway/dist/recoverGatewayDatabase.js": "recovery",
             "dist/recoverGatewayDatabase.js": "recovery",
         }
@@ -202,6 +204,12 @@ def command_role(command: list[str], database: str) -> str:
             if operation is None or re.fullmatch(r"[0-9a-f]{32}", operation) is None:
                 fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
         if action not in {"recover", "resume", "retry", "status"} or set(pairs) != required:
+            fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+        if pairs["--database"] != database:
+            fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
+        return role
+    if command[1] in {"apps/gateway/dist/adminOperatorCli.js", "dist/adminOperatorCli.js"}:
+        if set(pairs) != {"--database", "--entry"}:
             fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")
         if pairs["--database"] != database:
             fail("GATEWAY_DATABASE_LOCK_ARGUMENTS_INVALID")

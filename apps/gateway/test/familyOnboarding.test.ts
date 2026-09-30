@@ -227,6 +227,42 @@ describe("Family onboarding and dual-entry sessions", () => {
     expect(adminContext.json().device.deviceRef).toBe(personalContext.json().device.deviceRef);
   });
 
+  it("keeps only the administrator entry active beyond the original 30-day limit", async () => {
+    const { entries } = await initialize();
+    const db = openGatewayDatabase(databasePath, {
+      intent: "test-create-or-existing",
+      simulate: "migrate-create-or-existing"
+    });
+    const admin = db.prepare(
+      "SELECT expires_at FROM entry_sessions WHERE entry_session_ref = ?"
+    ).get(entries.admin.entrySessionRef) as { expires_at: string };
+    const personal = db.prepare(
+      "SELECT expires_at FROM entry_sessions WHERE entry_session_ref = ?"
+    ).get(entries.personal.entrySessionRef) as { expires_at: string };
+    expect(admin.expires_at).toBe("9999-12-31T23:59:59.999Z");
+    expect(Date.parse(personal.expires_at) - Date.now()).toBeGreaterThan(29 * 24 * 60 * 60 * 1000);
+    expect(Date.parse(personal.expires_at) - Date.now()).toBeLessThan(31 * 24 * 60 * 60 * 1000);
+    db.prepare(
+      "UPDATE entry_sessions SET created_at = ?, expires_at = ? WHERE entry_session_ref = ?"
+    ).run("1900-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z", entries.personal.entrySessionRef);
+    db.prepare(
+      "UPDATE entry_sessions SET created_at = ? WHERE entry_session_ref = ?"
+    ).run("1900-01-01T00:00:00.000Z", entries.admin.entrySessionRef);
+    db.close();
+
+    const adminContext = await app.inject({
+      method: "GET", url: "/api/v1/portal/context", headers: entryHeaders(entries.admin)
+    });
+    const personalContext = await app.inject({
+      method: "GET", url: "/api/v1/portal/context", headers: entryHeaders(entries.personal)
+    });
+    expect(adminContext.statusCode).toBe(200);
+    expect(personalContext.statusCode).toBe(401);
+    expectPublicError(personalContext, {
+      code: "ENTRY_SESSION_EXPIRED", category: "permission", retryable: false
+    });
+  });
+
   it("keeps fresh real-mode onboarding free of visible Fake defaults and mounts", async () => {
     await app.close();
     const realRuntimes = [...ownerAdminRuntimes, ...personalRuntimes];
