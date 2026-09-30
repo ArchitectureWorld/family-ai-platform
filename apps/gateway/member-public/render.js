@@ -30,11 +30,11 @@ function workStatusLabel(status) {
   })[status] ?? status ?? "未知状态";
 }
 
-function actorLabel(message) {
+function actorLabel(message, agentName) {
   switch (message.actor?.type) {
     case "person": return "你";
-    case "assistant": return "个人助理";
-    case "agent": return "执行 Agent";
+    case "assistant": return agentName ?? "个人助理";
+    case "agent": return agentName ?? "执行 Agent";
     case "system": return "系统";
     default: return "消息";
   }
@@ -102,7 +102,10 @@ function messageNode(documentRef, listenerOptions, message, input) {
     checkbox.type = "checkbox";
     checkbox.className = "message-select";
     checkbox.checked = input.selected.has(message.messageRef);
-    checkbox.setAttribute("aria-label", `选择${actorLabel(message)}的消息`);
+    checkbox.setAttribute(
+      "aria-label",
+      `选择${actorLabel(message, input.agentName)}的消息`
+    );
     checkbox.addEventListener("change", () => input.onSelect(message.messageRef), listenerOptions);
     row.append(checkbox);
   }
@@ -117,7 +120,12 @@ function messageNode(documentRef, listenerOptions, message, input) {
   }
   appendMessageAttachments(documentRef, bubble, message.attachments);
   const meta = element(documentRef, "div", "message-meta");
-  meta.append(element(documentRef, "span", "", actorLabel(message)));
+  meta.append(element(
+    documentRef,
+    "span",
+    "",
+    actorLabel(message, input.agentName)
+  ));
   meta.append(element(documentRef, "time", "", displayTime(message.occurredAt ?? message.createdAt)));
   bubble.append(meta);
   row.append(bubble);
@@ -169,6 +177,7 @@ function renderThread(documentRef, listenerOptions, input) {
     input.container.append(messageNode(documentRef, listenerOptions, message, {
       selectable: input.selectable,
       selected,
+      agentName: input.agentName,
       onSelect: input.onSelect
     }));
   }
@@ -852,6 +861,7 @@ export function createRenderer(input) {
       messages: chatThreadRef ? state.messagesByThread?.[chatThreadRef] : [],
       outgoing: state.outgoing,
       nextBeforeSequence: chatThreadRef ? state.paginationByThread?.[chatThreadRef] : null,
+      agentName,
       selectable: true,
       selectedRefs: selected,
       onSelect: actions.toggleMessageSelection,
@@ -915,6 +925,7 @@ export function createRenderer(input) {
       messages: workThreadRef ? state.messagesByThread?.[workThreadRef] : [],
       outgoing: state.outgoing,
       nextBeforeSequence: workThreadRef ? state.paginationByThread?.[workThreadRef] : null,
+      agentName,
       selectable: false,
       selectedRefs: [],
       onSelect: () => undefined,

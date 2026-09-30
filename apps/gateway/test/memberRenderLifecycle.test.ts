@@ -16,7 +16,7 @@ const mountedAgents = [
   {
     assignmentRef: "assignment:zzh",
     agentRef: "agent:hermes-zzh",
-    displayName: "zzh",
+    displayName: "于途",
     providerProfileRef: "provider-profile:hermes-zzh",
     isDefault: true,
     status: "idle",
@@ -208,6 +208,15 @@ describe("Member Web render lifecycle", () => {
     const store = createStore(memberState({
       context: { mountedAgents, defaultAgentRef: "agent:hermes-zzh" },
       currentAgentRef: "agent:hermes-zzh",
+      messagesByThread: {
+        "thread:chat-0001": [{
+          messageRef: "message:assistant-0001",
+          actor: { type: "assistant" },
+          content: { text: "我来继续处理。" },
+          occurredAt: "2026-07-25T10:01:00.000Z",
+        }],
+      },
+      outgoing: [],
     }));
     const renderer = createRenderer({
       store,
@@ -216,9 +225,13 @@ describe("Member Web render lifecycle", () => {
     });
 
     expect(harness.elements.currentAgentIdentity.textContent)
-      .toContain("zzh独立会话空闲");
-    expect(harness.elements.workspaceTitle.textContent).toBe("和 zzh 继续聊");
-    expect(harness.elements.messageInput.placeholder).toBe("给 zzh 发消息…");
+      .toContain("于途独立会话空闲");
+    expect(harness.elements.workspaceTitle.textContent).toBe("和 于途 继续聊");
+    expect(harness.elements.messageInput.placeholder).toBe("给 于途 发消息…");
+    expect(harness.document.querySelectorAll(".message-meta")[0].textContent)
+      .toContain("于途");
+    expect(harness.document.querySelectorAll(".message-select")[0]
+      .getAttribute("aria-label")).toBe("选择于途的消息");
 
     store.setState({ currentAgentRef: "agent:codex-cli" });
 
@@ -233,6 +246,10 @@ describe("Member Web render lifecycle", () => {
     expect(harness.elements.workMessageInput.placeholder).toBe(
       "让 Codex 继续推进当前 Work…",
     );
+    expect(harness.document.querySelectorAll(".message-meta")[0].textContent)
+      .toContain("Codex");
+    expect(harness.document.querySelectorAll(".message-select")[0]
+      .getAttribute("aria-label")).toBe("选择Codex的消息");
     renderer.destroy();
   });
   it("adds files from picker, paste, and drop and sends an attachment-only Chat after every upload is ready", async () => {

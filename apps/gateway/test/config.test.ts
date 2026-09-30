@@ -518,8 +518,10 @@ describe("Gateway configuration", () => {
   });
 
   it("composes deterministic Agent and Provider refs for every real runtime", () => {
+    const environment = realEnvironment();
+    environment.FAMILY_AI_HERMES_PROFILES = "ZZH,nsy,zzg";
     const runtime = buildProviderRuntime(
-      loadGatewayConfig(realEnvironment()).providerRuntime
+      loadGatewayConfig(environment).providerRuntime
     );
     expect(runtime.agents).toEqual([
       {
@@ -530,14 +532,20 @@ describe("Gateway configuration", () => {
       },
       {
         agentRef: "agent:hermes-zzh",
-        displayName: "zzh",
+        displayName: "于途",
         providerProfileRef: "provider-profile:hermes-zzh",
         providerKind: "hermes"
       },
       {
         agentRef: "agent:hermes-nsy",
-        displayName: "nsy",
+        displayName: "乔晶晶",
         providerProfileRef: "provider-profile:hermes-nsy",
+        providerKind: "hermes"
+      },
+      {
+        agentRef: "agent:hermes-zzg",
+        displayName: "zzg",
+        providerProfileRef: "provider-profile:hermes-zzg",
         providerKind: "hermes"
       },
       {

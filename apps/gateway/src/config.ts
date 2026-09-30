@@ -290,6 +290,15 @@ function controlledEnvironment(
   ];
 }
 
+const PERSONAL_AGENT_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  zzh: "于途",
+  nsy: "乔晶晶"
+};
+
+function personalAgentDisplayName(profileName: string): string {
+  return PERSONAL_AGENT_DISPLAY_NAMES[profileName] ?? profileName;
+}
+
 export function buildProviderRuntime(
   config: GatewayProviderRuntimeConfig
 ): GatewayProviderRuntime {
@@ -383,7 +392,7 @@ export function buildProviderRuntime(
       agentRef: `agent:hermes-${profileName}`,
       providerProfileRef,
       providerKind: "hermes",
-      displayName: profileName
+      displayName: personalAgentDisplayName(profileName)
     });
   }
 
