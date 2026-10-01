@@ -93,7 +93,7 @@ export const mobileDeviceDescriptorSchema = z
   .object({
     displayName: displayNameSchema,
     terminalType: z.literal("mobile"),
-    platform: z.literal("ios"),
+    platform: z.enum(["ios", "harmonyos"]),
     systemVersion: z.string().trim().min(1).max(32),
     appVersion: z.string().trim().min(1).max(32),
     model: z.string().trim().min(1).max(80)

@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "code": "BCDE-FGHJ",
+  "installationId": "41e0d7fa-3698-445c-89d7-a5e960957a1a",
+  "deviceCredential": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+  "device": {
+    "displayName": "测试鸿蒙手机",
+    "terminalType": "mobile",
+    "platform": "harmonyos",
+    "systemVersion": "HarmonyOS 7",
+    "appVersion": "0.1.0",
+    "model": "HarmonyOS Phone"
+  }
+}
